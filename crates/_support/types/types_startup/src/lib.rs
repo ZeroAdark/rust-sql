@@ -44,6 +44,9 @@ pub struct AuthToken {
     // The file bytes were not UTF-8: `string` is a lossy rendering that no
     // name pgrust carries can equal byte-for-byte as C's strcmp would.
     pub lossy: bool,
+    // The file bytes when `lossy` (C keeps them verbatim; the
+    // authentication-file views render them unchanged).
+    pub raw: Option<Vec<u8>>,
 }
 
 // ldap.h search scopes (OpenLDAP values, used by HbaLine.ldapscope).
@@ -242,8 +245,11 @@ pub struct Port {
     pub ssl_in_use: bool,
     pub alpn_used: bool,
     // C: char *peer_cn / *peer_dn (TopMemoryContext copies); the SSL* itself
-    // is the openssl backend's thread-local, not a Port field.
-    pub peer_cn: Option<String>,
+    // is the openssl backend's thread-local, not a Port field. peer_cn is the
+    // raw X509_NAME_get_text_by_NID bytes (a T61String/BMPString CN need not
+    // be UTF-8; check_usermap strcmp's the bytes as C does); peer_dn is the
+    // XN_FLAG_RFC2253 rendering, which escapes every non-ASCII byte.
+    pub peer_cn: Option<Vec<u8>>,
     pub peer_dn: Option<String>,
     pub peer_cert_valid: bool,
     // SCRAM_MAX_KEY_LEN keys, saved for SCRAM pass-through (postgres_fdw).

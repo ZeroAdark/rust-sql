@@ -1060,7 +1060,7 @@ pub fn gen_earm_module(g: &mut Gen) -> Vec<StmtKind> {
     body(g, shape)
 }
 
-/// Round-13 (run 72b2e74701d0e1310d59d39345e716da-59-13, seeds
+/// Round-13 (recorded run, seeds
 /// 4078551634953133971 / 1653252951681713200): the earm-family and
 /// ddldeep fixed CREATE/DROP role decks are the SAME cluster-global
 /// pg_authid hazard the aclrls (FP-12, #1550), gramwalk (#1565) and
@@ -1128,7 +1128,7 @@ pub const FIXED_ROLE_TOKENS: &[&str] = &[
     // ddldeep
     "dd_u",
     "dd_pu",
-    // objid (round-14, run 37aa8abec580e5f2d184aa2b00ea1060-59-13, seed
+    // objid (round-14, recorded run, seed
     // 1777368629953620144): the largeobj/objid deck's cluster-global
     // ldo_user/ldo_user2 CREATE/DROP brackets raced concurrent batches
     // the same way (one-sided 2BP01 on DROP ROLE ldo_user; XX000 "tuple

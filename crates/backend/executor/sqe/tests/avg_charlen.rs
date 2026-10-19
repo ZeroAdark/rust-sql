@@ -65,17 +65,13 @@ fn row(i: u64) -> (u64, String) {
     (k, s)
 }
 
-fn seal(dir: &str, dict: bool) {
+fn seal(dir: &str, dict: Option<TextSemantics>) {
     std::fs::create_dir_all(dir).expect("mkdir");
     let mut vfs = RealVfs;
     let mut kit = Kit::new();
-    let posture = if dict {
+    let posture = if let Some(sem) = dict {
         ColumnPosture {
-            dict: Some(DictPolicy {
-                ndv_cap: 1 << 16,
-                exec_ok: true,
-                sem: TextSemantics::Utf8Chars,
-            }),
+            dict: Some(DictPolicy { ndv_cap: 1 << 16, exec_ok: true, sem }),
             ..Default::default()
         }
     } else {
@@ -172,9 +168,9 @@ fn oracle(len_of: impl Fn(&str) -> u64) -> Vec<(u64, u64, u64)> {
     (0..KEYS).map(|k| (k, acc[k as usize].0, acc[k as usize].1)).collect()
 }
 
-fn run_case(dict: bool) {
+fn run_case(dict: Option<TextSemantics>) {
     let dir = std::env::temp_dir()
-        .join(format!("sqe_charlen_{}_{}", dict as u8, std::process::id()));
+        .join(format!("sqe_charlen_{}_{}", dict_tag(dict), std::process::id()));
     let dir = dir.to_str().unwrap().to_string();
     let _ = std::fs::remove_dir_all(&dir);
     seal(&dir, dict);
@@ -184,7 +180,7 @@ fn run_case(dict: bool) {
     let bytes = q27_lines(&eng, AValExpr::OctetLength { col: 2 });
     assert_ne!(
         chars, bytes,
-        "multibyte text must split the char and byte kernels (dict={dict})"
+        "multibyte text must split the char and byte kernels (dict={dict:?})"
     );
 
     // char oracle: chars(s) counts Unicode scalars; bytes differ on the
@@ -226,11 +222,89 @@ fn run_case(dict: bool) {
 /// index char_len field) under AvgCharLen.
 #[test]
 fn avg_charlen_dict_entrylen_route() {
-    run_case(true);
+    run_case(Some(TextSemantics::Utf8Chars));
+}
+
+/// Dict route under the DEFAULT BytesOnly cut (the AM's posture when no
+/// UTF-8 claim is born): the index's char_len IS the byte length, so the
+/// char answer must come from the entry bytes.
+#[test]
+fn avg_charlen_dict_bytesonly_cut() {
+    run_case(Some(TextSemantics::BytesOnly));
 }
 
 /// Hydrated route (no dict): the per-payload lead-byte walk.
 #[test]
 fn avg_charlen_hydrated_route() {
-    run_case(false);
+    run_case(None);
+}
+
+fn dict_tag(dict: Option<TextSemantics>) -> &'static str {
+    match dict {
+        None => "nodict",
+        Some(TextSemantics::Utf8Chars) => "utf8",
+        Some(_) => "bytes",
+    }
+}
+
+/// The q28 shape over the derived host key, with the aggs in `aggs`.
+fn q28_lines(eng: &Engine, aggs: Vec<AAgg>) -> Vec<String> {
+    let ap = APlan {
+        q: 28,
+        family: AFamily::DerivedKeyFold,
+        tags: Vec::new(),
+        cols: vec![2],
+        pred: Some(APred::NeEmpty { col: 2, fp: None }),
+        group: vec![AKeyExpr::HostRegex { col: 2 }],
+        agg: aggs,
+        order: None,
+        sortagg_keys: Vec::new(),
+        win: None,
+        agg_filters: Vec::new(),
+        having: None,
+        params: Vec::new(),
+        fingerprints: Vec::new(),
+        kernel_oracle: String::new(),
+        notes: "charlen+len gate".into(),
+        flags: Vec::new(),
+    };
+    let node = plan_from_ap(&eng.bank, &eng.faces, &ap).expect("lower");
+    let mut v = to_lines(&eng.run(&node));
+    v.sort();
+    v
+}
+
+/// AVG(octet_length) and AVG(length) in ONE derived-key fold: each column
+/// must equal its single-agg answer (the byte lane must not report the
+/// char count when both ride the same plan), on both routes.
+#[test]
+fn avg_len_and_charlen_in_one_derived_fold() {
+    for dict in [None, Some(TextSemantics::Utf8Chars), Some(TextSemantics::BytesOnly)] {
+        let dir = std::env::temp_dir()
+            .join(format!("sqe_charlen_both_{}_{}", dict_tag(dict), std::process::id()));
+        let dir = dir.to_str().unwrap().to_string();
+        let _ = std::fs::remove_dir_all(&dir);
+        seal(&dir, dict);
+        let eng = engine(&dir);
+        let chars = q28_lines(&eng, vec![AAgg::Avg { e: AValExpr::CharLength { col: 2 } }]);
+        let bytes = q28_lines(&eng, vec![AAgg::Avg { e: AValExpr::OctetLength { col: 2 } }]);
+        assert_ne!(chars, bytes, "multibyte keys must split the lanes (dict={dict:?})");
+        let both = q28_lines(
+            &eng,
+            vec![
+                AAgg::Avg { e: AValExpr::OctetLength { col: 2 } },
+                AAgg::Avg { e: AValExpr::CharLength { col: 2 } },
+                AAgg::CountStar,
+            ],
+        );
+        assert_eq!(both.len(), chars.len());
+        for ((bl, cl), yl) in both.iter().zip(chars.iter()).zip(bytes.iter()) {
+            let bf: Vec<&str> = bl.split('\t').collect();
+            let cf: Vec<&str> = cl.split('\t').collect();
+            let yf: Vec<&str> = yl.split('\t').collect();
+            assert_eq!(bf[0], cf[0], "key alignment (dict={dict:?})");
+            assert_eq!(bf[1], yf[1], "AvgLen column must be the byte average (dict={dict:?})");
+            assert_eq!(bf[2], cf[1], "AvgCharLen column must be the char average (dict={dict:?})");
+        }
+    }
 }

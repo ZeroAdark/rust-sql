@@ -73,7 +73,7 @@ fn read_tid_array<'mcx>(
     mcx: mcx::Mcx<'mcx>,
     ta: &[u8],
 ) -> PgResult<mcx::PgVec<'mcx, ItemPointerData>> {
-    if arrayfuncs::arr_hasnull(ta) && arrayfuncs::array_contains_nulls(ta) {
+    if arrayfuncs::arr_hasnull(ta) && arrayfuncs::array_contains_nulls(ta)? {
         return Err(Box::new(
             PgError::error("array must not contain nulls")
                 .with_sqlstate(ERRCODE_NULL_VALUE_NOT_ALLOWED),

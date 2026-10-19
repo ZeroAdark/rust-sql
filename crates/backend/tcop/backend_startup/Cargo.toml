@@ -35,6 +35,7 @@ ipc_seams = { path = "../../storage/ipc/ipc_seams" }
 ps_status_seams = { path = "../../utils/misc/ps_status_seams" }
 postgres_seams = { path = "../postgres_seams" }
 string_seams = { path = "../../../common/string_seams" }
+pg_string = { path = "../../../common/string" }
 scalar_seams = { path = "../../utils/adt/scalar_seams" }
 mbutils_seams = { path = "../../utils/mb/mbutils_seams" }
 be_secure = { path = "../../libpq/be_secure" }

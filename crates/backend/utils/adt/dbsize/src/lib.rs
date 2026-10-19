@@ -17,30 +17,49 @@ fn c_isspace(c: u8) -> bool {
     c == b' ' || (0x09..=0x0d).contains(&c)
 }
 
-#[track_caller]
-#[cold]
-fn invalid_size(s: &str) -> Box<PgError> {
-    Box::new(
-        PgError::error(format!("invalid size: \"{s}\""))
-            .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE),
-    )
+// dbsize.c:807-859: the text bytes verbatim in the message and DETAIL (a
+// SQL_ASCII database or a byteain alias can hand over non-UTF-8 bytes).
+fn invalid_size_msg(s: &[u8]) -> PgError {
+    match core::str::from_utf8(s) {
+        Ok(s) => PgError::error(format!("invalid size: \"{s}\"")),
+        Err(_) => {
+            let mut msg = b"invalid size: \"".to_vec();
+            msg.extend_from_slice(s);
+            msg.push(b'"');
+            PgError::error_raw_message(msg)
+        }
+    }
 }
 
 #[track_caller]
 #[cold]
-fn invalid_unit(arg: &str, unit: &str) -> Box<PgError> {
+fn invalid_size(s: &[u8]) -> Box<PgError> {
+    Box::new(invalid_size_msg(s).with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE))
+}
+
+#[track_caller]
+#[cold]
+fn invalid_unit(arg: &[u8], unit: &[u8]) -> Box<PgError> {
+    let e = invalid_size_msg(arg).with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE);
+    let e = match core::str::from_utf8(unit) {
+        Ok(unit) => e.with_detail(format!("Invalid size unit: \"{unit}\".")),
+        Err(_) => {
+            let mut detail = b"Invalid size unit: \"".to_vec();
+            detail.extend_from_slice(unit);
+            detail.extend_from_slice(b"\".");
+            e.with_detail_raw(detail)
+        }
+    };
     Box::new(
-        PgError::error(format!("invalid size: \"{arg}\""))
-            .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE)
-            .with_detail(format!("Invalid size unit: \"{unit}\"."))
-            .with_hint(
+        e.with_hint(
                 "Valid units are \"bytes\", \"B\", \"kB\", \"MB\", \"GB\", \"TB\", and \"PB\".",
             ),
     )
 }
 
-pub fn pg_size_bytes(arg: &str) -> PgResult<i64> {
-    let s = arg.as_bytes();
+pub fn pg_size_bytes(arg: impl AsRef<[u8]>) -> PgResult<i64> {
+    let arg = arg.as_ref();
+    let s = arg;
     let mut p = 0;
     while p < s.len() && c_isspace(s[p]) {
         p += 1;
@@ -84,7 +103,9 @@ pub fn pg_size_bytes(arg: &str) -> PgResult<i64> {
         }
     }
 
-    let mut num = adt_numeric::numeric_in(&arg[numstart..e], -1, None)?
+    // The scanned number run is ASCII (sign, digits, '.', 'e').
+    let numstr = core::str::from_utf8(&arg[numstart..e]).expect("ASCII number run");
+    let mut num = adt_numeric::numeric_in(numstr, -1, None)?
         .expect("hard-error path returns Err");
 
     let mut p = e;
@@ -99,9 +120,9 @@ pub fn pg_size_bytes(arg: &str) -> PgResult<i64> {
         let unit = &arg[p..end];
         let unitbits = UNITS
             .iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case(unit))
+            .find(|(n, _)| n.as_bytes().eq_ignore_ascii_case(unit))
             .map(|&(_, b)| b)
-            .or_else(|| unit.eq_ignore_ascii_case("B").then_some(0));
+            .or_else(|| unit.eq_ignore_ascii_case(b"B").then_some(0));
         let Some(unitbits) = unitbits else {
             return Err(invalid_unit(arg, unit));
         };

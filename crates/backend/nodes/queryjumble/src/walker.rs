@@ -489,6 +489,19 @@ fn jumble_node<'mcx>(js: J<'_, 'mcx>, n: Node<'mcx>) -> PgResult<()> {
     }
 
     let t = n.node_tag();
+    // C's NIL is a NULL pointer: an empty list stored as a cell jumbles as
+    // one pending null, never as a T_List tag (queryjumblefuncs.c:568).
+    let nil_cell = match t {
+        NodeTag::T_List => n.as_list().unwrap().is_nil(),
+        NodeTag::T_IntList => n.as_int_list().unwrap().is_nil(),
+        NodeTag::T_OidList => n.as_oid_list().unwrap().is_nil(),
+        NodeTag::T_XidList => n.as_xid_list().unwrap().is_nil(),
+        _ => false,
+    };
+    if nil_cell {
+        js.append_null();
+        return Ok(());
+    }
     js.tag(t);
     match t {
         NodeTag::T_Alias => {

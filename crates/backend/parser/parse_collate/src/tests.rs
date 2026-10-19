@@ -265,10 +265,10 @@ fn xmlexpr_named_args_and_args_merge_as_separate_lists() {
     )
     .unwrap();
     let err = assign_expr_collations(mcx, &pstate, xml).unwrap_err();
+    // No pg_collation lookup in this harness: the names print as C's %s of
+    // a NULL get_collation_name, "(null)".
     assert_eq!(
         err.message(),
-        format!(
-            "collation mismatch between explicit collations \"{C_COLLATION_OID}\" and \"{POSIX_COLLATION_OID}\""
-        )
+        "collation mismatch between explicit collations \"(null)\" and \"(null)\""
     );
 }

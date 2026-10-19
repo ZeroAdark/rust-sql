@@ -43,6 +43,7 @@ enum Kind {
 struct Tok<'a> {
     kind: Kind,
     text: &'a str,
+    raw: &'a [u8],
 }
 
 struct Lexer<'a> {
@@ -109,6 +110,7 @@ impl<'a> Lexer<'a> {
             return Tok {
                 kind: Kind::Eof,
                 text: "",
+                raw: b"",
             };
         }
         let p = self.pos;
@@ -121,6 +123,7 @@ impl<'a> Lexer<'a> {
             return Tok {
                 kind: Kind::Range,
                 text: text(len),
+                raw: &s[p..p + len],
             };
         }
         // {plumin} = ('+-') | ((+-))
@@ -129,6 +132,7 @@ impl<'a> Lexer<'a> {
             return Tok {
                 kind: Kind::Plumin,
                 text: text(4),
+                raw: &s[p..p + 4],
             };
         }
         let flen = self.float_len(p);
@@ -137,6 +141,7 @@ impl<'a> Lexer<'a> {
             return Tok {
                 kind: Kind::Float,
                 text: text(flen),
+                raw: &s[p..p + flen],
             };
         }
         self.pos = p + 1;
@@ -147,6 +152,7 @@ impl<'a> Lexer<'a> {
         Tok {
             kind,
             text: text(1),
+            raw: &s[p..p + 1],
         }
     }
 }
@@ -164,22 +170,24 @@ struct Bnd {
 }
 
 fn syntax_error(tok: &Tok<'_>) -> Box<PgError> {
-    let detail = if tok.kind == Kind::Eof {
-        "syntax error at end of input".to_string()
+    let e = PgError::error("bad seg representation").with_sqlstate(ERRCODE_SYNTAX_ERROR);
+    Box::new(if tok.kind == Kind::Eof {
+        e.with_detail("syntax error at end of input")
     } else {
-        format!("syntax error at or near \"{}\"", tok.text)
-    };
-    Box::new(
-        PgError::error("bad seg representation")
-            .with_sqlstate(ERRCODE_SYNTAX_ERROR)
-            .with_detail(detail),
-    )
+        // segscan.l:90 prints yytext's bytes; C's flex/bison treat a
+        // high-bit byte as end of input under SQL_ASCII (a C bug, see
+        // UPSTREAM-BUGS), so pgrust names the byte instead.
+        let mut d = b"syntax error at or near \"".to_vec();
+        d.extend_from_slice(tok.raw);
+        d.push(b'"');
+        e.with_detail_raw(d)
+    })
 }
 
 /// `seg_atof`: float4in_internal with the token text as both value and
 /// error string.
 fn seg_atof(value: &str) -> PgResult<f32> {
-    adt_float::io::float4in_internal(value, None, "seg", value, None)
+    adt_float::io::float4in_internal(value, None, "seg", value.as_bytes(), None)
 }
 
 struct Parser<'a> {
@@ -347,6 +355,19 @@ mod tests {
     fn err(s: &str) -> String {
         let e = parse_seg(s.as_bytes()).unwrap_err();
         format!("{}|{}", e.message(), e.detail().unwrap_or(""))
+    }
+
+    #[test]
+    fn syntax_error_names_the_raw_offending_byte() {
+        // SQL_ASCII input: the DETAIL carries the input byte, not U+FFFD/"?".
+        let e = parse_seg(b"1\xff").unwrap_err();
+        assert_eq!(e.sqlstate, types_error::ERRCODE_SYNTAX_ERROR);
+        assert_eq!(
+            e.detail_raw.as_deref(),
+            Some(&b"syntax error at or near \"\xff\""[..])
+        );
+        assert_eq!(err("1x"), "bad seg representation|syntax error at or near \"x\"");
+        assert_eq!(err("1 .. 2 ("), "bad seg representation|syntax error at or near \"(\"");
     }
 
     #[test]

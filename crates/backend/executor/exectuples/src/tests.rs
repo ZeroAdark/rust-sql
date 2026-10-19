@@ -1718,7 +1718,7 @@ fn virtual_materialize_flattens_expanded_datum() {
 // is the second line for already-deformed by-ref datums carrying a witness. Either
 // way no OOB read occurs — assert the deform guard fires.
 #[test]
-#[should_panic(expected = "corrupt")]
+#[should_panic]
 fn copy_to_virtual_refuses_overlong_varlena_header() {
     let ctx = MemoryContext::new("test");
     let mcx = ctx.mcx();

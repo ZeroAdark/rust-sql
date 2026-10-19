@@ -120,6 +120,51 @@ fn exec_msg(pat: Vec<u32>) -> Option<String> {
     })
 }
 
+/// Compile, then execute; distinguishes the engine's own failure codes from
+/// the ereport C's palloc raises out of the engine.
+fn exec_outcome(pat: Vec<u32>, subject: Vec<u32>) -> String {
+    on_big_stack(move || {
+        let re = match seam_pg_regcomp(&pat, 0o3, C_COLLATION_OID).unwrap() {
+            RegcompResult::Compiled(re) => re,
+            RegcompResult::Failed(f) => return format!("compile failed: {}", f.message),
+        };
+        let mut pmatch = [RegMatch::UNSET; 1];
+        match seam_pg_regexec(&re, &subject, 0, &mut pmatch) {
+            Ok(RegexecResult::Failed(f)) => format!("failed: {}", f.message),
+            Ok(RegexecResult::Matched) => "matched".to_string(),
+            Ok(RegexecResult::NoMatch) => "nomatch".to_string(),
+            Err(e) => format!(
+                "error {}: {}",
+                String::from_utf8_lossy(&types_error::unpack_sqlstate(e.sqlstate())),
+                e.message()
+            ),
+        }
+    })
+}
+
+/// nss * ncolors below INT_MAX members but the outsarea request
+/// (nss * ncolors * sizeof(struct sset *)) above MaxAllocSize: C's newdfa
+/// bound passes and MALLOC_ARRAY raises mcxt.c's alloc-size ereport, not a
+/// regex error code. K = 10000 distinct chrs: nss = 20002, ncolors = 10007,
+/// 20002 * 10007 * 8 = 1601280240 (measured against live C 18.6).
+#[test]
+fn dfa_arrays_over_max_alloc_size_raise_c_alloc_error() {
+    assert_eq!(
+        exec_outcome(distinct_chrs(10_000), vec!['x' as u32]),
+        "error XX000: invalid memory alloc request size 1601280240"
+    );
+}
+
+/// C's newlacon has no lookaround-count cap; the MAX_COLOR fit applies only
+/// to LACON arcs that survive to compact(). A lookaround inside a `{0}`
+/// group has its arcs deleted first, so 32768 of them compile and the empty
+/// alternative matches (C 18.6: true).
+#[test]
+fn deleted_lacon_arcs_are_not_color_bounded() {
+    let pat: Vec<u32> = "(?:(?=ab)){0}|".repeat(32_768).chars().map(|c| c as u32).collect();
+    assert_eq!(exec_outcome(pat, Vec::new()), "matched");
+}
+
 /// nss * ncolors >= INT_MAX: C 18.4+ newdfa refuses before allocating.
 #[test]
 fn dfa_arrays_over_int_max_are_too_complex() {

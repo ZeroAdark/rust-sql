@@ -38,6 +38,8 @@ const SRC: &str = "src/backend/replication/logical/launcher.c";
 const InvalidPid: pid_t = -1;
 #[allow(non_upper_case_globals)] // C-parity name
 const InvalidXLogRecPtr: XLogRecPtr = 0;
+// TIMESTAMP_NOBEGIN (timestamp.h): DT_NOBEGIN, -infinity.
+const TIMESTAMP_NOBEGIN: TimestampTz = i64::MIN;
 
 // DEFAULT_NAPTIME_PER_CYCLE (launcher.c:52), ms.
 const DEFAULT_NAPTIME_PER_CYCLE: i64 = 180_000;
@@ -46,7 +48,7 @@ const PG_WAIT_IPC: u32 = 0x0800_0000;
 const WAIT_EVENT_BGWORKER_STARTUP: u32 = PG_WAIT_IPC + 6;
 const WAIT_EVENT_BGWORKER_SHUTDOWN: u32 = PG_WAIT_IPC + 5;
 // LOGICAL_LAUNCHER_MAIN's index in wait_event_names.txt's Activity section is
-// 8, not 5 — 5 is CHECKPOINTER_SHUTDOWN. GL-SYNCWEDGE-1 (second instance of
+// 8, not 5 — 5 is CHECKPOINTER_SHUTDOWN. regression (second instance of
 // the same class); scripts/lint-waitevent-tags.sh pins it.
 const WAIT_EVENT_LOGICAL_LAUNCHER_MAIN: u32 = 0x0500_0000 | 8;
 
@@ -151,6 +153,37 @@ impl LogicalRepWorker {
     }
     pub fn is_parallel_apply(&self) -> bool {
         self.wtype == LogicalRepWorkerType::ParallelApply
+    }
+    // The slot-claim of logicalrep_worker_launch (launcher.c:437-462).
+    fn claim_for_launch(
+        &mut self,
+        wtype: LogicalRepWorkerType,
+        now: TimestampTz,
+        dbid: Oid,
+        userid: Oid,
+        subid: Oid,
+        relid: Oid,
+    ) {
+        let is_parallel_apply = wtype == LogicalRepWorkerType::ParallelApply;
+        self.wtype = wtype;
+        self.launch_time = now;
+        self.in_use = true;
+        self.generation = self.generation.wrapping_add(1);
+        self.proc_pid = 0;
+        self.proc_no = None;
+        self.dbid = dbid;
+        self.userid = userid;
+        self.subid = subid;
+        self.relid = relid;
+        self.relstate = 0;
+        self.relstate_lsn = InvalidXLogRecPtr;
+        self.leader_pid = if is_parallel_apply { g::MyProcPid() } else { InvalidPid };
+        self.parallel_apply = is_parallel_apply;
+        self.last_lsn = InvalidXLogRecPtr;
+        self.last_send_time = TIMESTAMP_NOBEGIN;
+        self.last_recv_time = TIMESTAMP_NOBEGIN;
+        self.reply_lsn = InvalidXLogRecPtr;
+        self.reply_time = TIMESTAMP_NOBEGIN;
     }
     pub fn is_tablesync(&self) -> bool {
         self.wtype == LogicalRepWorkerType::TableSync
@@ -420,25 +453,7 @@ pub fn logicalrep_worker_launch(
             };
 
             let w = &mut ctx.workers[slot];
-            w.wtype = wtype;
-            w.launch_time = now;
-            w.in_use = true;
-            w.generation = w.generation.wrapping_add(1);
-            w.proc_pid = 0;
-            w.proc_no = None;
-            w.dbid = dbid;
-            w.userid = userid;
-            w.subid = subid;
-            w.relid = relid;
-            w.relstate = 0;
-            w.relstate_lsn = InvalidXLogRecPtr;
-            w.leader_pid = if is_parallel_apply { g::MyProcPid() } else { InvalidPid };
-            w.parallel_apply = is_parallel_apply;
-            w.last_lsn = InvalidXLogRecPtr;
-            w.last_send_time = 0;
-            w.last_recv_time = 0;
-            w.reply_lsn = InvalidXLogRecPtr;
-            w.reply_time = 0;
+            w.claim_for_launch(wtype, now, dbid, userid, subid, relid);
             return Pick::Slot(slot, w.generation);
         }
     });
@@ -1035,6 +1050,14 @@ pub fn GetLeaderApplyWorkerPid(pid: i32) -> i32 {
         .unwrap_or(-1)
 }
 
+// ProcessInterrupts' IsLogicalLauncher die arm (postgres.c:3326-3335):
+// DEBUG1 and exit status 1 so the postmaster restarts the worker; no FATAL
+// (bgworker_die precedent for the disposition shape).
+fn launcher_die() -> PgResult<()> {
+    let _ = log_report(DEBUG1, "logical replication launcher shutting down".to_string());
+    ipc::proc_exit(1, g::MyProcPid())
+}
+
 // ApplyLauncherMain (launcher.c:1132).
 pub fn ApplyLauncherMain(_main_arg: u64) -> PgResult<()> {
     use procsignal::ThreadSignalHandler::{Fallible, Simple};
@@ -1065,7 +1088,7 @@ pub fn ApplyLauncherMain(_main_arg: u64) -> PgResult<()> {
         procsignal::signums::SIGHUP,
         Simple(interrupt::SignalHandlerForConfigReload),
     );
-    procsignal::pqsignal_thread(procsignal::signums::SIGTERM, Fallible(postgres::die));
+    procsignal::pqsignal_thread(procsignal::signums::SIGTERM, Fallible(launcher_die));
     bgworker::BackgroundWorkerUnblockSignals();
 
     // Connection to nailed catalogs (we only ever access pg_subscription).

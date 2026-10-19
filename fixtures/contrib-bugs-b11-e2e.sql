@@ -7,17 +7,17 @@ CREATE DATABASE b11e2e_ascii TEMPLATE template0 ENCODING 'SQL_ASCII' LC_COLLATE 
 CREATE DATABASE b11e2e_tr TEMPLATE template0 ENCODING 'UTF8' LOCALE_PROVIDER icu ICU_LOCALE 'tr' LC_COLLATE 'C' LC_CTYPE 'C';
 \c b11e2e
 \set VERBOSITY verbose
--- fp-contrib-hstore-hstore_io#1: hstoreUniquePairs is pg_qsort + first-of-run
+-- regression: hstoreUniquePairs is pg_qsort + first-of-run
 CREATE EXTENSION hstore;
 SELECT 'b=>0,a=>1,a=>2,a=>3,a=>4,a=>5,a=>6'::hstore -> 'a' AS qsort_first_of_run;
 SELECT 'a=>1,a=>2,a=>3,a=>4,a=>5,a=>6,a=>7,a=>8,a=>9,b=>0,a=>x'::hstore AS qsort_eleven;
 SELECT hstore(ARRAY['a','a','a','a','a','a','a'], ARRAY['1','2','3','4','5','6','7']) AS qsort_arrays;
--- fp-contrib-hstore-hstore_io#2: hstore_send converts to client_encoding
+-- regression: hstore_send converts to client_encoding
 SET client_encoding = 'LATIN1';
 SELECT encode(hstore_send(hstore('k', chr(233))), 'hex') AS send_latin1;
 SELECT encode(hstore_send(hstore(chr(233), NULL)), 'hex') AS send_latin1_key;
 RESET client_encoding;
--- fp-misc-guc-p3#1: passwordcheck.min_password_length is an int GUC with GUC_UNIT_BYTE
+-- regression: passwordcheck.min_password_length is an int GUC with GUC_UNIT_BYTE
 LOAD 'passwordcheck';
 SHOW passwordcheck.min_password_length;
 SET passwordcheck.min_password_length = '1kB';
@@ -30,13 +30,13 @@ CREATE ROLE b11_pc PASSWORD 'Aa123456';
 DROP ROLE b11_pc;
 RESET passwordcheck.min_password_length;
 SHOW passwordcheck.min_password_length;
--- fp-contrib-dblink-dblink-p2#1: nested registry read from a domain CHECK
+-- regression: nested registry read from a domain CHECK
 CREATE EXTENSION dblink;
 SELECT 'host=' || current_setting('unix_socket_directories') || ' port=' || current_setting('port') || ' dbname=b11e2e user=postgres' AS conn \gset
 SELECT dblink_connect('n', :'conn');
 CREATE DOMAIN b11_checked_int AS integer CHECK (dblink_get_connections() IS NOT NULL);
 SELECT * FROM dblink('n', 'SELECT 1') AS t(v b11_checked_int);
--- fp-contrib-dblink-dblink-p1#1: local GUCs restored after rows-then-command
+-- regression: local GUCs restored after rows-then-command
 SELECT dblink_exec('n', 'SET DateStyle = ''SQL, DMY''');
 SET DateStyle = 'ISO, MDY';
 BEGIN;
@@ -46,21 +46,21 @@ SELECT * FROM dblink('n', 'SELECT 1; SELECT 2') AS t(x text);
 SHOW DateStyle;
 ROLLBACK;
 SELECT dblink_disconnect('n');
--- fp-contrib-tablefunc-tablefunc#1: output domain whose CHECK re-enters SPI
+-- regression: output domain whose CHECK re-enters SPI
 CREATE EXTENSION tablefunc;
 CREATE FUNCTION b11_tf_check(integer) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN RETURN true; END $$;
 CREATE DOMAIN b11_tf_domain AS integer CHECK (b11_tf_check(VALUE));
 SELECT * FROM crosstab('SELECT 1, 1, 7', 'SELECT 1') AS t(r integer, v b11_tf_domain);
 SELECT * FROM crosstab('SELECT 1, 1, 7 UNION ALL SELECT 2, 1, 8 ORDER BY 1') AS t(r integer, v b11_tf_domain);
 SELECT * FROM connectby('(SELECT 1 AS k, NULL::int AS p) src', 'k', 'p', '1', 0) AS t(k b11_tf_domain, p integer, l integer);
--- fp-contrib-pg_visibility-pg_visibility#1: fixed descriptor regardless of the wrapper
+-- regression: fixed descriptor regardless of the wrapper
 CREATE TABLE b11_vt(i int);
 INSERT INTO b11_vt VALUES (1);
 CREATE FUNCTION b11_vm_bad(regclass, bigint, OUT a boolean, OUT b boolean, OUT c boolean) RETURNS record AS '$libdir/pg_visibility', 'pg_visibility_map' LANGUAGE C STRICT;
 SELECT b11_vm_bad('b11_vt'::regclass, 0)::text;
 CREATE FUNCTION b11_v_bad(regclass, bigint, OUT a boolean, OUT b boolean, OUT c boolean, OUT d boolean) RETURNS record AS '$libdir/pg_visibility', 'pg_visibility' LANGUAGE C STRICT;
 SELECT b11_v_bad('b11_vt'::regclass, 0)::text;
--- fp-contrib-pg_surgery-heap_surgery#1: relam must be the heap AM oid
+-- regression: relam must be the heap AM oid
 CREATE EXTENSION pg_surgery;
 CREATE ACCESS METHOD b11_heap_alias TYPE TABLE HANDLER heap_tableam_handler;
 CREATE TABLE b11_surgery(i int) USING b11_heap_alias;
@@ -68,7 +68,7 @@ INSERT INTO b11_surgery VALUES (1);
 SELECT heap_force_kill('b11_surgery', ARRAY['(0,1)'::tid]);
 SELECT heap_force_freeze('b11_surgery', ARRAY['(0,1)'::tid]);
 SELECT * FROM b11_surgery;
--- fp-contrib-cube-cube#1: GiST consistent/distance detoast the query
+-- regression: GiST consistent/distance detoast the query
 CREATE EXTENSION cube;
 ALTER TYPE cube SET (STORAGE = extended);
 CREATE TABLE b11_cq(c cube) WITH (toast_tuple_target = 128);
@@ -85,7 +85,7 @@ SELECT count(*) FROM b11_ct WHERE c <@ (SELECT c FROM b11_cq);
 SELECT c <-> (SELECT c FROM b11_cq) FROM b11_ct ORDER BY 1 LIMIT 1;
 RESET enable_seqscan;
 ALTER TYPE cube SET (STORAGE = plain);
--- fp-contrib-ltree-b1#1: '@' folding follows the default collation's ctype (ICU)
+-- regression: '@' folding follows the default collation's ctype (ICU)
 \c b11e2e_tr
 \set VERBOSITY verbose
 CREATE EXTENSION ltree;
@@ -108,7 +108,7 @@ CREATE TABLE b11_gt(p point, s text);
 INSERT INTO b11_gt VALUES (point(1,2), convert_from(decode('ff','hex'),'SQL_ASCII'));
 CREATE INDEX b11_gt_idx ON b11_gt USING gist(p) INCLUDE (s);
 SELECT itemoffset, encode(convert_to(keys,'SQL_ASCII'),'hex') AS gist_keys FROM gist_page_items(get_raw_page('b11_gt_idx',0),'b11_gt_idx'::regclass);
--- fp-contrib-pageinspect-brinfuncs#1: lp_len is not the decoder's bound
+-- regression: lp_len is not the decoder's bound
 CREATE TABLE b11_bl(i int);
 INSERT INTO b11_bl SELECT g FROM generate_series(1,1000) g;
 CREATE INDEX b11_bl_idx ON b11_bl USING brin(i);

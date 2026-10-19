@@ -52,7 +52,7 @@ fn scratch_dir(tag: &str) -> std::path::PathBuf {
     d
 }
 
-// audit-18.6 fp-adt-dbsize#4: dbsize.c:96 stats the dirent's own name
+// audit-18.6 regression: dbsize.c:96 stats the dirent's own name
 // bytes; a non-UTF-8 filename (Linux) must be counted, not lossily renamed
 // into an ENOENT skip. Filesystems refusing such names skip that leg.
 #[test]
@@ -69,7 +69,7 @@ fn dir_size_keeps_filename_bytes() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
-// audit-18.6 fp-adt-dbsize#5: dbsize.c:264 reports a stat failure with
+// audit-18.6 regression: dbsize.c:264 reports a stat failure with
 // errcode_for_file_access() and strerror (%m) -- ELOOP is XX000 with libc's
 // text, never Rust's "(os error N)" suffix. db_dir_size already did this.
 #[test]
@@ -87,7 +87,7 @@ fn stat_failures_are_file_access_errors() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
-// audit-18.6 fp-adt-dbsize#1: dbsize.c:194/307 hand the NameData bytes to
+// audit-18.6 regression: dbsize.c:194/307 hand the NameData bytes to
 // get_database_oid / get_tablespace_oid; a non-UTF-8 name (SQL_ASCII
 // chr(255)::name) is C's not-found error with the bytes, never a panic.
 #[test]
@@ -102,4 +102,17 @@ fn non_utf8_names_are_lookup_failures() {
     let err = builtins::fc_pg_tablespace_size_name(None, &mut fci).unwrap_err();
     assert_eq!(err.sqlstate(), types_error::ERRCODE_UNDEFINED_OBJECT);
     assert_eq!(err.message(), "tablespace \"\u{FFFD}\" does not exist");
+}
+
+#[test]
+fn errors_quote_raw_input_bytes() {
+    let e = pg_size_bytes(b"1 x\xff".as_slice()).unwrap_err();
+    assert_eq!(e.message_raw.as_deref(), Some(b"invalid size: \"1 x\xff\"".as_slice()));
+    assert_eq!(e.detail_raw.as_deref(), Some(b"Invalid size unit: \"x\xff\".".as_slice()));
+    let e = pg_size_bytes(b"\xff".as_slice()).unwrap_err();
+    assert_eq!(e.message_raw.as_deref(), Some(b"invalid size: \"\xff\"".as_slice()));
+    assert!(e.detail_raw.is_none());
+    let e = pg_size_bytes("1 xB").unwrap_err();
+    assert!(e.message_raw.is_none());
+    assert_eq!(e.detail(), Some("Invalid size unit: \"xB\"."));
 }

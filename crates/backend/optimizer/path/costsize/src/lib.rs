@@ -539,14 +539,15 @@ pub fn pgrcolumnar_feeds_plan(run: &PlannerRun<'_>) -> bool {
 // outer is empty at every ported call site).
 pub fn cost_gather(run: &mut PlannerRun<'_>, path_id: types_pathnodes::PathId, rel: RelId, rows: Option<f64>) {
     let rel_rows = run.root.rel(rel).rows;
-    let (sub_startup, sub_total, sub_disabled) = {
+    let (sub_id, sub_startup, sub_total, sub_disabled) = {
         let PathNode::GatherPath(g) = run.root.path(path_id) else {
             panic!("cost_gather: not a GatherPath")
         };
         let sub_id = g.subpath.expect("Gather subpath");
         let sub = run.root.path(sub_id).base();
-        (sub.startup_cost, sub.total_cost, sub.disabled_nodes)
+        (sub_id, sub.startup_cost, sub.total_cost, sub.disabled_nodes)
     };
+    let partial_agg_fed = heap_partial_agg_fed(run, sub_id);
     let setup_cost = gather_setup_cost(run);
     // (P7-2 D-8: the Stage-4 §4.4 exchange transfer pricing rode the
     // lane_pool admission — pgrust.lane_parallel_pool is tombstoned, no
@@ -559,23 +560,45 @@ pub fn cost_gather(run: &mut PlannerRun<'_>, path_id: types_pathnodes::PathId, r
     let mut run_cost = sub_total - sub_startup;
     startup_cost += setup_cost;
     run_cost += tuple_cost * p.rows;
-    // GL-Q2829-FIX-1 plain-Gather leader-consumption floor (doc at
+    // regression plain-Gather leader-consumption floor (doc at
     // gucs::DEFAULT_GATHER_LEADER_MIN_TUPLE_COST; DEFAULT ON since the
     // regexp-keyed-grouping-class flip — 0 via the env restores):
     // raw-row Gather rows are consumed LEADER-SERIALLY by the parent —
     // that work does not ride the cheap-exchange transport discount, and
     // discounting it is what elects the ship-every-row-to-the-leader
-    // aggregation family at fresh-stats estimate regimes. Partial-agg-fed
-    // Gathers are exempt (pointer handoff, per-group leader work — the
-    // exchange pricing above). Self-scoping per-row: low-row Gathers and
-    // LIMIT-prorated consumers barely feel it.
-    run_cost += gather_leader_uplift(tuple_cost, p.rows);
+    // aggregation family at fresh-stats estimate regimes. Heap
+    // partial-agg-fed Gathers are exempt (heap_partial_agg_fed).
+    // Self-scoping per-row: low-row Gathers and LIMIT-prorated consumers
+    // barely feel it.
+    if !partial_agg_fed {
+        run_cost += gather_leader_uplift(tuple_cost, p.rows);
+    }
     p.disabled_nodes = sub_disabled;
     p.startup_cost = startup_cost;
     p.total_cost = startup_cost + run_cost;
 }
 
-/// The plain-Gather leader-consumption uplift (GL-Q2829-FIX-1), the
+// A Gather / Gather Merge over a heap partial aggregate (through a Sort for
+// Gather Merge) ships per-group states the leader only combines: neither
+// leader-consumption floor applies. 100k groups x 3M rows: 147 ms parallel
+// against 474 ms for the serial plan the floor elected (C 18.6: 240 ms).
+fn heap_partial_agg_fed(run: &PlannerRun<'_>, sub_id: types_pathnodes::PathId) -> bool {
+    if pgrcolumnar_feeds_plan(run) {
+        return false;
+    }
+    let mut id = peel_projection(run, sub_id);
+    match run.root.path(id) {
+        PathNode::SortPath(s) => id = peel_projection(run, s.subpath.unwrap_or(id)),
+        PathNode::IncrementalSortPath(s) => id = peel_projection(run, s.spath.subpath.unwrap_or(id)),
+        _ => {}
+    }
+    matches!(
+        run.root.path(id),
+        PathNode::AggPath(a) if a.aggsplit == types_pathnodes::AGGSPLIT_INITIAL_SERIAL
+    )
+}
+
+/// The plain-Gather leader-consumption uplift (regression), the
 /// [`gm_leader_uplift`] sibling without the Gather Merge 5% IPC factor:
 /// the per-row delta that floors a raw-row Gather's transport rate at the
 /// leader-consumption minimum. Zero when the floor is disarmed (env
@@ -603,12 +626,13 @@ pub fn cost_gather_merge(
     rows: Option<f64>,
 ) {
     let rel_rows = run.root.rel(rel).rows;
-    let num_workers = {
+    let (num_workers, sub_id) = {
         let PathNode::GatherMergePath(g) = run.root.path(path_id) else {
             panic!("cost_gather_merge: not a GatherMergePath")
         };
-        g.num_workers
+        (g.num_workers, g.subpath)
     };
+    let partial_agg_fed = sub_id.is_some_and(|id| heap_partial_agg_fed(run, id));
     debug_assert!(num_workers > 0);
     let setup_cost = gather_setup_cost(run);
     let tuple_cost = gather_tuple_cost(run);
@@ -627,25 +651,28 @@ pub fn cost_gather_merge(
     run_cost += gucs::cpu_operator_cost() * p.rows;
     startup_cost += setup_cost;
     run_cost += tuple_cost * p.rows * 1.05;
-    // GL-GMLEADER-1 leader-consumption floor (doc at
+    // regression leader-consumption floor (doc at
     // gucs::DEFAULT_GM_LEADER_MIN_TUPLE_COST): GM rows are consumed
     // LEADER-SERIALLY (heap merge + the serial parent) — that work does
     // not ride the cheap-exchange transport discount. Self-scoping: the
     // uplift is per-row, so partial-agg-fed GMs (few rows) and
     // LIMIT-prorated consumers barely feel it; the raw-row catastrophe
     // family pays its real freight and loses its election on arithmetic.
-    run_cost += gm_leader_uplift(tuple_cost, p.rows);
+    // Heap partial-agg-fed GMs are exempt (heap_partial_agg_fed).
+    if !partial_agg_fed {
+        run_cost += gm_leader_uplift(tuple_cost, p.rows);
+    }
 
     p.disabled_nodes = input_disabled_nodes + if gucs::enable_gathermerge() { 0 } else { 1 };
     p.startup_cost = startup_cost + input_startup_cost;
     p.total_cost = startup_cost + run_cost + input_total_cost;
 }
 
-/// The GL-GMLEADER-1 uplift, factored pure for exhaustive pins: the
+/// The regression uplift, factored pure for exhaustive pins: the
 /// per-row delta that floors a Gather Merge's transport rate at the
 /// leader-consumption minimum. Zero when the session's rate already
 /// meets the floor (SET parallel_tuple_cost >= 0.1 — C-parity sessions,
-/// the GL-STRAGG-2 bisection control) and when transport is EXPLICITLY
+/// the regression bisection control) and when transport is EXPLICITLY
 /// zeroed (the forced-plan bench seams: zeroed-cost sessions keep free
 /// parallelism). The 1.05 factor mirrors the transport term's own
 /// small-queue-wait fudge so the floored total equals what the same
@@ -4460,12 +4487,12 @@ mod tests {
         );
     }
 
-    /// GL-GMLEADER-1 pins (the leader-consumption floor, exhaustive over
+    /// regression pins (the leader-consumption floor, exhaustive over
     /// the uplift's regions): the product defaults uplift GM rows to C's
     /// per-row rate; C-parity sessions (rate >= the floor) and
     /// explicitly-zeroed transport (the forced-plan bench seams) pay
     /// ZERO delta; the floored total equals the same session at
-    /// parallel_tuple_cost == the floor (the GL-STRAGG-2 bisection
+    /// parallel_tuple_cost == the floor (the regression bisection
     /// equivalence — ptc=0.1 ALONE restored C's election, and this term
     /// reproduces exactly that arithmetic at the default rates).
     #[test]
@@ -4499,7 +4526,7 @@ mod tests {
         assert!(super::gm_leader_uplift(0.01, rows) > 600_000.0);
     }
 
-    /// GL-Q2829-FIX-1 pins (the plain-Gather leader-consumption floor,
+    /// regression pins (the plain-Gather leader-consumption floor,
     /// DEFAULT ON since the regexp-keyed-grouping-class flip): the shipped
     /// default IS the GM floor's C-parity rate, and the uplift reproduces
     /// the same flooring arithmetic (minus the Gather Merge 5% IPC
@@ -4700,7 +4727,7 @@ mod tests {
     /// function's real 168B output — both caught by the CI cluster bar; this
     /// test makes the third such miss a red test instead.
     #[test]
-    fn leader_hashagg_entry_scale_reproduces_q33_fleet_anchors() {
+    fn leader_hashagg_entry_scale_reproduces_q33_ci_anchors() {
         let entry = ::nodeagg::hash_agg_entry_size(3, 16, 48);
         assert_eq!(entry, 168.0);
         let scale = gucs::DEFAULT_PGRCOLUMNAR_LEADER_HASHAGG_ENTRY_SCALE;

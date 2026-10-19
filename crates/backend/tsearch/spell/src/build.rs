@@ -1,7 +1,7 @@
 use ::mcx::{Mcx, PgVec};
 use ::regex::{RegcompResult, REG_ADVANCED, REG_NOSUB};
 use ::types_core::catalog::DEFAULT_COLLATION_OID;
-use ::ts_locale::TsearchReadline;
+use ::ts_locale::{TsearchReadline, BUFSIZ};
 use ::types_error::{PgError, PgResult, ERRCODE_INVALID_REGULAR_EXPRESSION};
 
 use crate::{
@@ -10,6 +10,7 @@ use crate::{
     isdigit, isprint, isspace, new_bytes, pg_mblen_clamped, reserve_one, rs_compile, rs_is_regis,
     str_tolower, strbcmp, strbncmp, strtol, t_isalpha, t_iseq, Affix, AffixNode, AffixNodeData,
     AffixReg, CmpdAffix, CompoundAffixFlag, FlagKey, FlagMode, IspellDict, SpNode, SpNodeData,
+    SPNODE_AFFIX_MASK,
     Spell, FF_COMPOUNDBEGIN, FF_COMPOUNDFLAG, FF_COMPOUNDFLAGMASK, FF_COMPOUNDFORBIDFLAG,
     FF_COMPOUNDLAST, FF_COMPOUNDMIDDLE, FF_COMPOUNDONLY, FF_COMPOUNDPERMITFLAG, FF_CROSSPRODUCT,
     FF_PREFIX, FF_SUFFIX, FLAGNUM_MAXSIZE,
@@ -336,6 +337,7 @@ impl<'mcx> IspellDict<'mcx> {
         const PAE_WAIT_MASK: i32 = 0;
         const PAE_INMASK: i32 = 1;
         let mut state = PAE_WAIT_MASK;
+        let mut avail = BUFSIZ;
 
         while *pos < s.len() {
             let c = &s[*pos..];
@@ -344,14 +346,18 @@ impl<'mcx> IspellDict<'mcx> {
                 if t_iseq(c, b'#') {
                     return false;
                 } else if !isspace(c[0]) {
-                    out.extend_from_slice(&c[..clen]);
+                    if clen < avail {
+                        out.extend_from_slice(&c[..clen]);
+                        avail -= clen;
+                    }
                     state = PAE_INMASK;
                 }
             } else {
                 if isspace(c[0]) {
                     return true;
-                } else {
+                } else if clen < avail {
                     out.extend_from_slice(&c[..clen]);
+                    avail -= clen;
                 }
             }
             *pos += clen;
@@ -455,20 +461,20 @@ impl<'mcx> IspellDict<'mcx> {
                 if t_iseq(c, b'#') {
                     return Ok(false);
                 } else if !isspace(c[0]) {
-                    mask.extend_from_slice(&c[..clen]);
+                    push_bounded(mask, &c[..clen]);
                     state = PAE_INMASK;
                 }
             } else if state == PAE_INMASK {
                 if t_iseq(c, b'>') {
                     state = PAE_WAIT_FIND;
                 } else if !isspace(c[0]) {
-                    mask.extend_from_slice(&c[..clen]);
+                    push_bounded(mask, &c[..clen]);
                 }
             } else if state == PAE_WAIT_FIND {
                 if t_iseq(c, b'-') {
                     state = PAE_INFIND;
                 } else if t_isalpha(c)? || t_iseq(c, b'\'') {
-                    repl.extend_from_slice(&c[..clen]);
+                    push_bounded(repl, &c[..clen]);
                     state = PAE_INREPL;
                 } else if !isspace(c[0]) {
                     return Err(config_file_error("syntax error".into()).into());
@@ -477,7 +483,7 @@ impl<'mcx> IspellDict<'mcx> {
                 if t_iseq(c, b',') {
                     state = PAE_WAIT_REPL;
                 } else if t_isalpha(c)? {
-                    find.extend_from_slice(&c[..clen]);
+                    push_bounded(find, &c[..clen]);
                 } else if !isspace(c[0]) {
                     return Err(config_file_error("syntax error".into()).into());
                 }
@@ -485,7 +491,7 @@ impl<'mcx> IspellDict<'mcx> {
                 if t_iseq(c, b'-') {
                     break;
                 } else if t_isalpha(c)? {
-                    repl.extend_from_slice(&c[..clen]);
+                    push_bounded(repl, &c[..clen]);
                     state = PAE_INREPL;
                 } else if !isspace(c[0]) {
                     return Err(config_file_error("syntax error".into()).into());
@@ -494,7 +500,7 @@ impl<'mcx> IspellDict<'mcx> {
                 if t_iseq(c, b'#') {
                     break;
                 } else if t_isalpha(c)? {
-                    repl.extend_from_slice(&c[..clen]);
+                    push_bounded(repl, &c[..clen]);
                 } else if !isspace(c[0]) {
                     return Err(config_file_error("syntax error".into()).into());
                 }
@@ -555,7 +561,7 @@ impl<'mcx> IspellDict<'mcx> {
         let mut p = start;
         while p < s.len() && !isspace(s[p]) && s[p] != b'\n' {
             let clen = pg_mblen_clamped(&s[p..]);
-            sflag.extend_from_slice(&s[p..p + clen]);
+            push_bounded(&mut sflag, &s[p..p + clen]);
             p += clen;
         }
 
@@ -1195,9 +1201,9 @@ impl<'mcx> IspellDict<'mcx> {
                         let cf_new = self.make_compound_flags(sp_affix)?;
                         clear_compound_only = (FF_COMPOUNDONLY as u32 & cf_existing & cf_new) == 0;
                         let merged = self.merge_affix(cur.affix as i32, sp_affix)?;
-                        cur.affix = merged as u32;
+                        cur.affix = merged as u32 & SPNODE_AFFIX_MASK;
                     } else {
-                        cur.affix = sp_affix as u32;
+                        cur.affix = sp_affix as u32 & SPNODE_AFFIX_MASK;
                     }
                     cur.isword = true;
 
@@ -1475,6 +1481,14 @@ pub(crate) fn open_file<'mcx>(
 }
 
 #[inline]
+// spell.c parse_affentry / addCompoundAffixFlagValue: a field lives in a
+// char[BUFSIZ] and a character is copied only while it still fits.
+fn push_bounded(out: &mut Vec<u8>, ch: &[u8]) {
+    if out.len() + ch.len() < BUFSIZ {
+        out.extend_from_slice(ch);
+    }
+}
+
 fn has_prefix(s: &[u8], lit: &[u8]) -> bool {
     s.len() >= lit.len() && &s[..lit.len()] == lit
 }

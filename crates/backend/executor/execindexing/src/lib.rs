@@ -82,6 +82,10 @@ struct IdxExprCache {
     // C rd_exclops/rd_exclprocs/rd_exclstrats (relcache.c:5680), cleared by
     // relcache inval on the index like the trees above.
     excl: mcx::PgHashMap<'static, Oid, ExclInfo>,
+    // AllocSet home for check_exclusion_or_unique_constraint's per-call
+    // probe state (C pallocs and pfrees it per call; the query bump would
+    // retain every row's scan).
+    probe_mcx: Mcx<'static>,
     callbacks_registered: bool,
 }
 
@@ -107,11 +111,16 @@ fn with_expr_cache<R>(f: impl FnOnce(&mut IdxExprCache) -> R) -> R {
                 exprs: mcx::PgHashMap::new_in(mcx),
                 preds: mcx::PgHashMap::new_in(mcx),
                 excl: mcx::PgHashMap::new_in(mcx),
+                probe_mcx: mcx::session_root("IndexProbeContext").mcx(),
                 callbacks_registered: false,
             })
         });
         f(st)
     })
+}
+
+fn probe_mcx() -> Mcx<'static> {
+    with_expr_cache(|st| st.probe_mcx)
 }
 
 fn IdxExprRelCallback(_arg: Datum, relid: Oid) {
@@ -678,11 +687,6 @@ pub fn ExecInsertIndexTuples<'mcx>(
             } else {
                 (false, CeoucWaitMode::Wait)
             };
-            let mut existing_slot = exectuples::make_tuple_table_slot(
-                mcx,
-                ::types_slot::TupleSlotKind::BufferHeapTuple,
-                Some(heap_relation.rd_att.clone()),
-            );
             let indexRelation = &state.descs[i];
             satisfiesConstraint = check_exclusion_or_unique_constraint(
                 mcx,
@@ -696,7 +700,6 @@ pub fn ExecInsertIndexTuples<'mcx>(
                 false,
                 wait_mode,
                 violation_ok,
-                &mut existing_slot,
                 None,
             )?;
         }
@@ -783,8 +786,7 @@ impl<'mcx> ::nodes_core::NodeWalker<'mcx> for IndexExpressionChangedWalker<'_, '
 /// ExecCheckIndexConstraints: true if no arbiter (or any unique, when
 /// `arbiter_indexes` is empty) constraint conflicts with `slot`; otherwise
 /// false with the committed conflicting tuple's TID in `conflict_tid`.
-/// `tupleid` excludes an already-inserted self tuple from the recheck;
-/// `existing_slot` is caller-owned scratch in the result relation's format.
+/// `tupleid` excludes an already-inserted self tuple from the recheck.
 #[allow(clippy::too_many_arguments)]
 pub fn ExecCheckIndexConstraints<'mcx>(
     mcx: Mcx<'mcx>,
@@ -792,7 +794,7 @@ pub fn ExecCheckIndexConstraints<'mcx>(
     state: &mut ResultRelIndexState<'mcx>,
     heap_relation: &Relation<'mcx>,
     slot: &mut SlotData<'mcx>,
-    existing_slot: &mut SlotData<'mcx>,
+    _existing_slot: &mut SlotData<'mcx>,
     tupleid: &ItemPointerData,
     arbiter_indexes: &[Oid],
     conflict_tid: &mut ItemPointerData,
@@ -842,7 +844,6 @@ pub fn ExecCheckIndexConstraints<'mcx>(
             false,
             CeoucWaitMode::Wait,
             true,
-            existing_slot,
             Some(conflict_tid),
         )? {
             return Ok(false);
@@ -879,7 +880,6 @@ fn check_exclusion_or_unique_constraint<'mcx>(
     new_index: bool,
     wait_mode: CeoucWaitMode,
     violation_ok: bool,
-    existing_slot: &mut SlotData<'mcx>,
     mut conflict_tid: Option<&mut ItemPointerData>,
 ) -> PgResult<bool> {
     let indnkeyatts = index_info.ii_NumIndexKeyAttrs as usize;
@@ -914,12 +914,21 @@ fn check_exclusion_or_unique_constraint<'mcx>(
         }
     }
 
+    // execIndexing.c:783-952: the slot, keys and scan are per-call scratch,
+    // freed on return (the aset probe context frees on drop).
+    let pmcx: Mcx<'mcx> = probe_mcx();
+    let mut existing_slot = exectuples::make_tuple_table_slot(
+        pmcx,
+        ::types_slot::TupleSlotKind::BufferHeapTuple,
+        Some(heap_relation.rd_att.clone()),
+    );
+    let existing_slot = &mut existing_slot;
     let dirty = std::rc::Rc::new(::types_snapshot::SnapshotData::sentinel(
-        mcx,
+        pmcx,
         ::types_snapshot::SnapshotType::SNAPSHOT_DIRTY,
     ));
 
-    let mut scankeys: PgVec<'mcx, ::types_scan::scankey::ScanKeyData> = PgVec::new_in(mcx);
+    let mut scankeys: PgVec<'mcx, ::types_scan::scankey::ScanKeyData> = PgVec::new_in(pmcx);
     for i in 0..indnkeyatts {
         let mut key = ::types_scan::scankey::ScanKeyData::empty();
         key.sk_flags = if isnull[i] {
@@ -943,7 +952,7 @@ fn check_exclusion_or_unique_constraint<'mcx>(
         let mut conflict = false;
         let mut found_self = false;
         let mut scan = indexam::index_beginscan(
-            mcx,
+            pmcx,
             heap_relation,
             index_relation,
             dirty.clone(),
@@ -953,7 +962,7 @@ fn check_exclusion_or_unique_constraint<'mcx>(
         indexam::index_rescan(&mut scan, Some(&scankeys), None)?;
 
         while indexam::index_getnext_slot(
-            mcx,
+            pmcx,
             &mut scan,
             ::types_scan::ScanDirection::ForwardScanDirection,
             existing_slot,
@@ -1076,11 +1085,6 @@ pub fn IndexCheckExclusion<'mcx>(
         ::types_slot::TupleSlotKind::BufferHeapTuple,
         Some(heap_relation.rd_att.clone()),
     );
-    let mut existing_slot = exectuples::make_tuple_table_slot(
-        mcx,
-        ::types_slot::TupleSlotKind::BufferHeapTuple,
-        Some(heap_relation.rd_att.clone()),
-    );
     let snapshot = snapmgr::RegisterSnapshot(Some(&snapmgr::GetLatestSnapshot()?))?
         .expect("registered snapshot");
     let flags = ::tableam_vocab::SO_TYPE_SEQSCAN
@@ -1097,7 +1101,8 @@ pub fn IndexCheckExclusion<'mcx>(
         flags,
     )?;
 
-    // C index.c IndexCheckExclusion: ExecPrepareQual runs before the scan.
+    // index.c:3257: a fresh ExecPrepareQual, even after the build scan's.
+    index_info.ii_PredicateState = None;
     prepare_index_predicate(mcx, index_info)?;
 
     let mut values = [Datum::null(); INDEX_MAX_KEYS as usize];
@@ -1130,7 +1135,6 @@ pub fn IndexCheckExclusion<'mcx>(
             true,
             CeoucWaitMode::Wait,
             false,
-            &mut existing_slot,
             None,
         )?;
         // index.c:3297 MemoryContextReset(econtext->ecxt_per_tuple_memory)
@@ -1153,11 +1157,6 @@ pub fn check_exclusion_constraint<'mcx>(
     isnull: &[bool],
     new_index: bool,
 ) -> PgResult<()> {
-    let mut existing_slot = exectuples::make_tuple_table_slot(
-        mcx,
-        ::types_slot::TupleSlotKind::BufferHeapTuple,
-        Some(heap_relation.rd_att.clone()),
-    );
     check_exclusion_or_unique_constraint(
         mcx,
         eval_mcx,
@@ -1170,7 +1169,6 @@ pub fn check_exclusion_constraint<'mcx>(
         new_index,
         CeoucWaitMode::Wait,
         false,
-        &mut existing_slot,
         None,
     )
     .map(|_| ())

@@ -658,3 +658,24 @@ fn differential_corpus_vs_live_pg() {
             .join("\n")
     );
 }
+
+#[test]
+fn malformed_literal_message_keeps_raw_bytes() {
+    install();
+    let cx = MemoryContext::new("t");
+    let mcx = cx.mcx();
+    let mut fl = FmgrInfo::unresolved();
+    let cache = cached_multirange_io_data(&mut fl, INT4MULTI, IOFuncSelector::IOFunc_input).unwrap();
+    let err = crate::io::multirange_in(mcx, cache, b"\xE9", -1, None).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"malformed multirange literal: \"\xE9\"".as_slice())
+    );
+    assert_eq!(err.detail(), Some("Missing left brace."));
+    let err = crate::io::multirange_in(mcx, cache, b"{[1,2)}\xE9", -1, None).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"malformed multirange literal: \"{[1,2)}\xE9\"".as_slice())
+    );
+    assert_eq!(err.detail(), Some("Junk after closing right brace."));
+}

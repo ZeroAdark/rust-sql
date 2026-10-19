@@ -141,7 +141,7 @@ pub(crate) fn fc_page_header(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo)
 
     // SAFETY: the arming context outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
-    let tupdesc = composite_tupdesc(mcx, flinfo)?;
+    let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
 
     let mut values = [Datum::null(); 9];
     let nulls = [false; 9];

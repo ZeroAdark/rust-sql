@@ -567,6 +567,10 @@ pub fn register_plpgsql_handlers(
     PLPGSQL_VALIDATOR.store(validator as *mut (), core::sync::atomic::Ordering::Release);
 }
 
+pub fn is_registered_c_lang_fn(prosrc: &str) -> bool {
+    registered_c_lang_fn(prosrc).is_some()
+}
+
 fn registered_c_lang_fn(prosrc: &str) -> Option<::fmgr::PGFunction> {
     let slot = match prosrc {
         "plpgsql_call_handler" => &PLPGSQL_CALL_HANDLER,
@@ -739,8 +743,7 @@ fn fmgr_info_pg_proc(
                     .unwrap_or_else(|| panic!("fmgr: null prosrc for function {function_id}"));
                 let probin = syscache_seams::lookup_pg_proc_probin::call(cx.mcx(), function_id)?
                     .unwrap_or_else(|| panic!("fmgr: null probin for C function {function_id}"));
-                let user_fn = ::dfmgr::load_external_function(&probin, &prosrc, true)?
-                    .expect("signal_not_found=true returned no function");
+                let user_fn = ::dfmgr::load_sql_callable_function(&probin, &prosrc)?;
                 record_c_func(function_id, row.xmin, row.tid, user_fn);
                 (user_fn, FnKind::Language, InvalidOid)
             }

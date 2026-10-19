@@ -26,5 +26,6 @@ types_hash = { path = "../../../../_support/types/hash" }
 types_storage = { path = "../../../../_support/types/types_storage" }
 
 [dev-dependencies]
+fd = { path = "../../../storage/file/fd" }
 shmem_seams = { path = "../../../storage/ipc/shmem_seams" }
 xact_seams = { path = "../../../access/transam/xact_seams" }

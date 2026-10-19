@@ -90,14 +90,14 @@ pub const DEFAULT_PGRCOLUMNAR_GROUP_NDISTINCT_RATIO: f64 = 0.05;
 // plans (denies workers the fused bounded-sort feed).
 pub const DEFAULT_PGRCOLUMNAR_GATHER_SORT_TUPLE_COST: f64 = 30.0;
 
-// GL-GMLEADER-1: the Gather-Merge LEADER-CONSUMPTION floor (per-tuple).
+// regression: the Gather-Merge LEADER-CONSUMPTION floor (per-tuple).
 // pgrust's cheap-exchange defaults (parallel_tuple_cost 0.01, pgrcolumnar
 // 0.005 — thread workers, shared-memory queues) are legitimate for the
 // TRANSPORT, but C's 0.1 empirically also covered the LEADER-SERIAL
 // consumption of a Gather Merge stream (the binary-heap merge + a serial
 // parent ingesting every row) — work whose throughput does not improve
 // with workers. Discounting it 10-20x removes C's guard against the
-// raw-row-GM-into-serial-leader-aggregate catastrophe (GL-STRAGG-2
+// raw-row-GM-into-serial-leader-aggregate catastrophe (regression
 // increment 2: elected even at true NDV; GUC bisection witnessed
 // parallel_tuple_cost=0.1 ALONE restores C's election, setup/mpwg do
 // not; the elected family runs 1.37-1.43s where the displaced hashagg
@@ -122,8 +122,8 @@ pub fn gm_leader_min_tuple_cost() -> f64 {
     })
 }
 
-// GL-Q2829-FIX-1: the PLAIN-Gather leader-consumption floor (per-tuple),
-// the GL-GMLEADER-1 floor's raw-row-Gather sibling — DEFAULT ON since the
+// regression: the PLAIN-Gather leader-consumption floor (per-tuple),
+// the regression floor's raw-row-Gather sibling — DEFAULT ON since the
 // regexp-keyed-grouping-class flip (Michael, 2026-07-22: "the flip for
 // the clickhouse query q29 sounds good to me"; staged 0.0 before that).
 // Derivation: identical to the GM floor — 10x the shipped
@@ -226,8 +226,8 @@ pub fn pgrcolumnar_footer_ndv_est() -> bool {
 // (spill priced, margin 1.41x) and < 4.29GB budget (no spill term,
 // margin 0.70x); the admissible band from the two anchors alone is
 // (1.28, 2.56). Pinned by leader_hashagg_entry_scale_reproduces_q33_
-// fleet_anchors at the REAL entry composition.
-// CALIBRATION HISTORY (both catches by the GL-COST-step0 byte-identical-
+// ci_anchors at the REAL entry composition.
+// CALIBRATION HISTORY (both catches by the regression-step0 byte-identical-
 // at-1GB CI cluster bar, before any merge): first shipped 4.7 against a
 // width-12/one-transinfo mis-model (entry 64B -> predicted 7.9GB, flipped
 // both arms — job -0557); then 3.2 against a transitionSpace-0 mis-model

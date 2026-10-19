@@ -1252,7 +1252,7 @@ fn run_program<'mcx>(
                 let r = if *slice {
                     crate::arrayops::sbsref_assign_slice(st, cur)?
                 } else {
-                    crate::arrayops::sbsref_assign(st, cur)?
+                    crate::arrayops::sbsref_assign(st, cur, cparam_arg)?
                 };
                 write_out(*out, r.value, r.isnull);
             }
@@ -1354,12 +1354,13 @@ fn run_program<'mcx>(
                 fieldnum,
                 resulttype,
                 frame,
+                rn,
                 out,
             } => {
                 let r = read_out(*out);
                 if !r.isnull {
                     let (value, isnull) =
-                        eval_field_select(frames, *fieldnum, *resulttype, *frame, r.value)?;
+                        eval_field_select(frames, *rn, *fieldnum, *resulttype, *frame, r.value)?;
                     write_out(*out, value, isnull);
                 }
             }
@@ -1388,12 +1389,12 @@ fn run_program<'mcx>(
             Step::FieldStoreDeForm { fs, frame, out } => {
                 let r = read_out(*out);
                 // SAFETY: compile-allocated state, sole live access.
-                let st = unsafe { fs.as_ref() };
+                let st = unsafe { &mut *fs.as_ptr() };
                 eval_field_store_deform(frames, st, *frame, r)?;
             }
             Step::FieldStoreForm { fs, frame, out } => {
                 // SAFETY: compile-allocated state, sole live access.
-                let st = unsafe { fs.as_ref() };
+                let st = unsafe { &mut *fs.as_ptr() };
                 let v = eval_field_store_form(frames, st, *frame)?;
                 write_out(*out, v, false);
             }
@@ -1479,6 +1480,10 @@ fn run_program<'mcx>(
             Step::AggOrderedMark { flag } => {
                 // SAFETY: nodeagg-owned once-allocated flag slot.
                 unsafe { flag.write(true) };
+            }
+            Step::AggPresortedTrans { hook } => {
+                // SAFETY: nodeagg-owned query-lifetime hook context.
+                unsafe { (hook.call)(hook.ctx)? };
             }
             Step::AggrefEval { value, null, out } => {
                 // SAFETY: pointers into once-allocated AggState arrays (steps.rs note).
@@ -3135,11 +3140,12 @@ fn varlena_datum(v: ::datum::Varlena<'_>) -> Datum {
 
 // ExecEvalFieldSelect (execExprInterp.c), heap-composite leg; the expanded-
 // record fastpath is unported loud. C memoizes the tupdesc in the step's
-// rowcache; a per-eval registry copy stands in (cold path, no invalidation).
+// rowcache.
 #[inline(never)]
 #[cold]
 fn eval_field_select(
     frames: &mut [crate::steps::FuncFrame<'_>],
+    rn: core::ptr::NonNull<crate::steps::RowNullState>,
     fieldnum: i16,
     resulttype: ::types_core::Oid,
     frame: u32,
@@ -3175,7 +3181,8 @@ fn eval_field_select(
     };
     // SAFETY: detoasted composite image; header prefix is in bounds.
     let hdr = unsafe { &*(rec.as_ptr() as *const HeapTupleHeaderData) };
-    let tupdesc = ::typcache::lookup_rowtype_tupdesc_copy(mcx, hdr.type_id(), hdr.typmod())?;
+    // SAFETY: compile-allocated state, single-threaded interpreter.
+    let tupdesc = row_cache_desc(unsafe { &mut *rn.as_ptr() }, hdr.type_id(), hdr.typmod())?;
     // C ExecEvalFieldSelect (execExprInterp.c:3770-3792), heap-composite leg.
     if fieldnum <= 0 {
         return Err(::types_error::PgError::error(format!(
@@ -3222,7 +3229,7 @@ fn eval_field_select(
     };
     let mut isnull = false;
     // SAFETY: fieldnum validated against the tuple's descriptor above.
-    let v = unsafe { ::types_tuple::heap_getattr(&tuple, fieldnum as i32, &tupdesc, &mut isnull) };
+    let v = unsafe { ::types_tuple::heap_getattr(&tuple, fieldnum as i32, tupdesc, &mut isnull) };
     core::mem::forget(tuple);
     Ok((v, isnull))
 }
@@ -3306,9 +3313,29 @@ fn eval_convert_rowtype(
 // the deformed column datums stay live through FIELDSTORE_FORM.
 #[inline(never)]
 #[cold]
+// get_cached_rowtype (execUtils.c) for the FieldStore rowcache: the typcache
+// descriptor, re-fetched when its tupDesc_identifier changed.
+fn field_store_tupdesc(
+    st: &mut crate::steps::FieldStoreState,
+) -> PgResult<&::types_tuple::TupleDescData<'static>> {
+    let e = ::typcache::lookup_type_cache(st.resulttype, ::typcache::TYPECACHE_TUPDESC)?;
+    if st.cached.is_none() || st.tupdesc_id != e.tupdesc_identifier() {
+        let Some(td) = e.tupdesc() else {
+            let name = format_type::format_type_be(st.resulttype)
+                .unwrap_or_else(|_| format!("{}", st.resulttype));
+            return Err(::types_error::PgError::error(format!("type {name} is not composite"))
+                .with_sqlstate(::types_error::ERRCODE_WRONG_OBJECT_TYPE)
+                .into());
+        };
+        st.tupdesc_id = e.tupdesc_identifier();
+        st.cached = Some(core::mem::ManuallyDrop::new(td));
+    }
+    Ok(st.cached.as_deref().map(|rc| &**rc).expect("refreshed above"))
+}
+
 fn eval_field_store_deform(
     frames: &mut [crate::steps::FuncFrame<'_>],
-    st: &crate::steps::FieldStoreState,
+    st: &mut crate::steps::FieldStoreState,
     frame: u32,
     r: NullableDatum,
 ) -> PgResult<()> {
@@ -3345,8 +3372,15 @@ fn eval_field_store_deform(
             ::types_core::InvalidOid,
         )
     };
-    // SAFETY: compile-time blessed tupdesc, plan-mcx-lived.
-    let desc = unsafe { st.desc.as_ref() };
+    let desc = field_store_tupdesc(st)?;
+    if desc.natts as usize > n {
+        return Err(::types_error::PgError::error(format!(
+            "too many columns in composite type {}",
+            st.resulttype
+        ))
+        .with_sqlstate(::types_error::ERRCODE_INTERNAL_ERROR)
+        .into());
+    }
     let mut values: ::mcx::PgVec<'_, Datum> = ::mcx::vec_with_capacity_in(mcx, n)?;
     let mut nulls: ::mcx::PgVec<'_, bool> = ::mcx::vec_with_capacity_in(mcx, n)?;
     values.resize(n, Datum::null());
@@ -3368,7 +3402,7 @@ fn eval_field_store_deform(
 #[cold]
 fn eval_field_store_form(
     frames: &mut [crate::steps::FuncFrame<'_>],
-    st: &crate::steps::FieldStoreState,
+    st: &mut crate::steps::FieldStoreState,
     frame: u32,
 ) -> PgResult<Datum> {
     let f = &mut frames[frame as usize];
@@ -3383,8 +3417,7 @@ fn eval_field_store_form(
         values.push(nd.value);
         nulls.push(nd.isnull);
     }
-    // SAFETY: compile-time blessed tupdesc, plan-mcx-lived.
-    let desc = unsafe { st.desc.as_ref() };
+    let desc = field_store_tupdesc(st)?;
     let tuple = ::heaptuple::heap_form_tuple(mcx, desc, &values, &nulls)?;
     if tuple.has_external() {
         return ::detoast_seams::toast_flatten_tuple_to_datum::call(mcx, &tuple, desc);
@@ -3495,8 +3528,13 @@ fn strict2_thin_eval(call: &crate::steps::CallThin) -> PgResult<NullableDatum> {
 #[cold]
 pub(crate) fn invoke_fusage(call: &FuncCall) -> PgResult<(Datum, bool)> {
     // SAFETY: 'mcx-live mcx-boxed FmgrInfo.
-    let fn_oid = unsafe { call.flinfo.as_ref() }.fn_oid;
-    let fcu = ::pgstat::function::pgstat_init_function_usage(fn_oid)?;
+    let flinfo = unsafe { call.flinfo.as_ref() };
+    // pgstat_init_function_usage re-reads track_functions per call: an
+    // argument's set_config can turn tracking off after the step was chosen.
+    if guc_tables::vars::pgstat_track_functions.read() <= flinfo.fn_stats as i32 {
+        return invoke(call);
+    }
+    let fcu = ::pgstat::function::pgstat_init_function_usage(flinfo.fn_oid)?;
     let r = invoke(call)?;
     ::pgstat::function::pgstat_end_function_usage(&fcu, true);
     Ok(r)
@@ -3900,7 +3938,17 @@ fn eval_row_null(
     let tup_type = hdr.type_id();
     let tup_typmod = hdr.typmod();
     // SAFETY: compile-allocated state, single-threaded interpreter.
-    let rn = unsafe { &mut *rn.as_ptr() };
+    let desc = row_cache_desc(unsafe { &mut *rn.as_ptr() }, tup_type, tup_typmod)?;
+    row_null_test_scan(rec, hdr, desc, checkisnull)
+}
+
+// get_cached_rowtype (execUtils.c): the step's descriptor for a composite
+// datum's (type, typmod), kept across evals so attcacheoff stays warm.
+fn row_cache_desc(
+    rn: &mut crate::steps::RowNullState,
+    tup_type: ::types_core::Oid,
+    tup_typmod: i32,
+) -> PgResult<&::types_tuple::TupleDescData<'static>> {
     if tup_type != ::types_core::catalog::RECORDOID {
         let e = ::typcache::lookup_type_cache(tup_type, ::typcache::TYPECACHE_TUPDESC)?;
         if rn.named.is_none() || rn.tup_type != tup_type || rn.tupdesc_id != e.tupdesc_identifier()
@@ -3915,11 +3963,17 @@ fn eval_row_null(
             rn.named = Some(td);
             rn.tup_type = tup_type;
         }
-        let desc = rn.named.as_deref().expect("refreshed above");
-        return row_null_test_scan(rec, hdr, desc, checkisnull);
+        return Ok(rn.named.as_deref().expect("refreshed above"));
     }
     if rn.desc.is_none() || rn.tup_type != tup_type || rn.tup_typmod != tup_typmod {
         use ::mcx::Allocator;
+        if let Some(&(_, cached)) = rn.seen.iter().find(|(m, _)| *m == tup_typmod) {
+            rn.desc = Some(cached);
+            rn.tup_type = tup_type;
+            rn.tup_typmod = tup_typmod;
+            // SAFETY: rn.mcx-allocated tupdesc, live for the plan.
+            return Ok(unsafe { cached.as_ref() });
+        }
         let desc = typcache::lookup_rowtype_tupdesc_copy(rn.mcx, tup_type, tup_typmod)?;
         let desc_layout = core::alloc::Layout::new::<::types_tuple::TupleDescData<'static>>();
         let desc_ptr: core::ptr::NonNull<::types_tuple::TupleDescData<'static>> = rn
@@ -3935,13 +3989,16 @@ fn eval_row_null(
                 ::types_tuple::TupleDescData<'static>,
             >(desc));
         }
+        rn.seen
+            .try_reserve(1)
+            .map_err(|_| rn.mcx.oom(core::mem::size_of::<(i32, core::ptr::NonNull<u8>)>()))?;
+        rn.seen.push((tup_typmod, desc_ptr));
         rn.desc = Some(desc_ptr);
         rn.tup_type = tup_type;
         rn.tup_typmod = tup_typmod;
     }
     // SAFETY: rn.mcx-allocated tupdesc, live for the plan.
-    let desc = unsafe { rn.desc.expect("refreshed above").as_ref() };
-    row_null_test_scan(rec, hdr, desc, checkisnull)
+    Ok(unsafe { rn.desc.expect("refreshed above").as_ref() })
 }
 
 fn row_null_test_scan(
@@ -5254,12 +5311,13 @@ pub(crate) fn exec_one_step<'mcx>(
             fieldnum,
             resulttype,
             frame,
+            rn,
             out,
         } => {
             let r = read_out(out);
             if !r.isnull {
                 let (value, isnull) =
-                    eval_field_select(frames, fieldnum, resulttype, frame, r.value)?;
+                    eval_field_select(frames, rn, fieldnum, resulttype, frame, r.value)?;
                 write_out(out, value, isnull);
             }
         }
@@ -5288,12 +5346,12 @@ pub(crate) fn exec_one_step<'mcx>(
         Step::FieldStoreDeForm { fs, frame, out } => {
             let r = read_out(out);
             // SAFETY: compile-allocated state, sole live access.
-            let st = unsafe { fs.as_ref() };
+            let st = unsafe { &mut *fs.as_ptr() };
             eval_field_store_deform(frames, st, frame, r)?;
         }
         Step::FieldStoreForm { fs, frame, out } => {
             // SAFETY: compile-allocated state, sole live access.
-            let st = unsafe { fs.as_ref() };
+            let st = unsafe { &mut *fs.as_ptr() };
             let v = eval_field_store_form(frames, st, frame)?;
             write_out(out, v, false);
         }
@@ -5378,7 +5436,7 @@ pub(crate) fn exec_one_step<'mcx>(
             let r = if slice {
                 crate::arrayops::sbsref_assign_slice(st, cur)?
             } else {
-                crate::arrayops::sbsref_assign(st, cur)?
+                crate::arrayops::sbsref_assign(st, cur, cparam_arg)?
             };
             write_out(out, r.value, r.isnull);
         }
@@ -5484,6 +5542,10 @@ pub(crate) fn exec_one_step<'mcx>(
         Step::AggOrderedMark { flag } => {
             // SAFETY: nodeagg-owned once-allocated flag slot.
             unsafe { flag.write(true) };
+        }
+        Step::AggPresortedTrans { hook } => {
+            // SAFETY: nodeagg-owned query-lifetime hook context.
+            unsafe { (hook.call)(hook.ctx)? };
         }
         Step::AggPlainTransByVal { call, pergroup } => {
             // SAFETY: once-allocated stable pergroup; sole access here.
@@ -5784,6 +5846,7 @@ pub(crate) fn step_has_helper(step: &Step) -> bool {
         | Step::AggStrictInputCheck1 { .. }
         | Step::AggPergroupNullcheck { .. }
         | Step::AggOrderedMark { .. }
+        | Step::AggPresortedTrans { .. }
         | Step::AggPlainTransByVal { .. }
         | Step::AggPlainTransStrictByVal { .. }
         | Step::AggPlainTransInitStrictByVal { .. }

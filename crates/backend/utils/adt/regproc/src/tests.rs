@@ -249,6 +249,20 @@ fn install_fakes() {
             }
             Ok(relid)
         });
+        // RelationIsVisible: the first same-named relation along the path is
+        // this one.
+        namespace_seams::relation_is_visible::set(|relid| {
+            let name = RELS.with(|m| {
+                m.borrow().iter().find(|(_, &oid)| oid == relid).map(|((name, _), _)| name.clone())
+            });
+            let Some(name) = name else { return Ok(false) };
+            Ok(PATH.with(|p| {
+                p.borrow()
+                    .iter()
+                    .find_map(|nsp| RELS.with(|m| m.borrow().get(&(name.clone(), *nsp)).copied()))
+                    == Some(relid)
+            }))
+        });
     });
 
     NS_BY_NAME.with(|m| {

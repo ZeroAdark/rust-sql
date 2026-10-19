@@ -3,7 +3,6 @@
 //! (6236). recv/send (2408/2409) ride the binary-wire fmgr frame
 //! (types_fmgr::wire).
 
-use alloc::string::String;
 
 use ::datum::Datum;
 use ::types_core::Oid;
@@ -29,11 +28,10 @@ pub fn fc_int8send(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
 
 pub fn fc_int8in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 of int8in is cstring (typlen -2).
-    let s = unsafe { fcinfo.arg_cstring(0) };
-    let num = String::from_utf8_lossy(s.to_bytes());
+    let num = unsafe { fcinfo.arg_cstring(0) }.to_bytes();
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
-    Ok(Datum::from_i64(crate::int8in(&num, esc)?))
+    Ok(Datum::from_i64(crate::int8in(num, esc)?))
 }
 
 pub fn fc_int8out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -112,13 +110,13 @@ macro_rules! fc2t {
     )*};
 }
 
-// C's int8inc_any/int8dec_any/int8inc_float8_float8 read only arg0 off wider
-// frames; arity follows pg_proc (2/2/3), the read stays arg0.
+// C's int8inc_any/int8dec_any/int8inc_float8_float8 forward to int8inc/int8dec,
+// which read only arg0 whatever the frame's arity (int8.c:806-820).
 macro_rules! fc_agg_inc {
-    ($($fc:ident: $core:ident, $n:literal;)*) => {$(
+    ($($fc:ident: $core:ident;)*) => {$(
         pub fn $fc(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-            let args = fcinfo.args_n::<$n>();
-            Ok(Datum::from_i64(crate::$core(args[0].value.as_i64())?))
+            let [a] = fcinfo.args_n::<1>();
+            Ok(Datum::from_i64(crate::$core(a.value.as_i64())?))
         }
     )*};
 }
@@ -232,9 +230,9 @@ fc2t! {
 }
 
 fc_agg_inc! {
-    fc_int8inc_any: int8inc_any, 2;
-    fc_int8dec_any: int8dec_any, 2;
-    fc_int8inc_float8_float8: int8inc_float8_float8, 3;
+    fc_int8inc_any: int8inc_any;
+    fc_int8dec_any: int8dec_any;
+    fc_int8inc_float8_float8: int8inc_float8_float8;
 }
 
 pub fn fc_in_range_int8_int8(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {

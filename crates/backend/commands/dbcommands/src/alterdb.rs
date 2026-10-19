@@ -1,6 +1,7 @@
 use datum::Datum;
 use elog::ereport;
 use mcx::Mcx;
+use parser_small1::ParseState;
 use pg_database::{
     Anum_pg_database_datacl, Anum_pg_database_datallowconn, Anum_pg_database_datcollate,
     Anum_pg_database_datcollversion, Anum_pg_database_datconnlimit, Anum_pg_database_datdba,
@@ -133,6 +134,8 @@ pub fn RenameDatabase(mcx: Mcx<'_>, oldname: &str, newname: &str) -> PgResult<Oi
         heaptuple::heap_modify_tuple(mcx, tup, rel.descr(), &values, &isnull, &replace)?;
     catalog_indexing::CatalogTupleUpdate(mcx, &rel, &otid, &mut newtup)?;
     lmgr::UnlockTuple(&rel, &otid, InplaceUpdateTupleLock)?;
+
+    objectaccess::InvokeObjectPostAlterHook(DATABASE_RELATION_ID, db_id, 0)?;
     genam::systable_endscan(mcx, scan)?;
 
     rel.close(types_storage::lock::NoLock)?;
@@ -220,18 +223,18 @@ pub fn movedb(mcx: Mcx<'_>, dbname: &str, tblspcname: &str) -> PgResult<()> {
         procsignal::EmitProcSignalBarrier(ProcSignalBarrierType::PROCSIGNAL_BARRIER_SMGRRELEASE);
     procsignal::WaitForProcSignalBarrier(gen)?;
 
+    // Parked pool executors pinned to this database keep the pre-move
+    // tablespace in their relcache and smgr state (C's workers exited); retire
+    // them like dropdb so the next claim spawns fresh standbys.
+    if postmaster_seams::parallel_pool_retire_db::is_installed() {
+        postmaster_seams::parallel_pool_retire_db::call(db_id);
+    }
+
     bufmgr::DropDatabaseBuffers(db_id)?;
 
-    if let Ok(entries) = std::fs::read_dir(dst_dbpath.as_str()) {
-        for entry in entries {
-            let entry = entry.map_err(|e| {
-                Box::new(types_error::PgError::error(format!(
-                    "could not read directory \"{}\": {e}",
-                    dst_dbpath.as_str()
-                )))
-            })?;
-            let name = entry.file_name();
-            if name == "." || name == ".." {
+    if let Some(dstdir) = fd::AllocateDir(dst_dbpath.as_str())? {
+        while let Some(xlde) = fd::ReadDir(Some(dstdir), dst_dbpath.as_str())? {
+            if xlde.d_name == "." || xlde.d_name == ".." {
                 continue;
             }
             return Err(ereport(ERROR)
@@ -246,6 +249,7 @@ pub fn movedb(mcx: Mcx<'_>, dbname: &str, tblspcname: &str) -> PgResult<()> {
                 .into_error()
                 .into());
         }
+        fd::FreeDir(Some(dstdir))?;
         if let Err(e) = std::fs::remove_dir(dst_dbpath.as_str()) {
             return Err(ereport(ERROR)
                 .with_saved_errno(e.raw_os_error().unwrap_or(0))
@@ -355,6 +359,8 @@ fn movedb_body(
     catalog_indexing::CatalogTupleUpdate(mcx, pgdbrel, &otid, &mut newtuple)?;
     lmgr::UnlockTuple(pgdbrel, &otid, InplaceUpdateTupleLock)?;
 
+    objectaccess::InvokeObjectPostAlterHook(DATABASE_RELATION_ID, db_id, 0)?;
+
     genam::systable_endscan(mcx, scan)?;
 
     checkpointer::RequestCheckpoint(
@@ -369,9 +375,15 @@ fn movedb_body(
 
 pub fn AlterDatabase<'mcx>(
     mcx: Mcx<'mcx>,
+    pstate: Option<&ParseState<'_, '_>>,
     stmt: &AlterDatabaseStmt<'mcx>,
     is_top_level: bool,
 ) -> PgResult<Oid> {
+    let errpos = |location: i32| -> i32 {
+        pstate.map_or(0, |ps| {
+            parser_small1::parser_errposition(ps, location, mbutils::GetDatabaseEncoding())
+        })
+    };
     let dbname = stmt.dbname.unwrap_or("");
 
     let mut distemplate: Option<&DefElem> = None;
@@ -392,7 +404,7 @@ pub fn AlterDatabase<'mcx>(
                 return Err(ereport(ERROR)
                     .errcode(ERRCODE_SYNTAX_ERROR)
                     .errmsg(format!("option \"{other}\" not recognized"))
-                    .errposition(defel.location + 1)
+                    .errposition(errpos(defel.location))
                     .into_error()
                     .into());
             }
@@ -401,7 +413,7 @@ pub fn AlterDatabase<'mcx>(
             return Err(ereport(ERROR)
                 .errcode(ERRCODE_SYNTAX_ERROR)
                 .errmsg("conflicting or redundant options".to_string())
-                .errposition(defel.location + 1)
+                .errposition(errpos(defel.location))
                 .into_error()
                 .into());
         }
@@ -416,7 +428,7 @@ pub fn AlterDatabase<'mcx>(
                     "option \"{}\" cannot be specified with other options",
                     dts.defname.unwrap_or("")
                 ))
-                .errposition(dts.location + 1)
+                .errposition(errpos(dts.location))
                 .into_error()
                 .into());
         }
@@ -522,6 +534,8 @@ pub fn AlterDatabase<'mcx>(
         heaptuple::heap_modify_tuple(mcx, tuple, rel.descr(), &values, &isnull, &replace)?;
     catalog_indexing::CatalogTupleUpdate(mcx, &rel, &otid, &mut newtuple)?;
     lmgr::UnlockTuple(&rel, &otid, InplaceUpdateTupleLock)?;
+
+    objectaccess::InvokeObjectPostAlterHook(DATABASE_RELATION_ID, dboid, 0)?;
 
     genam::systable_endscan(mcx, scan)?;
 

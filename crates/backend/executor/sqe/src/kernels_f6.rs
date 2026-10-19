@@ -38,8 +38,8 @@ pub const fn pg_date(y: i64, m: i64, d: i64) -> i64 {
     days_from_civil(y, m, d) - days_from_civil(2000, 1, 1)
 }
 
-/// Calendar year of a PG date datum (days since 2000-01-01): the civil-
-/// from-days inverse of `days_from_civil`, shifted to the PG epoch.
+/// `EXTRACT(year)` of a PG date datum (days since 2000-01-01). There is
+/// no year 0: astronomical year y <= 0 is year y - 1 (1 BC = -1).
 /// Finite dates only — the caller witnesses the domain.
 pub const fn pg_date_year(days: i64) -> i64 {
     let z = days + days_from_civil(2000, 1, 1) + 719_468;
@@ -50,7 +50,8 @@ pub const fn pg_date_year(days: i64) -> i64 {
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    if m <= 2 { y + 1 } else { y }
+    let y = if m <= 2 { y + 1 } else { y };
+    if y <= 0 { y - 1 } else { y }
 }
 
 /// DATE_TRUNC('minute', ts) on the PG i64-microsecond datum: pure integer
@@ -174,6 +175,7 @@ pub fn build_frame(
 ) -> Frame {
     let t0 = std::time::Instant::now();
     let walk = granule_walk(bank, cid);
+    let (w_cid, w_edt) = (crate::stencils::col_width(bank, cid), crate::stencils::col_width(bank, edt));
     let mm_cid = zone_minmax(bank, cid);
     let mm_edt = zone_minmax(bank, edt);
     let mut s_cid = Scratch::new();
@@ -222,20 +224,18 @@ pub fn build_frame(
         // conjunction: a hidden matching row panics loudly.
         #[cfg(feature = "oracle")]
         for r in (0..rlo).chain(rhi..n) {
-            let c = crate::stencils::sx(dc[r], 4);
-            let d = crate::stencils::sx(de[r], 4);
+            let c = crate::stencils::sx(dc[r], w_cid);
+            let d = crate::stencils::sx(de[r], w_edt);
             assert!(
                 !(c == counter && d >= dlo && d <= dhi),
                 "sqe oracle: frame PSMA window [{rlo},{rhi}) hid matching row {r}"
             );
         }
         let mut rl: Vec<u16> = Vec::new();
-        for r in rlo..rhi {
-            let c = crate::stencils::sx(dc[r], 4);
-            let d = crate::stencils::sx(de[r], 4);
-            if c == counter && d >= dlo && d <= dhi {
-                rl.push(r as u16);
-            }
+        if (w_cid, w_edt) == (4, 4) {
+            frame_rows_into(&mut rl, &dc, de, rlo..rhi, 4, 4, counter, dlo, dhi);
+        } else {
+            frame_rows_into(&mut rl, &dc, de, rlo..rhi, w_cid, w_edt, counter, dlo, dhi);
         }
         if !rl.is_empty() {
             frame_rows += rl.len() as u64;
@@ -252,6 +252,28 @@ pub fn build_frame(
         build_ms: t0.elapsed().as_secs_f64() * 1e3,
         #[cfg(feature = "oracle")]
         skey: (cid, edt, counter, dlo, dhi),
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn frame_rows_into(
+    rl: &mut Vec<u16>,
+    dc: &[u64],
+    de: &[u64],
+    rows: std::ops::Range<usize>,
+    w_cid: u8,
+    w_edt: u8,
+    counter: i64,
+    dlo: i64,
+    dhi: i64,
+) {
+    for r in rows {
+        let c = crate::stencils::sx(dc[r], w_cid);
+        let d = crate::stencils::sx(de[r], w_edt);
+        if c == counter && d >= dlo && d <= dhi {
+            rl.push(r as u16);
+        }
     }
 }
 
@@ -360,6 +382,14 @@ mod year_tests {
                 assert_eq!(pg_date_year(pg_date(y, m, d)), y, "{y}-{m}-{d}");
             }
         }
+    }
+
+    #[test]
+    fn pg_date_year_bc_has_no_year_zero() {
+        for (astro, m, d, want) in [(0, 6, 1, -1), (0, 1, 1, -1), (0, 12, 31, -1), (-1, 12, 31, -2), (-43, 3, 15, -44), (-4712, 1, 1, -4713)] {
+            assert_eq!(pg_date_year(pg_date(astro, m, d)), want, "{astro}-{m}-{d}");
+        }
+        assert_eq!(pg_date_year(pg_date(1, 1, 1)), 1);
     }
 }
 

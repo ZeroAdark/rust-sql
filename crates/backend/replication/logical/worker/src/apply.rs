@@ -1440,10 +1440,20 @@ fn find_repl_tuple<'mcx>(
 fn do_insert<'mcx>(
     mcx: Mcx<'mcx>,
     rel: &Relation<'mcx>,
+    root_rel: Option<&Relation<'mcx>>,
     slot: &mut SlotData<'mcx>,
 ) -> PgResult<()> {
     target_privileges_check(mcx, rel, types_nodes::parsenodes::ACL_INSERT)?;
     execreplication::CheckCmdReplicaIdentity(mcx, rel, types_nodes::nodes_enums::CmdType::CMD_INSERT)?;
+
+    // The indexes are opened BEFORE the row triggers fire (worker.c:2465
+    // apply_handle_insert: ExecOpenIndices precedes apply_handle_insert_internal;
+    // the partition path opens them in ExecInitPartitionInfo). A BEFORE INSERT
+    // trigger that drops one of this table's indexes then sees the open
+    // reference and raises 55006 "cannot DROP INDEX ... because it is being
+    // used by active queries in this session" exactly as C does, instead of
+    // dropping it under the insert. Rig-verified (scripts/logical-worker-p1-e2e.sh).
+    let mut index_state = execindexing::ExecOpenIndices(mcx, rel, false)?;
 
     let mut trig = apply_trig(rel)?;
     // BEFORE ROW INSERT triggers (execReplication.c:575); a NULL return means
@@ -1454,6 +1464,7 @@ fn do_insert<'mcx>(
             let mut when =
                 trigger::TriggerWhenEval { mcx, cache: &mut t.when, modified_cols: None };
             if !trigger::ExecBRInsertTriggers(mcx, rel, &td, &mut t.fmgr, &mut when, slot)? {
+                execindexing::ExecCloseIndices(index_state)?;
                 return Ok(());
             }
         }
@@ -1466,14 +1477,14 @@ fn do_insert<'mcx>(
     let mut check_exprs = None;
     let mut nn_exprs = None;
     if rel.rd_att.constr.is_some() {
-        nodemodifytable::exec_constraints(mcx, &mut check_exprs, &mut nn_exprs, rel, slot, None, None)?;
+        nodemodifytable::exec_constraints(mcx, &mut check_exprs, &mut nn_exprs, rel, slot, root_rel, None)?;
     }
     // ExecPartitionCheck (execReplication.c:600): a row replicated straight
     // into a partition must satisfy its partition constraint.
     if rel.rd_rel.relispartition {
         let mut check_cache = None;
         if !execpartition::exec_partition_check(mcx, &mut check_cache, rel, slot)? {
-            return Err(execpartition::partition_constraint_violation(mcx, rel, slot, None, None));
+            return Err(execpartition::partition_constraint_violation(mcx, rel, slot, None, root_rel));
         }
     }
 
@@ -1484,7 +1495,6 @@ fn do_insert<'mcx>(
     // indexes are the arbiters; a potential conflict is checked after the
     // insert (no extra scan when conflicts are rare) and reported as
     // insert_exists instead of the plain unique-violation error.
-    let mut index_state = execindexing::ExecOpenIndices(mcx, rel, false)?;
     let conflict_indexes = crate::conflict::init_conflict_indexes(&index_state);
     let mut conflict = false;
     let recheck_indexes = if index_state.num_indices() > 0 {
@@ -1571,6 +1581,7 @@ fn apply_updated_cols<'mcx>(
 fn do_update<'mcx>(
     mcx: Mcx<'mcx>,
     rel: &Relation<'mcx>,
+    root_rel: Option<&Relation<'mcx>>,
     searchslot: &mut SlotData<'mcx>,
     slot: &mut SlotData<'mcx>,
     modified_cols: Option<&types_nodes::Bitmapset<'mcx>>,
@@ -1643,7 +1654,7 @@ fn do_update<'mcx>(
     let mut check_exprs = None;
     let mut nn_exprs = None;
     if rel.rd_att.constr.is_some() {
-        nodemodifytable::exec_constraints(mcx, &mut check_exprs, &mut nn_exprs, rel, slot, None, None)?;
+        nodemodifytable::exec_constraints(mcx, &mut check_exprs, &mut nn_exprs, rel, slot, root_rel, None)?;
     }
     // ExecPartitionCheck (execReplication.c:706): the updated row must still
     // satisfy the partition's constraint.
@@ -1655,7 +1666,7 @@ fn do_update<'mcx>(
                 rel,
                 slot,
                 modified_cols,
-                None,
+                root_rel,
             ));
         }
     }
@@ -1805,6 +1816,14 @@ enum RoutedOp<'a> {
 // - Slot conversions run in the worker's apply context; per-tuple datum
 //   lifetimes follow the caller's InFuncs keep-alive discipline (the
 //   converted slots copy datum pointers whose storage the caller owns).
+fn partition_names(mcx: Mcx<'_>, rel: &Relation<'_>) -> PgResult<(String, String)> {
+    let nsp = lsyscache::get_namespace_name(mcx, rel.rd_rel.relnamespace)?
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let name = String::from_utf8_lossy(rel.rd_rel.relname.name_str()).into_owned();
+    Ok((nsp, name))
+}
+
 fn apply_handle_tuple_routing<'mcx>(
     mcx: Mcx<'mcx>,
     entry: &LogicalRepRelMapEntry,
@@ -1820,15 +1839,13 @@ fn apply_handle_tuple_routing<'mcx>(
     // C's per-tuple context for routing-key evaluation.
     let eval_cx = mcx::MemoryContext::new("ApplyTupleRoutingEval");
 
-    let idx = proute.find_partition(remoteslot, eval_cx.mcx(), &mut partition_directory)?;
+    let idx = proute.find_partition(remoteslot, eval_cx.mcx(), &mut partition_directory, None)?;
     let partrel = proute.leaf_rel(idx).alias();
-    // CheckSubscriptionRelkind (worker.c:3161): the partition set can change,
-    // so CREATE/ALTER SUBSCRIPTION-time checks are insufficient.
-    logicalrelation::check_relkind(
-        partrel.rd_rel.relkind as u8,
-        &entry.remoterel.nspname,
-        &entry.remoterel.relname,
-    )?;
+    // CheckSubscriptionRelkind (worker.c:3022): the partition set can change,
+    // so CREATE/ALTER SUBSCRIPTION-time checks are insufficient; C names the
+    // leaf partition, not the remote relation.
+    let (partnsp, partname) = partition_names(mcx, &partrel)?;
+    logicalrelation::check_relkind(partrel.rd_rel.relkind as u8, &partnsp, &partname)?;
     // Same reason for the AM gate: a columnar leaf can be attached after the
     // CREATE/REFRESH-time CheckSubscriptionRelam check ran.
     logicalrelation::check_target_am(
@@ -1846,7 +1863,7 @@ fn apply_handle_tuple_routing<'mcx>(
     }
 
     match op {
-        RoutedOp::Insert => do_insert(mcx, &partrel, &mut remoteslot_part),
+        RoutedOp::Insert => do_insert(mcx, &partrel, Some(rel), &mut remoteslot_part),
         RoutedOp::Delete => {
             let part_entry = logicalrelation::logicalrep_partition_open(
                 mcx,
@@ -1946,7 +1963,7 @@ fn apply_handle_tuple_routing<'mcx>(
             {
                 // Yes: simply UPDATE the partition.
                 let updated = apply_updated_cols(mcx, &partrel, &part_entry, newtup)?;
-                do_update(mcx, &partrel, &mut localslot, &mut newslot, Some(&updated))
+                do_update(mcx, &partrel, Some(rel), &mut localslot, &mut newslot, Some(&updated))
             } else {
                 // Move the tuple into the new partition (worker.c:3285):
                 // DELETE from the old partition, re-route via the root, and
@@ -1963,14 +1980,15 @@ fn apply_handle_tuple_routing<'mcx>(
                     None => exectuples::exec_copy_slot(&mut rootslot, &mut newslot, mcx, mcx)?,
                 }
 
-                let new_idx =
-                    proute.find_partition(&mut rootslot, eval_cx.mcx(), &mut partition_directory)?;
-                let newpartrel = proute.leaf_rel(new_idx).alias();
-                logicalrelation::check_relkind(
-                    newpartrel.rd_rel.relkind as u8,
-                    &entry.remoterel.nspname,
-                    &entry.remoterel.relname,
+                let new_idx = proute.find_partition(
+                    &mut rootslot,
+                    eval_cx.mcx(),
+                    &mut partition_directory,
+                    None,
                 )?;
+                let newpartrel = proute.leaf_rel(new_idx).alias();
+                let (newnsp, newname) = partition_names(mcx, &newpartrel)?;
+                logicalrelation::check_relkind(newpartrel.rd_rel.relkind as u8, &newnsp, &newname)?;
                 logicalrelation::check_target_am(
                     newpartrel.rd_rel.relam,
                     &entry.remoterel.nspname,
@@ -1993,7 +2011,7 @@ fn apply_handle_tuple_routing<'mcx>(
                         exectuples::exec_copy_slot(&mut newslot_part, &mut rootslot, mcx, mcx)?
                     }
                 }
-                do_insert(mcx, &newpartrel, &mut newslot_part)
+                do_insert(mcx, &newpartrel, Some(rel), &mut newslot_part)
             }
         }
     }
@@ -2038,7 +2056,7 @@ fn apply_handle_insert(mcx: Mcx<'static>, r: &mut Reader<'_>) -> PgResult<()> {
     if rel.rd_rel.relkind == types_rel::RELKIND_PARTITIONED_TABLE {
         apply_handle_tuple_routing(mcx, &entry, &rel, &mut remoteslot, RoutedOp::Insert)?;
     } else {
-        do_insert(mcx, &rel, &mut remoteslot)?;
+        do_insert(mcx, &rel, None, &mut remoteslot)?;
     }
 
     trigger::AfterTriggerEndQuery(None)?;
@@ -2135,7 +2153,7 @@ fn apply_handle_update(mcx: Mcx<'static>, r: &mut Reader<'_>) -> PgResult<()> {
         let mut modfuncs = InFuncs::new(rel.rd_att.natts as usize);
         let mut newslot = tableam_real::table_slot_create(mcx, &rel)?;
         slot_modify_data(mcx, &mut newslot, &mut localslot, &entry, &rel, &upd.newtup, &mut modfuncs)?;
-        do_update(mcx, &rel, &mut localslot, &mut newslot, Some(&updated))?;
+        do_update(mcx, &rel, None, &mut localslot, &mut newslot, Some(&updated))?;
     } else {
         // The tuple to be updated could not be found (worker.c:2740).
         report_row_missing(mcx, &rel, &entry, &mut remoteslot, &mut localslot, Some(&upd.newtup))?;

@@ -53,7 +53,8 @@ impl InputStack {
             if p == "-" {
                 sources.push(Source::Stdin(BufReader::new(std::io::stdin())));
             } else {
-                let f = std::fs::File::open(p)
+                let p = pg_path::canonicalize_path(p);
+                let f = std::fs::File::open(&p)
                     .map_err(|e| format!("{p}: {}", io_errmsg(&e)))?;
                 sources.push(Source::File(BufReader::new(f)));
             }
@@ -63,7 +64,8 @@ impl InputStack {
 
     /// Push an include file (\i) on top of the stack.
     pub fn push_file(&mut self, path: &str) -> Result<(), String> {
-        let f = std::fs::File::open(path).map_err(|e| format!("{path}: {}", io_errmsg(&e)))?;
+        let path = pg_path::canonicalize_path(path);
+        let f = std::fs::File::open(&path).map_err(|e| format!("{path}: {}", io_errmsg(&e)))?;
         self.sources.push(Source::File(BufReader::new(f)));
         Ok(())
     }
@@ -356,3 +358,20 @@ fn read_line_edited(prompt: &str, _history: &mut Vec<String>) -> Option<EditResu
 // Keep Read imported on non-unix builds.
 #[allow(unused)]
 fn _read_marker<R: Read>(_r: R) {}
+
+#[cfg(test)]
+mod tests {
+    use super::InputStack;
+
+    // command.c:4934 canonicalize_path_enc runs before fopen for -f and \i:
+    // ".." resolves lexically and the message names the canonical path.
+    #[test]
+    fn script_paths_are_canonicalized_before_open() {
+        let raw = "no_such_dir_b181/../b181_missing.sql";
+        let err = InputStack::files(&[raw.to_string()]).err().expect("open fails");
+        assert!(err.starts_with("b181_missing.sql: "), "{err}");
+        let mut st = InputStack::stdin();
+        let err = st.push_file(raw).unwrap_err();
+        assert!(err.starts_with("b181_missing.sql: "), "{err}");
+    }
+}

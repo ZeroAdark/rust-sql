@@ -1,4 +1,5 @@
 use core::ffi::{c_char, c_int};
+use std::io::Read;
 use std::sync::OnceLock;
 
 use ::mcx::{vec_with_capacity_in, Mcx, PgVec};
@@ -15,6 +16,9 @@ pub struct TsLexeme<'mcx> {
     pub flags: u16,
     pub lexeme: PgVec<'mcx, u8>,
 }
+
+// stdio's BUFSIZ: the size of spell.c's per-field affix buffers.
+pub const BUFSIZ: usize = libc::BUFSIZ as usize;
 
 pub const TSL_ADDPOS: u16 = 0x01;
 pub const TSL_PREFIX: u16 = 0x02;
@@ -153,20 +157,27 @@ pub fn get_tsearch_config_filename<'mcx>(
             dir = staged;
         }
     }
-    let mut out = vec_with_capacity_in(mcx, dir.len() + basename.len() + extension.len() + 2)?;
-    out.extend_from_slice(dir.as_bytes());
-    out.push(b'/');
-    out.extend_from_slice(basename);
-    out.push(b'.');
-    out.extend_from_slice(extension.as_bytes());
+    // snprintf(result, MAXPGPATH, ...): the pathname is cut at MAXPGPATH-1 bytes.
+    let mut full = Vec::with_capacity(dir.len() + basename.len() + extension.len() + 2);
+    full.extend_from_slice(dir.as_bytes());
+    full.push(b'/');
+    full.extend_from_slice(basename);
+    full.push(b'.');
+    full.extend_from_slice(extension.as_bytes());
+    full.truncate(::pg_path::MAXPGPATH - 1);
+    let mut out = vec_with_capacity_in(mcx, full.len())?;
+    out.extend_from_slice(&full);
     Ok(out)
 }
 
 // ts_locale.c tsearch_readline_state. `tsearch_readline_begin` opens the
 // file (an open failure hands back fopen's errno for the caller's
-// `could not open ... file "%s": %m` report) and slurps it; `readline` hands
-// out one line at a time — lines keep their trailing newline (fgets parity)
-// and are recoded from UTF-8 to the database encoding per line, as C does —
+// `could not open ... file "%s": %m` report); `readline` hands out one line
+// at a time, read on demand the way pg_get_line_buf's fgets loop does —
+// each fgets chunk is bounded by the StringInfo's remaining room and
+// counted with strlen, so bytes after an embedded NUL up to the chunk's end
+// are dropped and a line the NUL left unterminated absorbs the next one —
+// and recoded from UTF-8 to the database encoding per line, as C does,
 // while `context` reproduces tsearch_readline_callback's errcontext for the
 // line in flight, which `with_context` attaches to any error raised while
 // the file is open (C: the callback sits on error_context_stack from begin
@@ -174,8 +185,11 @@ pub fn get_tsearch_config_filename<'mcx>(
 pub struct TsearchReadline<'mcx> {
     mcx: Mcx<'mcx>,
     filename: Vec<u8>,
+    file: Option<Box<dyn std::io::Read>>,
+    err: bool,
     raw: Vec<u8>,
     pos: usize,
+    maxlen: usize,
     lineno: usize,
     curline: Option<PgVec<'mcx, u8>>,
 }
@@ -185,46 +199,111 @@ pub fn tsearch_readline_begin<'mcx>(
     filename: &[u8],
 ) -> Result<TsearchReadline<'mcx>, i32> {
     let path = String::from_utf8_lossy(filename).into_owned();
-    let mut file = match std::fs::File::open(&path) {
+    let file = match std::fs::File::open(&path) {
         Ok(f) => f,
         Err(e) => return Err(e.raw_os_error().unwrap_or(0)),
     };
-    let mut raw = Vec::new();
-    if std::io::Read::read_to_end(&mut file, &mut raw).is_err() {
-        // pg_get_line_buf: a read error (ferror) ends the file like EOF
-        // and the partial line being collected is dropped — a directory
-        // opened for reading, say, is an empty file.
-        let keep = raw.iter().rposition(|&b| b == b'\n').map_or(0, |p| p + 1);
-        raw.truncate(keep);
-    }
     Ok(TsearchReadline {
         mcx,
         filename: filename.to_vec(),
-        raw,
+        file: Some(Box::new(file)),
+        err: false,
+        raw: Vec::new(),
         pos: 0,
+        maxlen: 1024,
         lineno: 0,
         curline: None,
     })
 }
 
 impl<'mcx> TsearchReadline<'mcx> {
+    // fgets(buf, n, fp): up to n - 1 bytes, stopping after a newline; None
+    // at EOF or on a read error (ferror), which ends the file for good.
+    fn fgets(&mut self, n: usize) -> Option<&[u8]> {
+        let want = n - 1;
+        loop {
+            let avail = &self.raw[self.pos..];
+            let stop = avail
+                .iter()
+                .take(want)
+                .position(|&b| b == b'\n')
+                .map(|p| p + 1);
+            if let Some(len) = stop.or((avail.len() >= want).then_some(want)) {
+                let chunk = &self.raw[self.pos..self.pos + len];
+                self.pos += len;
+                return Some(chunk);
+            }
+            let Some(file) = self.file.as_mut() else {
+                break;
+            };
+            if self.pos > 0 {
+                self.raw.drain(..self.pos);
+                self.pos = 0;
+            }
+            let mut buf = [0u8; 4096];
+            match file.read(&mut buf) {
+                Ok(0) => {
+                    self.file = None;
+                    break;
+                }
+                Ok(got) => self.raw.extend_from_slice(&buf[..got]),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => {
+                    self.file = None;
+                    self.err = true;
+                    self.raw.truncate(self.pos);
+                    return None;
+                }
+            }
+        }
+        if self.pos < self.raw.len() {
+            let chunk = &self.raw[self.pos..];
+            self.pos = self.raw.len();
+            return Some(chunk);
+        }
+        None
+    }
+
+    // pg_get_line_buf (src/common/pg_get_line.c:130-175): fgets chunks of
+    // maxlen - len bytes, strlen-counted, until the collected text ends in a
+    // newline; enlargeStringInfo(buf, 128) between chunks.
+    fn get_line_buf(&mut self) -> Option<Vec<u8>> {
+        let mut line: Vec<u8> = Vec::new();
+        loop {
+            let n = self.maxlen - line.len();
+            let Some(chunk) = self.fgets(n) else {
+                break;
+            };
+            let slen = chunk.iter().position(|&b| b == 0).unwrap_or(chunk.len());
+            line.extend_from_slice(&chunk[..slen]);
+            if line.last() == Some(&b'\n') {
+                return Some(line);
+            }
+            let needed = line.len() + 128 + 1;
+            if needed > self.maxlen {
+                let mut newlen = 2 * self.maxlen;
+                while needed > newlen {
+                    newlen *= 2;
+                }
+                self.maxlen = newlen;
+            }
+        }
+        (!line.is_empty() && !self.err).then_some(line)
+    }
+
     // tsearch_readline: the next line, freshly copied (C pstrdup's it);
     // Ok(None) at EOF. The recoded line stays in `curline` for `context`.
     pub fn readline(&mut self) -> PgResult<Option<PgVec<'mcx, u8>>> {
         self.lineno += 1;
         self.curline = None;
-        if self.pos >= self.raw.len() {
+        let Some(line) = self.get_line_buf() else {
             return Ok(None);
-        }
-        let rest = &self.raw[self.pos..];
-        let end = rest.iter().position(|&b| b == b'\n').map_or(rest.len(), |p| p + 1);
-        let line = &rest[..end];
-        self.pos += end;
-        let recoded = match ::mbutils::pg_any_to_server(self.mcx, line, PG_UTF8)? {
+        };
+        let recoded = match ::mbutils::pg_any_to_server(self.mcx, &line, PG_UTF8)? {
             Some(v) => v,
             None => {
                 let mut v = vec_with_capacity_in(self.mcx, line.len())?;
-                v.extend_from_slice(line);
+                v.extend_from_slice(&line);
                 v
             }
         };
@@ -354,5 +433,24 @@ mod classify_tests {
         let err = super::t_isalnum(b"\xc3(").unwrap_err();
         assert_eq!(err.sqlstate(), ::types_error::ERRCODE_CHARACTER_NOT_IN_REPERTOIRE);
         assert_eq!(err.message(), "invalid byte sequence for encoding \"UTF8\": 0xc3 0x28");
+    }
+}
+
+#[cfg(test)]
+mod filename_tests {
+    // ts_utils.c get_tsearch_config_filename: snprintf(result, MAXPGPATH, ...)
+    // cuts an over-long pathname at MAXPGPATH-1 bytes.
+    #[test]
+    fn overlong_basename_is_cut_at_maxpgpath() {
+        let mcx = Box::leak(Box::new(::mcx::MemoryContext::new("ts-filename-test"))).mcx();
+        let basename = vec![b'a'; 1100];
+        let path = super::get_tsearch_config_filename(mcx, &basename, "syn").unwrap();
+        assert_eq!(path.len(), ::pg_path::MAXPGPATH - 1);
+        let dir = super::tsearch_data_dir();
+        assert!(path.starts_with(dir.as_bytes()));
+        assert_eq!(path[dir.len()], b'/');
+        assert!(path[dir.len() + 1..].iter().all(|&b| b == b'a'));
+        let short = super::get_tsearch_config_filename(mcx, b"abc", "syn").unwrap();
+        assert_eq!(&short[dir.len()..], b"/abc.syn");
     }
 }

@@ -497,7 +497,7 @@ pub fn CreateTransform<'mcx>(
 
     pg_depend::recordDependencyOnCurrentExtension(mcx, &myself, is_replace)?;
 
-    // InvokeObjectPostCreateHook: object-access hooks are elided repo-wide.
+    objectaccess::InvokeObjectPostCreateHook(TransformRelationId, transformid, 0)?;
 
     relation.close(RowExclusiveLock)?;
 

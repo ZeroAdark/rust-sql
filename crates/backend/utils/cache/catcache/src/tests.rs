@@ -396,6 +396,36 @@ fn l2_negative_build_match_and_install() {
 }
 
 #[test]
+fn negative_name_keys_are_clipped_like_namestrcpy() {
+    let id = fresh_id();
+    let kinds = [CCFastKind::Name, CCFastKind::Int4, CCFastKind::Int4, CCFastKind::Int4];
+    testing::init_cache_bare(id, 2, kinds, 4, None);
+    let long = [b'a'; 100_000];
+    let keys = [CatCKey::Bytes(&long), oid_key(2200), CatCKey::UNUSED, CatCKey::UNUSED];
+
+    // L2 shape: the stored key is namestrcpy's 63 bytes, not the probe's 100000.
+    let ent = crate::l2::build_negative(id, &keys).unwrap();
+    let stored = ent.probe_keys(&kinds, 2);
+    assert_eq!(stored[0].bytes().len(), NAMEDATALEN - 1);
+    assert!(crate::l2::entry_matches(ent.as_ref(), &kinds, 2, &stored));
+    // nameeq's strncmp(NAMEDATALEN) sees the clipped NUL at byte 63: no match.
+    assert!(!crate::l2::entry_matches(ent.as_ref(), &kinds, 2, &keys));
+
+    // L1 shape (create_entry_negative) and a 63-byte probe round-trips.
+    testing::insert_negative(id, &keys);
+    with_state(|st| {
+        let ct = st.cache(id).tuples.iter().find(|ct| ct.negative).expect("L1 negative entry");
+        // SAFETY: by-ref keys were packed against this entry's payload.
+        let b = unsafe { crate::stored_bytes(ct.payload, ct.keys[0]) };
+        assert_eq!(b.len(), NAMEDATALEN - 1);
+    });
+    let exact = [b'a'; NAMEDATALEN - 1];
+    testing::insert_negative(id, &[CatCKey::Bytes(&exact), oid_key(2200), CatCKey::UNUSED, CatCKey::UNUSED]);
+    let r = SearchCatCache2(id, CatCKey::Bytes(&exact), oid_key(2200)).unwrap();
+    assert!(r.is_none(), "63-byte negative entry answers without a miss");
+}
+
+#[test]
 fn l2_shared_entry_survives_l1_eviction_while_pinned_elsewhere() {
     let id = fresh_id();
     testing::init_cache_bare(id, 1, KINDS1, 4, None);

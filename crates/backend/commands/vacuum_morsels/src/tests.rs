@@ -237,23 +237,77 @@ fn skipmap_eager_does_not_consume_fail_budget() {
 }
 
 #[test]
-fn eager_account_decrements_fails_after_prune_miss() {
+fn eager_admit_charges_fails_after_prune_miss() {
     let caps = EagerScanShared::new(10, 3, 3, 0, 100);
     assert_eq!(caps.fails_at(0), 3);
-    assert!(caps.account(0, false).is_none());
+    assert_eq!(caps.remaining_successes(), 10);
+    assert_eq!(caps.try_admit(0), EagerAdmit::Admit);
+    // A page that did not need freezing refunds its credit and spends one
+    // of the region's failures (C :1461-1462).
+    caps.account(0, false);
     assert_eq!(caps.fails_at(0), 2);
-    assert!(caps.account(0, true).is_none());
+    assert_eq!(caps.remaining_successes(), 10);
+    assert_eq!(caps.try_admit(0), EagerAdmit::Admit);
+    caps.account(0, true);
     assert_eq!(caps.remaining_successes(), 9);
     assert_eq!(caps.fails_at(0), 2);
 }
 
 #[test]
-fn eager_account_disable_on_success_cap() {
-    let caps = EagerScanShared::new(1, 5, 5, 0, 100);
-    assert_eq!(caps.account(0, true), Some(1));
+fn eager_region_failure_budget_denies_then_next_region_reopens() {
+    // Blocks 0..9 are the partial first region (C :595-599 — its budget is
+    // the ratio of the region width remaining), block 10 starts a full one.
+    let caps = EagerScanShared::new(10, 1, 2, 10, 3 * EAGER_SCAN_REGION_SIZE);
+    assert_eq!(caps.try_admit(5), EagerAdmit::Admit);
+    caps.account(5, false);
+    assert_eq!(caps.fails_at(5), 0);
+    assert_eq!(caps.try_admit(6), EagerAdmit::Deny, "the partial region's budget is spent");
+    assert!(!caps.would_admit(6));
+    // C :1715-1719 — the next region starts with the full budget again.
+    assert!(caps.would_admit(10));
+    assert_eq!(caps.try_admit(10), EagerAdmit::Admit);
+    assert_eq!(caps.fails_at(10), 2);
+    caps.account(10, false);
+    assert_eq!(caps.fails_at(10), 1);
+    assert_eq!(caps.fails_at(10 + EAGER_SCAN_REGION_SIZE), 2, "budgets are per region");
+}
+
+/// S successes + the read-stream look-ahead block: C's cached scan admits
+/// exactly S+1 eager blocks (vacuumlazy.c:1236 hands out N+1 before N's
+/// accounting), and the (S+1)th admission is the one that closes the cap.
+#[test]
+fn eager_success_cap_admits_s_plus_one_then_closes() {
+    let caps = EagerScanShared::new(2, 5, 5, 0, 100);
+    assert_eq!(caps.try_admit(0), EagerAdmit::Admit);
+    caps.account(0, true);
+    assert_eq!(caps.try_admit(1), EagerAdmit::Admit);
+    caps.account(1, true);
+    assert_eq!(caps.remaining_successes(), 0);
+    assert!(!caps.disabled());
+    assert_eq!(caps.try_admit(2), EagerAdmit::AdmitAndClose(2));
+    assert!(caps.disabled());
     assert_eq!(caps.max_fails_per_region(), 0);
-    assert_eq!(caps.fails_at(0), 0);
-    assert!(caps.account(0, true).is_none());
+    assert_eq!(caps.fails_at(2), 0);
+    assert_eq!(caps.try_admit(3), EagerAdmit::Deny);
+    // A miss after the close refunds nothing: disabled is permanent.
+    caps.account(2, false);
+    assert_eq!(caps.try_admit(4), EagerAdmit::Deny);
+    assert_eq!(caps.snapshot(4), (0, 0, 0, InvalidBlockNumber));
+}
+
+#[test]
+fn eager_snapshot_hands_the_serial_arm_c_fields() {
+    let caps = EagerScanShared::new(3, 4, 4, 100, 3 * EAGER_SCAN_REGION_SIZE);
+    assert_eq!(caps.snapshot(50), (3, 4, 4, 100));
+    assert_eq!(caps.try_admit(100), EagerAdmit::Admit);
+    caps.account(100, true);
+    let (succ, fails, max, next) = caps.snapshot(100);
+    assert_eq!((succ, fails, max), (2, 4, 4));
+    assert_eq!(next, 100 + EAGER_SCAN_REGION_SIZE);
+    // Disabled at construction (max_fails == 0) never admits.
+    let off = EagerScanShared::new(0, 0, 0, InvalidBlockNumber, 100);
+    assert_eq!(off.try_admit(0), EagerAdmit::Deny);
+    assert!(!off.would_admit(0));
 }
 
 #[test]

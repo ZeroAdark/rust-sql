@@ -54,6 +54,8 @@ impl Drop for ExecData<'_> {
             // SAFETY: registered by exec_init_sub_plan_expr; dropped once here.
             unsafe { dropper(p) };
         }
+        self.estate.es_subplan_param_indexed = 0;
+        self.estate.es_subplan_param_index.clear();
     }
 }
 
@@ -83,6 +85,9 @@ pub struct QueryDescData {
     // (pg_stat_statements) arms at ExecutorStart; standard run/finish
     // accumulate into it exactly like execMain.c.
     pub totaltime: Option<Box<types_core::instrument::Instrumentation>>,
+    // C: the eflags ExecutorStart was called with, visible to the start tap
+    // (auto_explain reads EXEC_FLAG_EXPLAIN_ONLY there).
+    pub start_eflags: i32,
 }
 
 thread_local! {
@@ -306,6 +311,7 @@ pub(crate) fn create_query_desc_seam(
         already_executed: false,
         cplan,
         totaltime: None,
+        start_eflags: 0,
     }))
 }
 
@@ -547,6 +553,15 @@ pub(crate) fn query_desc_rti_unpruned_seam(h: QueryDescHandle, rti: i32) -> Opti
     with_qd(h, |qd| {
         let exec = qd.exec.as_ref()?;
         exec.with(|d| Some(d.estate.es_unpruned_relids.is_member(rti)))
+    })
+}
+
+pub(crate) fn query_desc_fdw_batch_size_seam(h: QueryDescHandle, rti: u32) -> Option<i32> {
+    with_qd(h, |qd| {
+        let exec = qd.exec.as_ref()?;
+        exec.with(|d| {
+            d.estate.es_fdw_batch_sizes.iter().find_map(|(r, b)| (*r == rti).then_some(*b))
+        })
     })
 }
 
@@ -899,6 +914,31 @@ pub(crate) fn query_desc_worker_incsort_instrument_seam(
                         .iter()
                         .filter(|(id, _)| *id == plan_node_id)
                         .map(move |(_, si)| (n as i32, *si))
+                })
+                .collect();
+            (!out.is_empty()).then_some(out)
+        })
+    })
+}
+
+pub(crate) fn query_desc_worker_agg_instrument_seam(
+    h: QueryDescHandle,
+    plan_node_id: i32,
+) -> Option<Vec<(i32, types_core::instrument::AggregateInstrumentation)>> {
+    with_qd(h, |qd| {
+        let exec = qd.exec.as_ref()?;
+        exec.with(|d| {
+            let out: Vec<_> = d
+                .estate
+                .es_worker_instrument
+                .iter()
+                .filter(|w| w.node_ids.contains(&plan_node_id))
+                .enumerate()
+                .flat_map(|(n, w)| {
+                    w.agg
+                        .iter()
+                        .filter(|(id, _)| *id == plan_node_id)
+                        .map(move |(_, ai)| (n as i32, *ai))
                 })
                 .collect();
             (!out.is_empty()).then_some(out)

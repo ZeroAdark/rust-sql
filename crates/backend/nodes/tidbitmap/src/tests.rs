@@ -53,6 +53,22 @@ fn multi_page_sorted_iteration() {
     assert!(it.next(&tbm2).unwrap().recheck);
 }
 
+// tidbitmap.c:713 sizes the private readout arrays by sizeof(PagetableEntry *):
+// 24,000,000 exact pages (work_mem=2GB) fit MaxAllocSize in C and must here.
+#[test]
+fn private_readout_arrays_are_pointer_sized() {
+    let ctx = MemoryContext::new("t");
+    let mut tbm = TIDBitmap::new(ctx.mcx(), 1024 * 1024);
+    tbm.add_tuples(&[tid(50, 2), tid(3, 9)], false).unwrap();
+    let mut iter = tbm.begin_private_iterate().unwrap();
+    let per_page = core::mem::size_of_val(&tbm.spages.as_deref().unwrap()[0]);
+    assert_eq!(per_page, core::mem::size_of::<usize>());
+    assert!(mcx::check_alloc_size(24_000_000 * per_page).is_ok());
+    assert_eq!(iter.next(&tbm).unwrap().blockno, 3);
+    assert_eq!(iter.next(&tbm).unwrap().blockno, 50);
+    assert!(iter.next(&tbm).is_none());
+}
+
 #[test]
 fn offset_out_of_range_errors() {
     let ctx = MemoryContext::new("t");

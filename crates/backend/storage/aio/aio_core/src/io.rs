@@ -134,7 +134,7 @@ pub(crate) fn pgaio_io_perform_synchronously(index: u32) {
 // monomorphize to the identical single preadv/pwritev syscall (vfs contract
 // §1.2 zero-cost law); under `--cfg pgrust_sim` the fd is a SimVfs handle
 // foreign to the kernel — raw libc here EBADF'd every AIO read and killed
-// the whole-server sim boot (GL-TESTFIX-1 F-R2-2). EINTR retry stays here:
+// the whole-server sim boot (regression F-R2-2). EINTR retry stays here:
 // ops are single-shot below the trait (contract §1.1), and SimVfs never
 // emits EINTR.
 unsafe fn pg_preadv_raw(fd: i32, iov: *const libc::iovec, iovcnt: i32, offset: i64) -> isize {

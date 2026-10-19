@@ -123,7 +123,7 @@ pub fn plain_pd_derive_spec(node: &AggStateData<'_>) -> Option<std::sync::Arc<Pl
     // The direct staged-key contract: single bare OUTER var, no FILTER
     // (recorded at init). Column 0 is the projected over-Sort/over-scan
     // shape (`agg_plain_distinct_direct_shape`); a nonzero column is the
-    // PRESORTED-bare physical-tlist face (GL-DISTALPHA-2), where scan
+    // PRESORTED-bare physical-tlist face (regression), where scan
     // output == table row, so the recorded OUTER attno IS the scan column
     // the workers stage — the probe's `seq_scan_key_direct_att` proof
     // (which refuses any projected scan) is what makes that identity safe.
@@ -410,7 +410,7 @@ pub fn plain_pd_combine(kind_bytes: bool, part: usize, sealed: &[PlainPdSealed])
     export_merged(kind_bytes, set)
 }
 
-/// GL-LOWDIST-1 low-width combine: SIZE-ASYMMETRIC union — TAKE the largest
+/// regression low-width combine: SIZE-ASYMMETRIC union — TAKE the largest
 /// donor's live set (probe table intact — its values are never re-hashed,
 /// re-probed, or copied; `take_ints` later moves its value vec out
 /// wholesale) and insert only the OTHER donors' values into it. At width
@@ -701,7 +701,7 @@ mod tests {
         assert!(a.crossed());
     }
 
-    /// GL-LOWDIST-1: the size-asymmetric steal combine produces the SAME
+    /// regression: the size-asymmetric steal combine produces the SAME
     /// value set as the generic combine (int face) — skewed widths, ties,
     /// empty donors, cross-worker duplicates.
     #[test]
@@ -734,7 +734,7 @@ mod tests {
         assert_eq!(lens(&generic), lens(&steal));
     }
 
-    /// GL-LOWDIST-1: steal ≡ generic on the bytes face.
+    /// regression: steal ≡ generic on the bytes face.
     #[test]
     fn steal_combine_bytes_set_equivalence() {
         let strs: Vec<Vec<u8>> =

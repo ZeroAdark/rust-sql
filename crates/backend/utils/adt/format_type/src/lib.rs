@@ -166,7 +166,7 @@ pub fn format_type_extended(
                 // get_namespace_name_or_temp (lsyscache.c) over the two
                 // seams; lsyscache deps this crate so a direct dep cycles.
                 if namespace_seams::is_temp_namespace::call(t.typnamespace) {
-                    quoted.push_str("pg_temp");
+                    quoted.push_str(&quote_identifier("pg_temp"));
                 } else {
                     let nsp = syscache_seams::pg_namespace_nspname::call(t.typnamespace)?
                         .ok_or_else(|| type_lookup_failed(named_oid))?;

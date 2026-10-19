@@ -31,6 +31,8 @@ static READ_ERROR_INJECT: AtomicBool = AtomicBool::new(false);
 const WRITE_ERROR_REL: u32 = 9909;
 const WRITE_ERROR_REL_LOCAL: u32 = 9910;
 static WRITE_ERROR_INJECT: AtomicBool = AtomicBool::new(false);
+const PARTIAL_READ_REL: u32 = 9912;
+static PARTIAL_READ_ONCE: AtomicBool = AtomicBool::new(false);
 
 // Every test runs on its own thread and become_backend() takes a proc slot
 // per thread, so MaxBackends must cover the whole suite (plus the reader
@@ -83,6 +85,10 @@ fn setup() -> std::sync::MutexGuard<'static, ()> {
 }
 
 fn become_backend() {
+    // Per-thread globals (C's per-backend statics): spawned reader threads
+    // need them too, before pgaio_init_backend sizes AioProcs from them.
+    globals::SetNBuffers(TEST_NBUFFERS);
+    globals::SetMaxBackends(test_max_backends());
     if globals::MyProcNumber() != INVALID_PROC_NUMBER {
         return;
     }
@@ -125,6 +131,13 @@ fn fake_rel_fd(rel: u32, blocknum: u32, nblocks: u32) -> i32 {
         files.push((rel, f));
     }
     let f = &mut files.iter_mut().find(|(r, _)| *r == rel).unwrap().1;
+    // One short read: the file ends a block early, so the preadv comes back
+    // partial and the operation retries for the rest.
+    let nblocks = if rel == PARTIAL_READ_REL && nblocks > 1 && PARTIAL_READ_ONCE.swap(false, Ordering::Relaxed) {
+        nblocks - 1
+    } else {
+        nblocks
+    };
     let needed_end = (blocknum + nblocks) as u64 * BLCKSZ as u64;
     let cur = f.metadata().unwrap().len();
     if cur < needed_end {
@@ -318,8 +331,6 @@ fn setup_once() {
         aio_core::AioShmemSize().unwrap();
         aio_core::AioShmemInit().unwrap();
     });
-    globals::SetNBuffers(TEST_NBUFFERS);
-    globals::SetMaxBackends(test_max_backends());
 }
 
 fn rel_reads(rel: u32) -> usize {
@@ -504,7 +515,7 @@ fn read_miss_then_warm_hit() {
 
 #[test]
 fn privref_new_pin_entry_is_independently_droppable() {
-    // GL-ASSERTMASK-1 A1 — the born-RED, at the accounting layer.
+    // regression A1 — the born-RED, at the accounting layer.
     //
     // Deliberately NOT routed through PinBuffer_Locked: that function guards
     // this very state with `debug_assert!(GetPrivateRefCount(b) == 0)`, so a
@@ -546,7 +557,7 @@ fn privref_new_pin_entry_is_independently_droppable() {
 #[cfg(not(debug_assertions))]
 #[test]
 fn pin_buffer_locked_pairs_each_shared_bump_with_its_own_drop() {
-    // GL-ASSERTMASK-1 A1 — born-RED for the assertion-masked shared-refcount
+    // regression A1 — born-RED for the assertion-masked shared-refcount
     // leak. `PinBuffer_Locked` adds a shared refcount UNCONDITIONALLY (the
     // bump is fused into the header unlock), and its `debug_assert!` that no
     // local pin preexists is stripped from every shipped profile. With the
@@ -1294,6 +1305,106 @@ fn local_eviction_writes_dirty_page() {
     AtEOXact_Buffers(true);
 }
 
+// bufmgr.c:1009-1013 ExtendBufferedRelTo: when a concurrent extension already
+// covered extend_to, the target block is read through the caller's relation,
+// so the per-relation read/hit counts (PinBufferForBlock :1157-1159) land.
+#[test]
+fn extend_to_fallback_read_counts_against_the_relation() {
+    let _g = setup();
+    setup_extend_seams();
+    let rel = 9506;
+    NBLOCKS.lock().unwrap().insert(rel, 4);
+    let cx = ::mcx::MemoryContext::new("b245-extend");
+    let mcx = cx.mcx();
+    let mut relname = types_tuple::NameData::default();
+    relname.namestrcpy("b245");
+    let data = types_rel::RelationData {
+        rd_locator: std::cell::Cell::new(rloc(rel)),
+        rd_smgr: Default::default(),
+        rd_id: rel,
+        rd_backend: globals::MyProcNumber(),
+        rd_islocaltemp: true,
+        rd_isvalid: std::cell::Cell::new(true),
+        rd_createSubid: std::cell::Cell::new(0),
+        rd_newRelfilelocatorSubid: std::cell::Cell::new(0),
+        rd_firstRelfilelocatorSubid: std::cell::Cell::new(0),
+        rd_droppedSubid: std::cell::Cell::new(0),
+        rd_lockInfo: types_rel::LockInfoData {
+            lockRelId: types_rel::LockRelId { relId: rel, dbId: 5 },
+        },
+        rd_rel: types_rel::FormData_pg_class {
+            relname,
+            relnamespace: 2200,
+            reltype: 0,
+            relowner: 10,
+            relam: 2,
+            relfilenode: rel,
+            reltablespace: 0,
+            relpages: 0,
+            reltuples: -1.0,
+            relallvisible: 0,
+            reltoastrelid: 0,
+            relhasindex: false,
+            relisshared: false,
+            relpersistence: types_core::RELPERSISTENCE_TEMP,
+            relkind: types_rel::RELKIND_RELATION,
+            relhassubclass: false,
+            relrowsecurity: false,
+            relispopulated: true,
+            relreplident: types_rel::REPLICA_IDENTITY_DEFAULT,
+            relispartition: false,
+            relfrozenxid: 3,
+            relminmxid: 1,
+        },
+        rd_att: std::rc::Rc::new(types_tuple::TupleDescData {
+            natts: 0,
+            tdtypeid: 0,
+            tdtypmod: -1,
+            tdrefcount: 1,
+            constr: None,
+            compact_attrs: ::mcx::PgVec::new_in(mcx),
+            attrs: ::mcx::PgVec::new_in(mcx),
+        }),
+        rd_index: None,
+        rd_opcintype: ::mcx::PgVec::new_in(mcx),
+        rd_opfamily: ::mcx::PgVec::new_in(mcx),
+        rd_indoption: ::mcx::PgVec::new_in(mcx),
+        rd_indcollation: ::mcx::PgVec::new_in(mcx),
+        rd_options: None,
+        pgstat_enabled: std::cell::Cell::new(true),
+        pgstat_link: core::cell::Cell::new((0, core::ptr::null_mut())),
+        rd_amcache: Default::default(),
+        rd_amcache_hash: Default::default(),
+        rd_amcache_gin: Default::default(),
+        rd_amcache_spgist: Default::default(),
+        rd_support: ::mcx::PgVec::new_in(mcx),
+        rd_supportinfo: Default::default(),
+        rd_opcoptions: Default::default(),
+        rd_indexlist: Default::default(),
+        rd_trigdesc: Default::default(),
+        rd_hastriggers: false,
+        rd_hasrules: false,
+    };
+    let before = pgstat::relation::find_tabstat_entry(rel).map_or(0, |c| c.blocks_fetched);
+    let b = crate::extend::ExtendBufferedRelTo(
+        &data,
+        ForkNumber::MAIN_FORKNUM,
+        None,
+        bufmgr_seams::EB_SKIP_EXTENSION_LOCK,
+        2,
+        ReadBufferMode::Normal,
+    )
+    .unwrap();
+    assert!(b < 0);
+    assert_eq!(BufferGetBlockNumber(b), 1);
+    assert_eq!(*NBLOCKS.lock().unwrap().get(&rel).unwrap(), 4, "nothing extended");
+    let after = pgstat::relation::find_tabstat_entry(rel).map_or(0, |c| c.blocks_fetched);
+    assert_eq!(after, before + 1, "the fallback read counts one buffer fetch for the relation");
+    ReleaseBuffer(b).unwrap();
+    DropRelationAllLocalBuffers(rloc(rel)).unwrap();
+    AtEOXact_Buffers(true);
+}
+
 #[test]
 fn local_extend_returns_pinned_zeroed_pages() {
     let _g = setup();
@@ -1555,7 +1666,7 @@ fn p_new_redirects_to_extend_buffered_rel() {
     DropRelationAllLocalBuffers(rloc(rel)).unwrap();
 }
 
-// Issue #56: a failed checkpoint-scratch reserve must surface as ERROR
+// A failed checkpoint-scratch reserve must surface as ERROR
 // (53200) through BufferSync's PgResult — the checkpointer's recovery loop
 // absorbs that and retries — never as a thread-killing panic (which the
 // postmaster escalates to a cluster-wide crash-restart). These allocations
@@ -1563,6 +1674,10 @@ fn p_new_redirects_to_extend_buffered_rel() {
 #[test]
 fn buffer_sync_scratch_oom_is_error_not_panic() {
     let _g = setup();
+    setup_write_seams();
+    // Ensure the restarted checkpointer must flush a dirty page even when
+    // this test runs alone, rather than depending on earlier tests.
+    let dirty = dirty_block(9519, 0);
     // Fault injection: ceiling the fresh per-thread scratch context below
     // the CkptSortItem reserve; the mcx limit fails try_reserve exactly as
     // real allocator refusal would.
@@ -1584,11 +1699,22 @@ fn buffer_sync_scratch_oom_is_error_not_panic() {
         globals::SetNBuffers(TEST_NBUFFERS);
         globals::SetMaxBackends(test_max_backends());
         become_backend();
-        BufferSync(0)
+        // A real checkpointer has a resource owner before it pins buffers.
+        let owner = resowner::ResourceOwnerCreate(
+            types_resowner::ResourceOwner::NULL,
+            "bufmgr-checkpointer-restart",
+        )
+        .unwrap();
+        resowner::SetCurrentResourceOwner(owner);
+        let result = BufferSync(0);
+        resowner::SetCurrentResourceOwner(types_resowner::ResourceOwner::NULL);
+        resowner::ResourceOwnerDelete(owner);
+        result
     })
     .join()
     .expect("no panic")
     .expect("BufferSync succeeds once memory is available");
+    assert_eq!(GetBufferDescriptor(dirty - 1).state.load(Ordering::Relaxed) & BM_DIRTY, 0);
 }
 
 // Shared fixture for the uring-prefetch policy/fence tests: an
@@ -1608,8 +1734,7 @@ fn setup_uring_prefetch_seams() {
     });
 }
 
-// The io_method contract (archil-neon incident, first defect): with
-// io_method=sync — the wedged cluster's setting, and the boot default —
+// The io_method contract: with io_method=sync, the boot default,
 // PrefetchSharedBuffer must NOT take the uring route just because the ring
 // initialized; it takes the advisory smgr_prefetch fallback, like C. The
 // panic seam below is the route's tripwire: if the gate leaks, this test
@@ -1634,7 +1759,7 @@ fn prefetch_with_io_method_sync_never_takes_the_uring_route() {
     assert!(res.initiated_io, "the advisory smgr_prefetch fallback must be taken");
 }
 
-// The archil-neon cluster deadlock (2026-08): an smgr start_buffer_read arm
+// A cluster deadlock occurred when an smgr start_buffer_read arm
 // that believed itself unreachable panicked with BM_IO_IN_PROGRESS freshly
 // set by uring::start_read — and that IO has NO owner any cleanup path knows
 // about (remember_owner=false: no resowner AbortBufferIO entry; the ring
@@ -1677,7 +1802,7 @@ fn uring_prefetch_seam_panic_leaves_no_orphaned_buffer_io() {
         assert_eq!(
             state & types_storage::buf::BM_IO_IN_PROGRESS,
             0,
-            "panic across StartBufferIO leaked BM_IO_IN_PROGRESS — the archil-neon wedge"
+            "panic across StartBufferIO leaked BM_IO_IN_PROGRESS"
         );
         assert_eq!(state & BUF_REFCOUNT_MASK, 0, "victim pin leaked across the panic");
     }
@@ -1686,7 +1811,7 @@ fn uring_prefetch_seam_panic_leaves_no_orphaned_buffer_io() {
     AtEOXact_Buffers(true);
 }
 
-// Second face of the archil-neon incident (io_method=sync leg): a read error
+// With io_method=sync, a read error
 // raised BETWEEN StartBufferIO and the pgaio stage (mdstartreadv's own
 // pre-stage failures live exactly there) must be fully undone by the abort
 // ceremony — pgaio error cleanup + resowner release — leaving the buffer's
@@ -1751,11 +1876,16 @@ fn b039_capture_hook(error: &PgError, _output_to_server: &mut bool) {
 // unset (the not-in-recovery answer).
 static NBLOCKS_CACHED: std::sync::Mutex<std::collections::BTreeMap<u32, u32>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
+static NBLOCKS_CACHED_FORK: std::sync::Mutex<std::collections::BTreeMap<(u32, ForkNumber), u32>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 fn setup_b039_seams() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        smgr_seams::smgr_nblocks_cached::set(|rlb, _| {
+        smgr_seams::smgr_nblocks_cached::set(|rlb, fork| {
+            if let Some(n) = NBLOCKS_CACHED_FORK.lock().unwrap().get(&(rlb.locator.relNumber, fork)) {
+                return *n;
+            }
             NBLOCKS_CACHED
                 .lock()
                 .unwrap()
@@ -2135,15 +2265,54 @@ fn b039_segment_boundary_clamp_emits_debug2() {
     ReleaseBuffer(b).unwrap();
 }
 
+// bufmgr.c:1628 ProcessReadBuffersResult: a partial read reports the AIO
+// result at DEBUG1 and adds elog(DEBUG3, "partial read, will retry") before
+// the operation re-issues the rest.
+#[test]
+fn b229_partial_read_emits_debug3_and_retries() {
+    let _g = setup();
+    let rel = PARTIAL_READ_REL;
+    let smgr = RelFileLocatorBackend {
+        locator: rloc(rel),
+        backend: INVALID_PROC_NUMBER,
+    };
+    let prev_level = elog::config::log_min_messages();
+    elog::config::set_log_min_messages(types_error::DEBUG3);
+    B039_CAPTURED.with(|c| c.borrow_mut().clear());
+    let prev_hook = elog::set_emit_log_hook(Some(b039_capture_hook));
+    PARTIAL_READ_ONCE.store(true, Ordering::Relaxed);
+    let res = read::ReadBuffer_batched(smgr, RELPERSISTENCE_PERMANENT, 0, 4, None);
+    PARTIAL_READ_ONCE.store(false, Ordering::Relaxed);
+    elog::set_emit_log_hook(prev_hook);
+    elog::config::set_log_min_messages(prev_level);
+    let (b, _) = res.unwrap();
+    let captured = B039_CAPTURED.with(|c| c.borrow().clone());
+    let seen: Vec<_> = captured.iter().map(|e| (e.level(), e.message().to_string())).collect();
+    assert!(
+        captured.iter().any(|e| e.level() == types_error::DEBUG1),
+        "the partial result is reported at DEBUG1: {seen:?}"
+    );
+    assert!(
+        captured
+            .iter()
+            .any(|e| e.level() == types_error::DEBUG3 && e.message() == "partial read, will retry"),
+        "expected DEBUG3 \"partial read, will retry\", got {seen:?}"
+    );
+    ReleaseBuffer(b).unwrap();
+}
+
 // bufmgr.c:4326 FlushBuffer pushes shared_buffer_write_error_callback for the
 // duration of the write, so an I/O error reports CONTEXT: writing block %u of
-// relation "<relpathperm>". The IO is terminated (BM_IO_ERROR) and the buffer
-// stays dirty, exactly as after C's longjmp through AbortBufferIO.
+// relation "<relpathperm>". The IO stays in progress until the resource
+// owner's release runs AbortBufferIO (C's longjmp), which terminates it with
+// BM_IO_ERROR, leaves the buffer dirty and, on a repeated failure, emits the
+// bufmgr.c:6196 WARNING with its DETAIL.
 #[test]
 fn b039_flush_buffer_error_carries_write_context() {
     let _g = setup();
     setup_write_seams();
     setup_b039_seams();
+    use types_resowner::{ResourceOwner, RESOURCE_RELEASE_BEFORE_LOCKS};
     let rel = WRITE_ERROR_REL;
     let b = dirty_block(rel, 3);
     let pinned = read_blk(rel, 3);
@@ -2151,10 +2320,30 @@ fn b039_flush_buffer_error_carries_write_context() {
     LockBuffer(b, BUFFER_LOCK_SHARE).unwrap();
     let desc = GetBufferDescriptor(b - 1);
 
-    WRITE_ERROR_INJECT.store(true, Ordering::Relaxed);
-    let res = crate::write::FlushBuffer(desc, types_storage::buf::IOContext::IOCONTEXT_NORMAL);
-    WRITE_ERROR_INJECT.store(false, Ordering::Relaxed);
-    let err = res.expect_err("injected write failure must surface as an ERROR");
+    let save = resowner::CurrentResourceOwner();
+    let failing_flush = || {
+        let owner = resowner::ResourceOwnerCreate(ResourceOwner::NULL, "flush-io").unwrap();
+        resowner::SetCurrentResourceOwner(owner);
+        WRITE_ERROR_INJECT.store(true, Ordering::Relaxed);
+        let res = crate::write::FlushBuffer(desc, types_storage::buf::IOContext::IOCONTEXT_NORMAL);
+        WRITE_ERROR_INJECT.store(false, Ordering::Relaxed);
+        let err = res.expect_err("injected write failure must surface as an ERROR");
+        let state = desc.state.load(Ordering::Acquire);
+        assert!(
+            state & types_storage::buf::BM_IO_IN_PROGRESS != 0,
+            "the IO is left for the resowner's AbortBufferIO"
+        );
+        resowner::ResourceOwnerRelease(owner, RESOURCE_RELEASE_BEFORE_LOCKS, false, true)
+            .unwrap();
+        resowner::SetCurrentResourceOwner(ResourceOwner::NULL);
+        resowner::ResourceOwnerDelete(owner);
+        resowner::SetCurrentResourceOwner(save);
+        err
+    };
+
+    B039_CAPTURED.with(|c| c.borrow_mut().clear());
+    let prev_hook = elog::set_emit_log_hook(Some(b039_capture_hook));
+    let err = failing_flush();
     assert!(
         err.message().contains("injected write failure"),
         "unexpected error: {}",
@@ -2169,6 +2358,25 @@ fn b039_flush_buffer_error_carries_write_context() {
     assert!(state & BM_DIRTY != 0, "a failed write leaves the buffer dirty");
     assert_eq!(state & types_storage::buf::BM_IO_IN_PROGRESS, 0, "the IO was terminated");
     assert!(state & types_storage::buf::BM_IO_ERROR != 0);
+    assert!(
+        B039_CAPTURED.with(|c| c.borrow().iter().all(|e| e.level() != types_error::WARNING)),
+        "the first failure is not a repeated one"
+    );
+
+    // Second failure on the same buffer: AbortBufferIO sees BM_IO_ERROR.
+    let _ = failing_flush();
+    elog::set_emit_log_hook(prev_hook);
+    let captured = B039_CAPTURED.with(|c| c.borrow().clone());
+    let warning = captured
+        .iter()
+        .find(|e| e.level() == types_error::WARNING)
+        .unwrap_or_else(|| panic!("no WARNING captured: {:?}", captured.iter().map(|e| e.message().to_string()).collect::<Vec<_>>()));
+    assert_eq!(warning.message(), format!("could not write block 3 of base/5/{rel}"));
+    assert_eq!(warning.detail(), Some("Multiple failures --- write error might be permanent."));
+    assert_eq!(warning.sqlstate(), types_error::ERRCODE_IO_ERROR);
+    let state = desc.state.load(Ordering::Acquire);
+    assert!(state & BM_DIRTY != 0);
+    assert_eq!(state & types_storage::buf::BM_IO_IN_PROGRESS, 0);
 
     // With the disk back, the same flush succeeds and cleans the buffer.
     crate::write::FlushBuffer(desc, types_storage::buf::IOContext::IOCONTEXT_NORMAL).unwrap();
@@ -2767,4 +2975,144 @@ fn w2_036_init_local_buffers_alloc_failure_is_fatal_out_of_memory() {
     // with num_temp_buffers descriptors (the harness has no GUC store: 1024).
     assert_eq!(n_after_failure, 0);
     assert_eq!(retry.map_err(|e| e.message().to_string()), Ok(1024));
+}
+
+// bufmgr.c:4563 DropRelationBuffers: nBlocksToInvalidate is a uint64 sum of
+// per-fork BlockNumber differences. A wrapped per-fork difference (cached
+// size below firstDelBlock) plus a small fork must NOT wrap the total back
+// under BUF_DROP_FULL_SCAN_THRESHOLD: the full scan runs and drops a cached
+// block the fast path would never probe.
+#[test]
+fn b95_drop_relation_buffers_multi_fork_total_is_uint64() {
+    let _g = setup();
+    setup_b039_seams();
+    let rel = 9961u32;
+    let rlb = RelFileLocatorBackend {
+        locator: rloc(rel),
+        backend: INVALID_PROC_NUMBER,
+    };
+    let b = read_blk(rel, 7);
+    ReleaseBuffer(b).unwrap();
+    {
+        let mut m = NBLOCKS_CACHED_FORK.lock().unwrap();
+        m.insert((rel, ForkNumber::MAIN_FORKNUM), 1);
+        m.insert((rel, ForkNumber::FSM_FORKNUM), 5);
+    }
+    // main: 1 - 0 = 1; fsm: 5 - 6 wraps to 0xFFFFFFFF; total 2^32 in uint64
+    // (a u32 sum wraps to 0 and takes the fast path over block 0 only).
+    let res = crate::drop_buffers::DropRelationBuffers(
+        rlb,
+        &[ForkNumber::MAIN_FORKNUM, ForkNumber::FSM_FORKNUM],
+        &[0, 6],
+    );
+    {
+        let mut m = NBLOCKS_CACHED_FORK.lock().unwrap();
+        m.remove(&(rel, ForkNumber::MAIN_FORKNUM));
+        m.remove(&(rel, ForkNumber::FSM_FORKNUM));
+    }
+    res.unwrap();
+    let state = GetBufferDescriptor(b - 1).state.load(Ordering::Acquire);
+    assert_eq!(state & types_storage::buf::BM_TAG_VALID, 0, "block 7 must be invalidated");
+}
+
+// freelist.c:155-171 ClockSweepTick: a wraparound caller whose CAS loses to
+// another wraparound caller's fold retries against the folded hand and still
+// bumps completePasses, so StrategySyncStart never runs backwards.
+#[test]
+fn b95_clock_sweep_wrap_loser_still_counts_its_pass() {
+    let _g = setup();
+    let nbuffers = NBuffersInited() as u32;
+    let (_, passes_before, _) = StrategySyncStart();
+    let (hand_before, _, _) = StrategySyncStart();
+    // Another wrapper already folded two laps down to hand 1; this caller's
+    // stale expectation is 2*NBuffers + 1.
+    crate::freelist::set_clock_hand_for_test(1);
+    crate::freelist::fold_clock_hand(2 * nbuffers + 1);
+    let (hand, passes, _) = StrategySyncStart();
+    assert_eq!(hand, 1);
+    assert_eq!(passes, passes_before + 1, "the losing wraparound caller counts its pass");
+    crate::freelist::set_clock_hand_for_test(hand_before as u32);
+}
+
+// A follow-up batch inside a surviving credited tail (an evicted extra split
+// at a still-resident block) extends the tail instead of truncating it: the
+// blocks past the split stay uncounted re-pins, not spurious hits.
+#[test]
+fn b95_batch_credit_regrant_extends_surviving_tail() {
+    let _g = setup();
+    let loc = rloc(9962);
+    let fork = ForkNumber::MAIN_FORKNUM;
+    crate::read::clear_batch_credits();
+    crate::read::credit_grant(loc, fork, 1, 10);
+    assert!(crate::read::credit_consume(loc, fork, 1));
+    crate::read::credit_grant(loc, fork, 2, 3);
+    for blk in 2..10 {
+        assert!(crate::read::credit_consume(loc, fork, blk), "block {blk} stays credited");
+    }
+    assert!(!crate::read::credit_consume(loc, fork, 10));
+    // A disjoint batch replaces the tail.
+    crate::read::credit_grant(loc, fork, 1, 10);
+    crate::read::credit_grant(loc, fork, 20, 30);
+    assert!(!crate::read::credit_consume(loc, fork, 1));
+    assert!(crate::read::credit_consume(loc, fork, 20));
+    crate::read::clear_batch_credits();
+}
+
+// read_stream_end: the scan that read the tail is over, so a later reader
+// of those blocks is a hit (bufmgr.c:1157 PinBufferForBlock), not a credited
+// re-pin.
+#[test]
+fn b95_forget_batch_credit_ends_the_scan_tail() {
+    let _g = setup();
+    let loc = rloc(9963);
+    let other = rloc(9964);
+    let fork = ForkNumber::MAIN_FORKNUM;
+    crate::read::clear_batch_credits();
+    crate::read::credit_grant(loc, fork, 1, 10);
+    crate::read::credit_grant(other, fork, 1, 10);
+    crate::read::ForgetBatchCredit(loc, fork);
+    assert!(!crate::read::credit_consume(loc, fork, 1));
+    assert!(crate::read::credit_consume(other, fork, 1));
+    crate::read::clear_batch_credits();
+}
+
+// bufmgr.c:1886-1906 AsyncReadBuffers: a block this backend pinned invalid
+// that another backend completed before the IO could start is this backend's
+// hit (shared_blks_hit, pg_stat_io), not silently uncounted.
+#[test]
+fn b95_single_read_completed_by_other_backend_counts_hit() {
+    let _g = setup();
+    let rel = 9965u32;
+    let smgr = RelFileLocatorBackend {
+        locator: rloc(rel),
+        backend: INVALID_PROC_NUMBER,
+    };
+    let (buffer, found) = crate::read::PinBufferForBlock(
+        smgr,
+        RELPERSISTENCE_PERMANENT,
+        ForkNumber::MAIN_FORKNUM,
+        0,
+        &None,
+        true,
+    )
+    .unwrap();
+    assert!(!found);
+    // The other backend's read completes between our pin and StartBufferIO.
+    let desc = GetBufferDescriptor(buffer - 1);
+    assert!(crate::read::StartBufferIO(desc, true, false, true).unwrap());
+    crate::read::TerminateBufferIO(desc, false, BM_VALID, true, false);
+    let hits = counters::shared_blks_hit();
+    let hit = crate::read::read_pinned_shared_block(
+        smgr,
+        RELPERSISTENCE_PERMANENT,
+        ForkNumber::MAIN_FORKNUM,
+        0,
+        ReadBufferMode::Normal,
+        None,
+        buffer,
+    )
+    .unwrap();
+    assert!(hit);
+    assert_eq!(counters::shared_blks_hit(), hits + 1);
+    ReleaseBuffer(buffer).unwrap();
 }

@@ -2502,7 +2502,7 @@ mod tests {
 
     #[test]
     fn boundary_guard_estimator_covers_this_representation() {
-        // GL-HJMB-1 escalation A: nodehash::estimate_runtime_hj_build_peak_bytes
+        // regression escalation A: nodehash::estimate_runtime_hj_build_peak_bytes
         // prices THIS module's representation (HDR_WORDS + the flat 8B ref
         // charge + whole-word images + the seal bucket arithmetic). If these
         // constants drift under it, the admission/probe boundary guards

@@ -1772,6 +1772,17 @@ fn fge_query_inplace<'mcx>(ctx: &mut FgeCtx<'_, 'mcx>, qnode: Node<'mcx>) -> PgR
     for rte_node in &q.rtable {
         let rte = rte_node.as_range_tbl_entry().expect("rtable cell");
         match rte.rtekind {
+            RTEKind::RTE_RELATION => {
+                if let Some(ts) = rte.tablesample {
+                    if let Some(new) = fge_mutate(ctx, ts)? {
+                        // SAFETY: rte_node is part of the exclusive copy.
+                        unsafe {
+                            rte_node.with_mut::<RangeTblEntry, _>(|r| r.tablesample = Some(new))
+                        }
+                        .expect("RangeTblEntry");
+                    }
+                }
+            }
             RTEKind::RTE_SUBQUERY => {
                 if let Some(sub) = rte.subquery {
                     if let Some(newsub) = fge_query_descend(ctx, sub)? {

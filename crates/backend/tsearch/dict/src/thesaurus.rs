@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use ::mcx::{vec_with_capacity_in, Mcx, MemoryContext, PgVec};
 use ::ts_cache::{lookup_ts_dictionary_cache, TSDictionaryCacheEntry};
-use ::ts_locale::dict_api::{lexize_result_ref, DictInitData, LexizeResult};
+use ::ts_locale::dict_api::{def_get_string, lexize_result_ref, DictInitData, LexizeResult};
 use ::ts_locale::{
     could_not_open_error, get_tsearch_config_filename, tsearch_readline_begin, DictSubState,
     TsLexeme,
@@ -81,6 +81,11 @@ impl ThesaurusBuild {
             nsubst: 0,
             arena: PgVec::new_in(mcx),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lexemes(&self) -> Vec<Vec<u8>> {
+        self.wrds.iter().filter_map(|w| w.lexeme.as_ref().map(|l| l.to_vec())).collect()
     }
 }
 
@@ -167,8 +172,7 @@ fn thesaurus_line(d: &mut ThesaurusBuild, line: &[u8], idsubst: &mut u32) -> PgR
     let mut useasis = false;
 
     let mut i = 0usize;
-    while i < line.len() && pg_string::isspace_c_locale(line[i]) && line[i] != b'\n' && line[i] != b'\r'
-    {
+    while i < line.len() && pg_string::isspace_c_locale(line[i]) {
         i += mblen(&line[i..]);
     }
     match line.get(i) {
@@ -485,13 +489,13 @@ pub fn thesaurus_init(init: &DictInitData<'static>) -> PgResult<DictThesaurus> {
             if fileloaded {
                 return Err(invalid_param("multiple DictFile parameters".into()));
             }
-            thesaurus_read(&mut build, value.as_slice())?;
+            thesaurus_read(&mut build, def_get_string(name, value)?)?;
             fileloaded = true;
         } else if name.as_slice() == b"dictionary" {
             if subdictname.is_some() {
                 return Err(invalid_param("multiple Dictionary parameters".into()));
             }
-            subdictname = Some(value.as_slice());
+            subdictname = Some(def_get_string(name, value)?);
         } else {
             return Err(invalid_param(format!(
                 "unrecognized Thesaurus parameter: \"{}\"",

@@ -1,0 +1,38 @@
+-- Two-binary differential corpus for the 2026-09-13 bug-inventory batch
+-- batch-96-backend-access-spgist (C 18.6 oracle vs pgrust). Each leg is one
+-- row of the batch (scripts/access-spgist-b96-e2e.sh).
+\set VERBOSITY verbose
+CREATE DATABASE b96e2e TEMPLATE template0 ENCODING 'UTF8';
+\c b96e2e
+\set VERBOSITY verbose
+-- regression: an opclass whose FUNCTION 2 is a config proc
+-- (spgvalidate accepts the (internal, internal) -> void signature) writes a
+-- spgConfigOut through the choose out pointer; spgdoinsert reads the leading
+-- resultType (= prefixType, 25) and raises elog(ERROR) instead of a crash.
+CREATE OPERATOR CLASS b96_badchoose_spg FOR TYPE text USING spgist AS
+  OPERATOR 3 = ,
+  FUNCTION 1 spg_text_config(internal, internal),
+  FUNCTION 2 spg_text_config(internal, internal),
+  FUNCTION 3 spg_text_picksplit(internal, internal),
+  FUNCTION 4 spg_text_inner_consistent(internal, internal),
+  FUNCTION 5 spg_text_leaf_consistent(internal, internal);
+CREATE TABLE b96_badchoose(t text);
+CREATE INDEX b96_badchoose_idx ON b96_badchoose USING spgist(t b96_badchoose_spg);
+INSERT INTO b96_badchoose SELECT 'k' || i FROM generate_series(1, 2000) i;
+SELECT count(*) FROM b96_badchoose;
+-- the stock text opclass still inserts, splits and scans after the retype
+CREATE TABLE b96_ok(t text);
+CREATE INDEX b96_ok_idx ON b96_ok USING spgist(t);
+INSERT INTO b96_ok SELECT 'k' || i FROM generate_series(1, 5000) i;
+SET enable_seqscan = off;
+SELECT count(*) FROM b96_ok WHERE t = 'k4999';
+SELECT count(*) FROM b96_ok WHERE t ^@ 'k49';
+-- regression: VACUUM of a permanent SP-GiST index takes the
+-- relation-extension lock around each length check (no observable result
+-- change single-backend; the scan still reaches every page).
+CREATE TABLE b96_pt(p point);
+INSERT INTO b96_pt SELECT point(i, i*2) FROM generate_series(1, 5000) i;
+CREATE INDEX b96_pt_idx ON b96_pt USING spgist(p);
+DELETE FROM b96_pt WHERE (p[0]::int) % 2 = 0;
+VACUUM b96_pt;
+SELECT count(*) FROM b96_pt WHERE p <@ box(point(0,0), point(100,300));

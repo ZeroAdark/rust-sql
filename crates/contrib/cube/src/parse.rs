@@ -44,6 +44,8 @@ struct Tok<'a> {
     kind: Kind,
     /// The scanner's `yytext` for this token (error messages).
     text: &'a str,
+    /// `yytext` as the input bytes (a SQL_ASCII byte need not be UTF-8).
+    raw: &'a [u8],
 }
 
 struct Lexer<'a> {
@@ -152,6 +154,7 @@ impl<'a> Lexer<'a> {
             return Tok {
                 kind: Kind::Eof,
                 text: "",
+                raw: b"",
             };
         }
         let p = self.pos;
@@ -163,6 +166,7 @@ impl<'a> Lexer<'a> {
             return Tok {
                 kind: Kind::Float,
                 text: core::str::from_utf8(&s[p..p + flen]).unwrap_or(""),
+                raw: &s[p..p + flen],
             };
         }
         self.pos = p + 1;
@@ -178,6 +182,7 @@ impl<'a> Lexer<'a> {
         Tok {
             kind,
             text: core::str::from_utf8(one).unwrap_or("?"),
+            raw: one,
         }
     }
 }
@@ -192,16 +197,19 @@ struct Parser<'a> {
 }
 
 fn syntax_error(tok: &Tok<'_>) -> Box<PgError> {
-    let detail = if tok.kind == Kind::Eof {
-        "syntax error at end of input".to_string()
+    let e = PgError::error("invalid input syntax for cube")
+        .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION);
+    Box::new(if tok.kind == Kind::Eof {
+        e.with_detail("syntax error at end of input")
     } else {
-        format!("syntax error at or near \"{}\"", tok.text)
-    };
-    Box::new(
-        PgError::error("invalid input syntax for cube")
-            .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
-            .with_detail(detail),
-    )
+        // cubescan.l:93 prints yytext's bytes; C's flex/bison treat a
+        // high-bit byte as end of input under SQL_ASCII (a C bug, see
+        // UPSTREAM-BUGS), so pgrust names the byte instead.
+        let mut d = b"syntax error at or near \"".to_vec();
+        d.extend_from_slice(tok.raw);
+        d.push(b'"');
+        e.with_detail_raw(d)
+    })
 }
 
 fn too_many_dimensions() -> Box<PgError> {
@@ -280,7 +288,7 @@ fn dim_mismatch(l1: &[&str], l2: &[&str]) -> Box<PgError> {
 /// The element is an exact scanner token, so no trailing-junk handling is
 /// needed; errors surface as `PgError`s the fmgr wrapper `ereturn`s.
 fn parse_element(element: &str, orig: &str) -> PgResult<f64> {
-    adt_float::io::float8in_internal(element, None, "cube", orig, None)
+    adt_float::io::float8in_internal(element, None, "cube", orig.as_bytes(), None)
 }
 
 /// `write_box(dim, str1, str2, ...)`: ll from `l1`, ur from `l2`, then
@@ -386,6 +394,19 @@ mod tests {
     fn err_detail(s: &str) -> String {
         let e = parse(s).unwrap_err();
         format!("{}|{}", e.message(), e.detail().unwrap_or(""))
+    }
+
+    #[test]
+    fn syntax_error_names_the_raw_offending_byte() {
+        // SQL_ASCII input: the DETAIL carries the input byte, not U+FFFD/"?".
+        let e = parse_cube(b"(1\xff2)").unwrap_err();
+        assert_eq!(e.sqlstate, types_error::ERRCODE_INVALID_TEXT_REPRESENTATION);
+        assert_eq!(
+            e.detail_raw.as_deref(),
+            Some(&b"syntax error at or near \"\xff\""[..])
+        );
+        assert_eq!(err_detail("(1,2"), "invalid input syntax for cube|syntax error at end of input");
+        assert_eq!(err_detail("1,2)"), "invalid input syntax for cube|syntax error at or near \")\"");
     }
 
     #[test]

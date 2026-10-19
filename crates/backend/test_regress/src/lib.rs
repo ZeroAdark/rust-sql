@@ -14,6 +14,7 @@ use ::types_error::{
     ERRCODE_PROGRAM_LIMIT_EXCEEDED, ERRCODE_UNDEFINED_FUNCTION, WARNING,
 };
 use ::types_nodes::supportnodes;
+use ::types_tuple::TupleDescData;
 
 const LIBRARY: &str = "regress";
 const NAMEDATALEN: usize = 64;
@@ -163,10 +164,10 @@ fn fmt_g(x: f64) -> String {
         return if x.is_sign_negative() { "-0".into() } else { "0".into() };
     }
     if x.is_nan() {
-        return "nan".into();
+        return "NaN".into();
     }
     if x.is_infinite() {
-        return if x < 0.0 { "-inf".into() } else { "inf".into() };
+        return if x < 0.0 { "-Infinity".into() } else { "Infinity".into() };
     }
     let s = format!("{x:.5e}");
     let (m, e) = s.split_once('e').expect("{:e} always has an exponent");
@@ -206,12 +207,11 @@ fn fc_widget_in(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datu
     }
     if i < WIDGET_NARGS {
         // Note (regress.c): DON'T convert this to a soft error.
+        let mut msg = b"invalid input syntax for type widget: \"".to_vec();
+        msg.extend_from_slice(bytes);
+        msg.push(b'"');
         return Err(Box::new(
-            PgError::error(format!(
-                "invalid input syntax for type widget: \"{}\"",
-                String::from_utf8_lossy(bytes)
-            ))
-            .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION),
+            PgError::error_raw_message(msg).with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION),
         ));
     }
     let mut image = [0u8; 24];
@@ -277,7 +277,8 @@ fn fc_int44in(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum>
     let mut p = 0usize;
     let mut i = 0usize;
     'scan: while i < 4 {
-        while p < bytes.len() && (bytes[p] as char).is_ascii_whitespace() {
+        // isspace(): sscanf's %d also skips \v (not in is_ascii_whitespace).
+        while p < bytes.len() && matches!(bytes[p], b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
             p += 1;
         }
         let start = p;
@@ -291,11 +292,12 @@ fn fc_int44in(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum>
         if p == digits {
             break 'scan;
         }
+        // strtol saturates at LONG_MAX/LONG_MIN, then (int) truncates.
         result[i] = core::str::from_utf8(&bytes[start..p])
             .ok()
             .and_then(|s| s.parse::<i64>().ok())
-            .map(|v| v as i32)
-            .unwrap_or(i32::MAX);
+            .unwrap_or(if bytes[start] == b'-' { i64::MIN } else { i64::MAX })
+            as i32;
         i += 1;
         if i < 4 {
             if p < bytes.len() && bytes[p] == b',' {
@@ -492,6 +494,15 @@ fn fc_get_environ(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
 
 /* ===================== regress_setenv(text, text) ======================== */
 
+// elog's %m: strerror(errno).
+#[cfg(not(target_family = "wasm"))]
+fn strerror(errnum: i32) -> String {
+    // SAFETY: strerror returns a NUL-terminated static string; copied out at once.
+    unsafe { std::ffi::CStr::from_ptr(libc::strerror(errnum)) }
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn fc_regress_setenv(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: strict fn, text args.
     let envvar = unsafe { arg_text_str(fcinfo, 0) }?;
@@ -516,8 +527,8 @@ fn fc_regress_setenv(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult
     {
         // SAFETY: CStrings are NUL-terminated; setenv copies them.
         if unsafe { libc::setenv(envvar_c.as_ptr(), envval_c.as_ptr(), 1) } != 0 {
-            let errno = std::io::Error::last_os_error();
-            return Err(err(format!("could not set environment variable: {errno}")));
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            return Err(err(format!("could not set environment variable: {}", strerror(errno))));
         }
         Ok(Datum::null())
     }
@@ -544,10 +555,7 @@ fn fc_wait_pid(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum
         if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0 {
             let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
             if errno != libc::ESRCH {
-                return Err(err(format!(
-                    "could not check PID {pid} liveness: {}",
-                    std::io::Error::from_raw_os_error(errno)
-                )));
+                return Err(err(format!("could not check PID {pid} liveness: {}", strerror(errno))));
             }
             break;
         }
@@ -893,19 +901,19 @@ fn fc_test_enc_setup(_f: Option<&mut FmgrInfo>, _fcinfo: &mut Fcinfo) -> PgResul
 /* ============ test_enc_conversion(bytea, name, name, bool) =============== */
 
 // SAFETY: strict fn; catalog arg i is a `name` datum, live for the call.
-unsafe fn arg_name_str(fcinfo: &Fcinfo, i: usize) -> String {
+unsafe fn arg_name_bytes(fcinfo: &Fcinfo, i: usize) -> Vec<u8> {
     let raw = unsafe { fcinfo.arg_name(i) };
     let end = raw.iter().position(|&c| c == 0).unwrap_or(raw.len());
-    String::from_utf8_lossy(&raw[..end]).into_owned()
+    raw[..end].to_vec()
 }
 
 #[track_caller]
 #[cold]
-fn invalid_encoding_name_error(which: &str, name: &str) -> Box<PgError> {
-    Box::new(
-        PgError::error(format!("invalid {which} encoding name \"{name}\""))
-            .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE),
-    )
+fn invalid_encoding_name_error(which: &str, name: &[u8]) -> Box<PgError> {
+    let mut msg = format!("invalid {which} encoding name \"").into_bytes();
+    msg.extend_from_slice(name);
+    msg.push(b'"');
+    Box::new(PgError::error_raw_message(msg).with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE))
 }
 
 #[track_caller]
@@ -930,8 +938,12 @@ fn composite_result_2(
     values: &[Datum; 2],
     isnull: &[bool; 2],
 ) -> PgResult<Datum> {
+    let expected_desc = fcinfo.rsinfo_mut().and_then(|rsi| rsi.expectedDesc);
+    // SAFETY: expectedDesc contract — the executor armed it with the scan
+    // tupdesc, live for the duration of this call.
+    let expected = expected_desc.map(|p| unsafe { p.cast::<TupleDescData<'_>>().as_ref() });
     let mcx = fcinfo.result_mcx();
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
+    let resolved = funcapi::get_call_result_type(mcx, flinfo, expected)?;
     if resolved.class != funcapi::TypeFuncClass::Composite {
         return Err(err("return type must be a row type".to_string()));
     }
@@ -946,25 +958,28 @@ fn composite_result_2(
 
 fn fc_test_enc_conversion(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let flinfo = flinfo.expect("test_enc_conversion: NULL flinfo");
+    let expected_desc = fcinfo.rsinfo_mut().and_then(|rsi| rsi.expectedDesc);
 
     // SAFETY: strict fn, bytea arg live for the call.
     let string = unsafe { fcinfo.arg_varlena_packed(0) }?;
     let src_bytes = string.data();
     // SAFETY: strict fn, name args live for the call.
-    let src_name = unsafe { arg_name_str(fcinfo, 1) };
-    let dest_name = unsafe { arg_name_str(fcinfo, 2) };
+    let src_name = unsafe { arg_name_bytes(fcinfo, 1) };
+    let dest_name = unsafe { arg_name_bytes(fcinfo, 2) };
     let no_error = fcinfo.arg_bool(3);
 
-    let src_encoding = mbutils::pg_char_to_encoding(&src_name);
+    let src_encoding = mbutils::pg_char_to_encoding_bytes(&src_name);
     if src_encoding < 0 {
         return Err(invalid_encoding_name_error("source", &src_name));
     }
-    let dest_encoding = mbutils::pg_char_to_encoding(&dest_name);
+    let dest_encoding = mbutils::pg_char_to_encoding_bytes(&dest_name);
     if dest_encoding < 0 {
         return Err(invalid_encoding_name_error("destination", &dest_name));
     }
 
-    if funcapi::get_call_result_type(fcinfo.result_mcx(), flinfo, None)?.class
+    // SAFETY: as composite_result_2.
+    let expected = expected_desc.map(|p| unsafe { p.cast::<TupleDescData<'_>>().as_ref() });
+    if funcapi::get_call_result_type(fcinfo.result_mcx(), flinfo, expected)?.class
         != funcapi::TypeFuncClass::Composite
     {
         return Err(err("return type must be a row type".to_string()));
@@ -1062,16 +1077,39 @@ fn fc_test_mblen_func(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
     let encoding = unsafe { arg_text_str(fcinfo, 1) }?;
     let data = unsafe { arg_text(fcinfo, 2) }?;
     let size = data.len();
-    let offset = fcinfo.arg_i32(3) as usize;
-    let at_offset = &data[offset.min(size)..];
+    let offset = fcinfo.arg_i32(3);
+    // C reads data + offset unchecked: past either end the unbounded arms
+    // see a terminator-like byte (length 1) and the bounded arms have no
+    // bytes left, which is always the invalid-sequence error.
+    let in_range = offset >= 0 && (offset as usize) < size;
+    let at_offset: &[u8] = if in_range { &data[offset as usize..] } else { &[] };
+    let no_bytes_left = || {
+        Box::new(
+            PgError::error(format!(
+                "invalid byte sequence for encoding \"{}\": ",
+                mbutils::GetDatabaseEncodingName()
+            ))
+            .with_sqlstate(types_error::ERRCODE_CHARACTER_NOT_IN_REPERTOIRE),
+        )
+    };
 
     let result: i32 = match func.as_str() {
+        "pg_mblen_unbounded" if !in_range => 1,
         "pg_mblen_unbounded" => mbutils::pg_mblen(at_offset),
         "pg_mblen_cstr" => mblen_cstr(at_offset)?,
-        "pg_mblen_with_len" => mbutils::pg_mblen_with_len(at_offset, (size - offset) as i32)?,
+        "pg_mblen_with_len" if !in_range => return Err(no_bytes_left()),
+        "pg_mblen_with_len" => {
+            mbutils::pg_mblen_with_len(at_offset, (size - offset as usize) as i32)?
+        }
+        "pg_mblen_range" if !in_range => return Err(no_bytes_left()),
         "pg_mblen_range" => mbutils::pg_mblen_range(at_offset)?,
         "pg_encoding_mblen" => {
-            wchar::pg_encoding_mblen(mbutils::pg_char_to_encoding(&encoding), at_offset)
+            let enc = mbutils::pg_char_to_encoding(&encoding);
+            match at_offset {
+                [] => 1,
+                [b] => wchar::pg_encoding_mblen(enc, &[*b, 0]),
+                _ => wchar::pg_encoding_mblen(enc, at_offset),
+            }
         }
         _ => return Err(err("unknown function".to_string())),
     };
@@ -1270,9 +1308,12 @@ fn fc_test_pglz_decompress(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> Pg
     if rawsize < 0 {
         return Err(err("rawsize must not be negative".to_string()));
     }
+    // C: palloc(rawsize + VARHDRSZ) sums two int32s (regress.c:1226); the
+    // wrapped negative sign-extends into the Size palloc rejects.
+    ::mcx::check_alloc_size(rawsize.wrapping_add(varlena::VARHDRSZ as i32) as i64 as usize)?;
     let rawsize = rawsize as usize;
 
-    // C: palloc(rawsize + VARHDRSZ), SET_VARSIZE to the decompressed length.
+    // SET_VARSIZE to the decompressed length.
     let mut result = varlena::image_with_header(fcinfo.result_mcx(), rawsize)?;
     let dlen = pglz::pglz_decompress(
         input.data(),
@@ -1283,6 +1324,51 @@ fn fc_test_pglz_decompress(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> Pg
     // SAFETY: 4 header bytes appended + dlen decompressed bytes initialized.
     unsafe { result.set_len(varlena::VARHDRSZ + dlen) };
     Ok(varlena_result(::datum::Varlena::from_image(result)))
+}
+
+/* ================= test_brin_point_box_add_value() ======================= */
+
+// BRIN inclusion add_value (support proc 2) for a point column summarized as a
+// box (opclass STORAGE box): an extension proc 2 that is not the core one.
+fn fc_test_brin_point_box_add_value(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    const UNION: usize = 0;
+    const UNMERGEABLE: usize = 1;
+    const CONTAINS_EMPTY: usize = 2;
+    // SAFETY: BRIN passes (BrinDesc *, BrinValues *, value, isnull); the
+    // BrinValues is exclusively the caller's for the call.
+    let column = unsafe { &mut *(fcinfo.arg(1).as_usize() as *mut ::types_brin::BrinValues) };
+    if fcinfo.arg_bool(3) {
+        if column.bv_hasnulls {
+            return Ok(Datum::from_bool(false));
+        }
+        column.bv_hasnulls = true;
+        return Ok(Datum::from_bool(true));
+    }
+    // SAFETY: a non-null point datum addresses two float8s.
+    let p = unsafe { (fcinfo.arg(2).as_usize() as *const [f64; 2]).read_unaligned() };
+    if column.bv_allnulls {
+        let b = [p[0], p[1], p[0], p[1]];
+        column.bv_values[UNION] = ::adt_scalar::datum_ops::datum_copy(
+            fcinfo.result_mcx(),
+            Datum::from_usize(b.as_ptr() as usize),
+            false,
+            core::mem::size_of_val(&b) as i16,
+        )?;
+        column.bv_values[UNMERGEABLE] = Datum::from_bool(false);
+        column.bv_values[CONTAINS_EMPTY] = Datum::from_bool(false);
+        column.bv_allnulls = false;
+        return Ok(Datum::from_bool(true));
+    }
+    // SAFETY: the union is a box (high, low) the BRIN memtuple context owns.
+    let key = unsafe { &mut *(column.bv_values[UNION].as_usize() as *mut [f64; 4]) };
+    if key[2] <= p[0] && p[0] <= key[0] && key[3] <= p[1] && p[1] <= key[1] {
+        return Ok(Datum::from_bool(false));
+    }
+    key[0] = key[0].max(p[0]);
+    key[1] = key[1].max(p[1]);
+    key[2] = key[2].min(p[0]);
+    key[3] = key[3].min(p[1]);
+    Ok(Datum::from_bool(true))
 }
 
 /* ========================== registry lookup ============================== */
@@ -1320,6 +1406,7 @@ fn lookup(function: &str) -> Option<PGFunction> {
         "test_relpath" => fc_test_relpath,
         "test_pglz_compress" => fc_test_pglz_compress,
         "test_pglz_decompress" => fc_test_pglz_decompress,
+        "test_brin_point_box_add_value" => fc_test_brin_point_box_add_value,
         _ => return None,
     })
 }
@@ -1375,6 +1462,27 @@ mod tests {
         assert!(valid(b"UTF8"));
     }
 
+    // regress.c:468 "could not set environment variable: %m": the strerror
+    // text alone, not Rust's "(os error N)" rendering.
+    #[cfg(unix)]
+    #[test]
+    fn setenv_failure_reports_strerror_like_percent_m() {
+        use ::datum::varlena::{set_varsize_4b, VARHDRSZ};
+        fn text(payload: &[u8]) -> Vec<u8> {
+            let mut image = set_varsize_4b(VARHDRSZ + payload.len()).to_vec();
+            image.extend_from_slice(payload);
+            image
+        }
+        miscinit::SetUserIdAndSecContext(::types_core::BOOTSTRAP_SUPERUSERID, 0);
+        let name = text(b"");
+        let value = text(b"x");
+        let mut fci = fmgr::LocalFcinfo::<2>::new(0);
+        fci.set_arg(0, Datum::from_usize(name.as_ptr() as usize));
+        fci.set_arg(1, Datum::from_usize(value.as_ptr() as usize));
+        let e = fc_regress_setenv(None, &mut fci).unwrap_err();
+        assert_eq!(e.message(), "could not set environment variable: Invalid argument");
+    }
+
     #[test]
     fn atof_prefixes() {
         assert_eq!(c_atof(b"1,3,5)"), 1.0);
@@ -1386,6 +1494,65 @@ mod tests {
         assert_eq!(c_atof(b"Infinity)"), f64::INFINITY);
         assert_eq!(c_atof(b"-inf"), f64::NEG_INFINITY);
         assert!(c_atof(b"nan").is_nan());
+    }
+
+    #[test]
+    fn int44in_matches_sscanf() {
+        use ::mcx::MemoryContext;
+        let ctx = MemoryContext::new("t");
+        let parse = |input: &[u8]| -> [i32; 4] {
+            let mut cstr = input.to_vec();
+            cstr.push(0);
+            let mut fci = fmgr::LocalFcinfo::<1>::new(0);
+            // SAFETY: ctx outlives the call and the result read.
+            unsafe { fci.set_result_mcx(ctx.mcx()) };
+            fci.set_arg(0, Datum::from_usize(cstr.as_ptr() as usize));
+            let d = fc_int44in(None, &mut fci).unwrap();
+            // SAFETY: a 16-byte by-ref result left in the armed context.
+            let image = unsafe { core::slice::from_raw_parts(d.as_u64() as usize as *const u8, 16) };
+            core::array::from_fn(|j| i32::from_ne_bytes(image[j * 4..j * 4 + 4].try_into().unwrap()))
+        };
+        assert_eq!(parse(b"1, 2,3,4"), [1, 2, 3, 4]);
+        // strtol saturates at LONG_MAX/LONG_MIN before the (int) store.
+        assert_eq!(parse(b"99999999999999999999,0,0,0"), [-1, 0, 0, 0]);
+        assert_eq!(parse(b"-99999999999999999999,0,0,0"), [0, 0, 0, 0]);
+        assert_eq!(parse(b"4294967297,0,0,0"), [1, 0, 0, 0]);
+        // isspace() covers \v and \f.
+        assert_eq!(parse(b"\x0b1,2,3,4"), [1, 2, 3, 4]);
+        assert_eq!(parse(b"1,\x0b2,\x0c3,4"), [1, 2, 3, 4]);
+        assert_eq!(parse(b"1,x2"), [1, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_mblen_func_out_of_range_offsets_do_not_panic() {
+        use ::datum::varlena::{set_varsize_4b, VARHDRSZ};
+        fn text(payload: &[u8]) -> Vec<u8> {
+            let mut image = set_varsize_4b(VARHDRSZ + payload.len()).to_vec();
+            image.extend_from_slice(payload);
+            image
+        }
+        let call = |func: &str, enc: &str, offset: i32| -> PgResult<i32> {
+            let (f, e, s) = (text(func.as_bytes()), text(enc.as_bytes()), text(b"abc"));
+            let mut fci = fmgr::LocalFcinfo::<4>::new(0);
+            fci.set_arg(0, Datum::from_usize(f.as_ptr() as usize));
+            fci.set_arg(1, Datum::from_usize(e.as_ptr() as usize));
+            fci.set_arg(2, Datum::from_usize(s.as_ptr() as usize));
+            fci.set_arg(3, Datum::from_i32(offset));
+            fc_test_mblen_func(None, &mut fci).map(|d| d.as_i32())
+        };
+        // C reads the adjacent byte (a terminator-like byte) for the
+        // unbounded arms and errors with no bytes left for the bounded ones.
+        assert_eq!(call("pg_mblen_unbounded", "UTF8", -1).unwrap(), 1);
+        assert_eq!(call("pg_mblen_unbounded", "UTF8", 5).unwrap(), 1);
+        assert_eq!(call("pg_mblen_cstr", "UTF8", 3).unwrap(), 1);
+        assert_eq!(call("pg_encoding_mblen", "GB18030", 3).unwrap(), 1);
+        assert_eq!(call("pg_encoding_mblen", "GB18030", 2).unwrap(), 1);
+        for f in ["pg_mblen_range", "pg_mblen_with_len"] {
+            let err = call(f, "UTF8", 3).unwrap_err();
+            assert_eq!(err.sqlstate(), ::types_error::ERRCODE_CHARACTER_NOT_IN_REPERTOIRE);
+            assert!(err.message().starts_with("invalid byte sequence for encoding"));
+            assert_eq!(call(f, "UTF8", 2).unwrap(), 1);
+        }
     }
 
     #[test]
@@ -1405,6 +1572,10 @@ mod tests {
         assert_eq!(fmt_g(123456.0), "123456");
         assert_eq!(fmt_g(1234567.0), "1.23457e+06");
         assert_eq!(fmt_g(0.0001), "0.0001");
+        // snprintf.c:1207/1229 fmtfloat spellings, not Rust's nan/inf.
+        assert_eq!(fmt_g(f64::NAN), "NaN");
+        assert_eq!(fmt_g(f64::INFINITY), "Infinity");
+        assert_eq!(fmt_g(f64::NEG_INFINITY), "-Infinity");
         assert_eq!(fmt_g(0.00001), "1e-05");
         assert_eq!(fmt_g(0.0), "0");
     }
@@ -1469,6 +1640,9 @@ mod tests {
         // Set control bit with read of a match tag, no data follows.
         assert_eq!(decompress(b"\x01", 1024, false).unwrap(), b"");
         failed(decompress(b"\x01", 1024, true));
+        // regress.c:1226: rawsize + VARHDRSZ wraps in int32 and sign-extends.
+        let e = decompress(b"\x00", i32::MAX, false).unwrap_err();
+        assert_eq!(e.message(), "invalid memory alloc request size 18446744071562067971");
         // Set control bit with read of a match tag, 1 byte follows.
         failed(decompress(b"\x01\xff", 1024, false));
         failed(decompress(b"\x01\xff", 1024, true));
@@ -1610,14 +1784,44 @@ mod tests {
     #[test]
     fn test_enc_conversion_invalid_name_is_22023() {
         use ::types_error::ERRCODE_INVALID_PARAMETER_VALUE;
-        let src = invalid_encoding_name_error("source", "no_such_enc");
+        let src = invalid_encoding_name_error("source", b"no_such_enc");
         assert_eq!(src.sqlstate(), ERRCODE_INVALID_PARAMETER_VALUE);
         assert_eq!(src.message(), "invalid source encoding name \"no_such_enc\"");
-        let dest = invalid_encoding_name_error("destination", "no_such_enc");
+        let dest = invalid_encoding_name_error("destination", b"no_such_enc");
         assert_eq!(dest.sqlstate(), ERRCODE_INVALID_PARAMETER_VALUE);
         assert_eq!(
             dest.message(),
             "invalid destination encoding name \"no_such_enc\""
         );
+        // regress.c:884-886 echoes the raw NameStr bytes.
+        let raw = invalid_encoding_name_error("source", b"x\xff");
+        assert_eq!(raw.message_raw.as_deref(), Some(&b"invalid source encoding name \"x\xff\""[..]));
+    }
+
+    // regress.c:196-198 echoes the raw input bytes; a 63-byte name whose
+    // lossy rendering exceeds NAMEDATALEN still resolves (regress.c:884,
+    // encnames.c:565 gates strlen(name) of the raw bytes).
+    #[test]
+    fn widget_in_and_enc_names_are_byte_exact() {
+        use ::mcx::MemoryContext;
+        let ctx = MemoryContext::new("t");
+        let input = b"(1,2\xe9\0";
+        let mut fci = fmgr::LocalFcinfo::<1>::new(0);
+        // SAFETY: ctx outlives the call.
+        unsafe { fci.set_result_mcx(ctx.mcx()) };
+        fci.set_arg(0, Datum::from_usize(input.as_ptr() as usize));
+        let e = fc_widget_in(None, &mut fci).unwrap_err();
+        assert_eq!(e.sqlstate(), ERRCODE_INVALID_TEXT_REPRESENTATION);
+        assert_eq!(
+            e.message_raw.as_deref(),
+            Some(&b"invalid input syntax for type widget: \"(1,2\xe9\""[..])
+        );
+
+        let mut name = b"UTF8".to_vec();
+        name.extend(std::iter::repeat(b' ').take(58));
+        name.push(0xff);
+        assert_eq!(name.len(), 63);
+        assert!(mbutils::pg_char_to_encoding_bytes(&name) >= 0);
+        assert!(mbutils::pg_char_to_encoding(&String::from_utf8_lossy(&name)) < 0);
     }
 }

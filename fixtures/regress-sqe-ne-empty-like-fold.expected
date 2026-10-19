@@ -1,0 +1,56 @@
+\set VERBOSITY verbose
+DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_am WHERE amname = 'pgrcolumnar2') THEN CREATE ACCESS METHOD pgrcolumnar2 TYPE TABLE HANDLER heap_tableam_handler; END IF; END $$;
+CREATE TABLE ne (id int NOT NULL, v int NOT NULL, t text COLLATE "C" NOT NULL, p text COLLATE "C" NOT NULL) USING pgrcolumnar2;
+-- rows 2 and 4 have an empty t, so t <> '' keeps only rows 1 and 3
+COPY ne FROM stdin;
+ANALYZE ne;
+-- controls: count(*) under both conditions, and sum(v) under the LIKE alone
+SELECT count(*) FROM ne WHERE t <> '' AND p LIKE '%cat%';
+ count 
+-------
+     1
+(1 row)
+
+SELECT sum(v) FROM ne WHERE p LIKE '%cat%';
+ sum 
+-----
+  70
+(1 row)
+
+-- decisive: sum/avg/max under t <> '' AND a LIKE on another column; only row 1 qualifies
+SELECT sum(v), count(*) FROM ne WHERE t <> '' AND p LIKE '%cat%';
+ sum | count 
+-----+-------
+  10 |     1
+(1 row)
+
+SELECT avg(v) FROM ne WHERE t <> '' AND p LIKE '%cat%';
+         avg         
+---------------------
+ 10.0000000000000000
+(1 row)
+
+SELECT max(v) FROM ne WHERE t <> '' AND p LIKE '%cat%';
+ max 
+-----
+  10
+(1 row)
+
+SELECT sum(v) FROM ne WHERE t <> '' AND p LIKE 'cat%';
+ sum 
+-----
+  10
+(1 row)
+
+SELECT sum(v) FROM ne WHERE t <> '' AND p NOT LIKE '%dog%';
+ sum 
+-----
+  10
+(1 row)
+
+SELECT sum(v) FROM ne WHERE t <> '' AND id > 0 AND p LIKE '%cat%';
+ sum 
+-----
+  10
+(1 row)
+

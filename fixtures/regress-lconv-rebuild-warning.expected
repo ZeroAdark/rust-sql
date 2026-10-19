@@ -1,0 +1,220 @@
+-- sequence.sql of FS-213
+\set VERBOSITY verbose
+\set ECHO all
+-- FS-213: SET lc_time / lc_monetary / lc_numeric = '' (the empty locale). Fresh UTF8 database (datctype C), one session, superuser. PostgreSQL 18.6 warns 01000 "could not determine encoding for locale "": codeset is "ANSI_X3.4-1968"" at every use of the empty locale; pgrust never warns. Rows identical.
+-- environment (lines 5-10): what the session starts from
+show server_encoding;
+ server_encoding 
+-----------------
+ UTF8
+(1 row)
+
+show lc_time;
+ lc_time 
+---------
+ C
+(1 row)
+
+show lc_monetary;
+ lc_monetary 
+-------------
+ C
+(1 row)
+
+show lc_numeric;
+ lc_numeric 
+------------
+ C
+(1 row)
+
+select name, setting, source from pg_settings where name in ('lc_time', 'lc_monetary', 'lc_numeric', 'lc_messages') order by 1;
+    name     | setting |       source       
+-------------+---------+--------------------
+ lc_messages | C       | configuration file
+ lc_monetary | C       | configuration file
+ lc_numeric  | C       | configuration file
+ lc_time     | C       | configuration file
+(4 rows)
+
+select datname, encoding, datlocprovider, datcollate, datctype from pg_database where datname = current_database();
+ datname  | encoding | datlocprovider | datcollate | datctype 
+----------+----------+----------------+------------+----------
+ postgres |        6 | c              | C          | C
+(1 row)
+
+-- decisive 1 (lines 12-15): lc_time = '' then a TM month/day name
+set lc_time = '';
+show lc_time;
+ lc_time 
+---------
+ 
+(1 row)
+
+select to_char(date '2024-03-05', 'TMMonth TMDay');
+WARNING:  01000: could not determine encoding for locale "": codeset is "ANSI_X3.4-1968"
+    to_char    
+---------------
+ March Tuesday
+(1 row)
+
+select to_char(date '2024-03-05', 'Month Day');
+       to_char       
+---------------------
+ March     Tuesday  
+(1 row)
+
+-- decisive 2 (lines 17-19): lc_monetary = '' then a money literal
+set lc_monetary = '';
+show lc_monetary;
+ lc_monetary 
+-------------
+ 
+(1 row)
+
+select '$1,000.50'::money;
+WARNING:  01000: could not determine encoding for locale "": codeset is "ANSI_X3.4-1968"
+LINE 1: select '$1,000.50'::money;
+               ^
+   money   
+-----------
+ $1,000.50
+(1 row)
+
+-- decisive 3 (lines 21-23): lc_numeric = '' then a grouped to_char
+set lc_numeric = '';
+show lc_numeric;
+ lc_numeric 
+------------
+ 
+(1 row)
+
+select to_char(1234.5, '9G999D00');
+WARNING:  01000: could not determine encoding for locale "": codeset is "ANSI_X3.4-1968"
+WARNING:  01000: could not determine encoding for locale "": codeset is "ANSI_X3.4-1968"
+  to_char  
+-----------
+  1,234.50
+(1 row)
+
+-- control 1 (lines 25-30): RESET, then the same three statements: no warning on either
+reset lc_time;
+reset lc_monetary;
+reset lc_numeric;
+select to_char(date '2024-03-05', 'TMMonth TMDay');
+    to_char    
+---------------
+ March Tuesday
+(1 row)
+
+select '$1,000.50'::money;
+   money   
+-----------
+ $1,000.50
+(1 row)
+
+select to_char(1234.5, '9G999D00');
+  to_char  
+-----------
+  1,234.50
+(1 row)
+
+-- control 2 (lines 32-39): explicit locale names: 'C', 'POSIX', 'C.UTF-8' (if installed) are silent; 'nosuch' is 22023 on both
+set lc_time = 'C';
+select to_char(date '2024-03-05', 'TMMonth TMDay');
+    to_char    
+---------------
+ March Tuesday
+(1 row)
+
+set lc_time = 'POSIX';
+select to_char(date '2024-03-05', 'TMMonth TMDay');
+    to_char    
+---------------
+ March Tuesday
+(1 row)
+
+set lc_time = 'C.UTF-8';
+select to_char(date '2024-03-05', 'TMMonth TMDay');
+    to_char    
+---------------
+ March Tuesday
+(1 row)
+
+set lc_time = 'nosuch';
+ERROR:  22023: invalid value for parameter "lc_time": "nosuch"
+show lc_time;
+ lc_time 
+---------
+ C.UTF-8
+(1 row)
+
+-- control 3 (lines 41-44): lc_messages = '' is refused 22023 on both; no warning anywhere
+set lc_messages = '';
+ERROR:  22023: invalid value for parameter "lc_messages": ""
+select 1/0;
+ERROR:  22012: division by zero
+reset lc_messages;
+reset lc_time;
+-- other forms (lines 46-57): SET LOCAL, set_config, a SQL function with SET lc_time = ''
+begin; set local lc_time = ''; select to_char(date '2024-03-05', 'TMMonth'); commit;
+WARNING:  01000: could not determine encoding for locale "": codeset is "ANSI_X3.4-1968"
+ to_char 
+---------
+ March
+(1 row)
+
+show lc_time;
+ lc_time 
+---------
+ C
+(1 row)
+
+select set_config('lc_time', '', false), to_char(date '2024-03-05', 'TMMonth');
+WARNING:  01000: could not determine encoding for locale "": codeset is "ANSI_X3.4-1968"
+ set_config | to_char 
+------------+---------
+            | March
+(1 row)
+
+reset lc_time;
+select set_config('lc_monetary', '', true), '1.5'::money;
+WARNING:  01000: could not determine encoding for locale "": codeset is "ANSI_X3.4-1968"
+ set_config | money 
+------------+-------
+            | $1.50
+(1 row)
+
+show lc_monetary;
+ lc_monetary 
+-------------
+ C
+(1 row)
+
+create function fs213_f() returns text language sql set lc_time = '' as $$ select to_char(date '2024-03-05', 'TMMonth') $$;
+select fs213_f();
+WARNING:  01000: could not determine encoding for locale "": codeset is "ANSI_X3.4-1968"
+ fs213_f 
+---------
+ March
+(1 row)
+
+select fs213_f();
+WARNING:  01000: could not determine encoding for locale "": codeset is "ANSI_X3.4-1968"
+ fs213_f 
+---------
+ March
+(1 row)
+
+drop function fs213_f();
+show lc_time;
+ lc_time 
+---------
+ C
+(1 row)
+
+select to_char(date '2024-03-05', 'TMMonth TMDay');
+    to_char    
+---------------
+ March Tuesday
+(1 row)
+

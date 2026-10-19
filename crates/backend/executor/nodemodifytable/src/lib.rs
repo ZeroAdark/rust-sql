@@ -319,6 +319,10 @@ pub struct ModifyTableState<'mcx> {
     // Routed leaves' ri_TrigInstrument (ExecInitPartitionInfo ->
     // InitResultRelInfo with es_instrument): es_trig_instrument index.
     leaf_trig_instr: mcx::PgVec<'mcx, Option<usize>>,
+    // bms_union(insertedCols, updatedCols) per target RTE, built once: C
+    // computes it only inside ExecConstraints' error branches, and a per-row
+    // copy in the bump ExecutorState would be retained until statement end.
+    rte_mod_cols: mcx::PgVec<'mcx, (u32, &'mcx types_nodes::Bitmapset<'mcx>)>,
     // C ExecInsert's *insert_destrel out-param (routed leaf of the last
     // insert; None = unrouted), for the cross-partition FK update event.
     last_insert_leaf: Option<usize>,
@@ -645,6 +649,10 @@ pub fn exec_init_modify_table<'mcx>(
         }
     }
 
+    for (idx, &(rti, i)) in kept.iter().enumerate() {
+        rels[idx].project_returning = init_returning(node, estate, rti, i)?;
+    }
+
     // ExecSetupTransitionCaptureState (skipped in explain-only mode); the
     // capture target is the root relation.
     let mut transition_capture = None;
@@ -948,6 +956,7 @@ pub fn exec_init_modify_table<'mcx>(
         leaf_trig_fmgr: mcx::PgVec::new_in(qcx),
         leaf_trig_when: mcx::PgVec::new_in(qcx),
         leaf_trig_instr: mcx::PgVec::new_in(qcx),
+        rte_mod_cols: mcx::PgVec::new_in(qcx),
         last_insert_leaf: None,
         last_insert_remapped: None,
         oc_returning_leaf: None,
@@ -1039,49 +1048,6 @@ fn init_result_rel<'mcx>(
                 rowid_attno > 0 || relkind == types_rel::RELKIND_PARTITIONED_TABLE,
                 "could not find junk ctid column"
             );
-        }
-    }
-
-    // The per-rel RETURNING projection: scan vars read the returned tuple
-    // (this relation's descriptor), OUTER_VARs the plan tuple.
-    let mut project_returning = None;
-    if let Some(i) = list_index {
-        if !node.returningLists.is_nil() {
-            let rlist = node
-                .returningLists
-                .nth(i)
-                .as_list()
-                .expect("returningLists cell is a List");
-            let params = estate.param_bind();
-            let desc = estate.es_relations[(rti - 1) as usize]
-                .as_ref()
-                .expect("result relation opened")
-                .rd_att
-                .clone();
-            // SubPlans in RETURNING compile against the estate's init hook and
-            // run through the node's suspension driver (exec_process_returning).
-            let is_merge = node.operation == CmdType::CMD_MERGE;
-            project_returning = Some(executils::with_subplan_compile_env(estate, |env| {
-                if is_merge {
-                    // MERGE_ACTION() may appear here (C gates EEOP_MERGE_
-                    // SUPPORT_FUNC on the parent being a CMD_MERGE node).
-                    execexpr::exec_build_merge_projection_info_subplans(
-                        mcx,
-                        rlist,
-                        Some(&desc),
-                        params,
-                        env,
-                    )
-                } else {
-                    execexpr::exec_build_projection_info_subplans(
-                        mcx,
-                        rlist,
-                        Some(&desc),
-                        params,
-                        env,
-                    )
-                }
-            })?);
         }
     }
 
@@ -1306,7 +1272,7 @@ fn init_result_rel<'mcx>(
         update_colnos,
         indexes: None,
         project_new: None,
-        project_returning,
+        project_returning: None,
         check_exprs: None,
         partition_check: None,
         wco_exprs,
@@ -1321,6 +1287,7 @@ fn init_result_rel<'mcx>(
             };
             estate.register_trig_instrument(
                 executils::TrigInstrRelKind::Opened,
+                root_rti.is_some(),
                 relid,
                 std::str::from_utf8(relname.name_str()).unwrap_or(""),
                 trigdesc.as_deref(),
@@ -1562,19 +1529,6 @@ fn exec_insert_foreign_leaf<'mcx>(
     work_slot: ExecSlotId,
 ) -> PgResult<Option<ExecSlotId>> {
     let mcx = estate.es_query_cxt;
-    // ExecARInsertTriggers' first check (trigger.c:2555-2562).
-    {
-        let capturing = mt
-            .transition_capture
-            .as_ref()
-            .is_some_and(|tc| tc.tcs_insert_new_table);
-        let rel = mt
-            .router
-            .as_ref()
-            .expect("routed insert has a router")
-            .leaf_rel(idx);
-        ::trigger::check_foreign_transition_capture(rel, capturing)?;
-    }
     let rd_id = {
         let ModifyTableState {
             router,
@@ -1608,6 +1562,20 @@ fn exec_insert_foreign_leaf<'mcx>(
     };
     if !inserted {
         return Ok(None);
+    }
+    // ExecARInsertTriggers' first check (trigger.c:2555-2562), after the
+    // remote INSERT as C's ExecInsert orders it.
+    {
+        let capturing = mt
+            .transition_capture
+            .as_ref()
+            .is_some_and(|tc| tc.tcs_insert_new_table);
+        let rel = mt
+            .router
+            .as_ref()
+            .expect("routed insert has a router")
+            .leaf_rel(idx);
+        ::trigger::check_foreign_transition_capture(rel, capturing)?;
     }
     estate.es_tupleTable[work_slot.0 as usize].base_mut().tts_tableOid = rd_id;
     if work_slot != slot_id {
@@ -1748,6 +1716,57 @@ fn fdw_ar_row_triggers<'mcx>(
         Some(&mut when),
         modified_cols,
     )
+}
+
+// The per-rel RETURNING projection: scan vars read the returned tuple
+// (this relation's descriptor), OUTER_VARs the plan tuple. Built after every
+// result rel is validated (C nodeModifyTable.c:5030-5050 runs the projection
+// loop only once the :4846 CheckValidResultRel loop is through).
+fn init_returning<'mcx>(
+    node: &'mcx ModifyTable<'mcx>,
+    estate: &mut EStateData<'mcx>,
+    rti: u32,
+    i: usize,
+) -> PgResult<Option<PgBox<'mcx, ExprState<'mcx>>>> {
+    if node.returningLists.is_nil() {
+        return Ok(None);
+    }
+    let mcx = estate.es_query_cxt;
+    let rlist = node
+        .returningLists
+        .nth(i)
+        .as_list()
+        .expect("returningLists cell is a List");
+    let params = estate.param_bind();
+    let desc = estate.es_relations[(rti - 1) as usize]
+        .as_ref()
+        .expect("result relation opened")
+        .rd_att
+        .clone();
+    // SubPlans in RETURNING compile against the estate's init hook and
+    // run through the node's suspension driver (exec_process_returning).
+    let is_merge = node.operation == CmdType::CMD_MERGE;
+    Ok(Some(executils::with_subplan_compile_env(estate, |env| {
+        if is_merge {
+            // MERGE_ACTION() may appear here (C gates EEOP_MERGE_
+            // SUPPORT_FUNC on the parent being a CMD_MERGE node).
+            execexpr::exec_build_merge_projection_info_subplans(
+                mcx,
+                rlist,
+                Some(&desc),
+                params,
+                env,
+            )
+        } else {
+            execexpr::exec_build_projection_info_subplans(
+                mcx,
+                rlist,
+                Some(&desc),
+                params,
+                env,
+            )
+        }
+    })?))
 }
 
 fn check_valid_result_rel<'mcx>(
@@ -2219,9 +2238,6 @@ pub fn mt_accept_row<'mcx>(
             // the OLD row arrives as the wholerow junk attr; the FDW keys the
             // remote UPDATE off its own junk attrs in the plan slot.
             CmdType::CMD_UPDATE if mt.rel().ri_FdwRoutine.is_some() => {
-                // ExecARUpdateTriggers' first check (trigger.c:3162-3170),
-                // hoisted: the FDW arm never reaches the AR trigger call.
-                foreign_transition_capture_check(mt, estate, CmdType::CMD_UPDATE)?;
                 let old_tup = fetch_wholerow_tuple(mt, estate, plan_slot)?;
                 if !mt.rel().ri_projectNewInfoValid {
                     exec_init_update_projection(mt, estate)?;
@@ -2259,6 +2275,9 @@ pub fn mt_accept_row<'mcx>(
                     fdw_prepare_new_slot(mt, estate, CmdType::CMD_UPDATE, slot)?;
                 }
                 if br_ok && exec_foreign_modify_row(mt, estate, CmdType::CMD_UPDATE, slot, plan_slot)? {
+                    // ExecARUpdateTriggers' first check (trigger.c:3162-3170),
+                    // after the remote DML as C's epilogue orders it.
+                    foreign_transition_capture_check(mt, estate, CmdType::CMD_UPDATE)?;
                     fdw_ar_row_triggers(
                         mt,
                         estate,
@@ -2302,8 +2321,6 @@ pub fn mt_accept_row<'mcx>(
             }
             // ExecDelete's ri_FdwRoutine arm (nodeModifyTable.c:1612-1637).
             CmdType::CMD_DELETE if mt.rel().ri_FdwRoutine.is_some() => {
-                // ExecARDeleteTriggers' first check (trigger.c:2816-2823).
-                foreign_transition_capture_check(mt, estate, CmdType::CMD_DELETE)?;
                 // ExecDelete's fdw_trigtuple: the wholerow OLD row feeds the
                 // BR and AR delete triggers (nodeModifyTable.c:1579, 1660).
                 let td = mt.rel().trigdesc.clone();
@@ -2336,6 +2353,8 @@ pub fn mt_accept_row<'mcx>(
                 let ret_slot = ensure_returning_slot(mt, estate);
                 clear_slot(estate, ret_slot);
                 if br_ok && exec_foreign_modify_row(mt, estate, CmdType::CMD_DELETE, ret_slot, plan_slot)? {
+                    // ExecARDeleteTriggers' first check (trigger.c:2816-2823).
+                    foreign_transition_capture_check(mt, estate, CmdType::CMD_DELETE)?;
                     fdw_ar_row_triggers(
                         mt,
                         estate,
@@ -2855,6 +2874,67 @@ fn rte_modified_cols<'mcx>(
         }
     }
     Ok(types_nodes::Bitmapset::empty())
+}
+
+fn rte_modified_cols_cached<'mcx>(
+    cache: &mut mcx::PgVec<'mcx, (u32, &'mcx types_nodes::Bitmapset<'mcx>)>,
+    mcx: mcx::Mcx<'mcx>,
+    es_range_table: &[&'mcx types_nodes::RangeTblEntry<'mcx>],
+    es_rteperminfos: Option<&types_nodes::NodeList<'mcx>>,
+    rti: u32,
+) -> PgResult<&'mcx types_nodes::Bitmapset<'mcx>> {
+    if let Some((_, cols)) = cache.iter().find(|(r, _)| *r == rti) {
+        return Ok(cols);
+    }
+    let cols = mcx::alloc_leak_in(mcx, rte_modified_cols(mcx, es_range_table, es_rteperminfos, rti)?)?;
+    cache.push((rti, cols));
+    Ok(cols)
+}
+
+#[cfg(test)]
+mod rte_mod_cols_tests {
+    use super::*;
+    use types_nodes::{Node, NodeList, RTEKind, RTEPermissionInfo, RangeTblEntry};
+
+    // ExecConstraints allocates nothing on the success path (execMain.c): the
+    // per-target-RTE union is built once, not once per row into the bump
+    // ExecutorState.
+    #[test]
+    fn modified_cols_are_built_once_per_target_rte() {
+        let ctx = mcx::MemoryContext::new_bump("ExecutorState");
+        let mcx = ctx.mcx();
+        let mut inserted = types_nodes::Bitmapset::empty();
+        inserted.add_member(mcx, 9).unwrap();
+        let perminfo = Node::mk(
+            mcx,
+            RTEPermissionInfo {
+                insertedCols: inserted,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let perminfos = NodeList::make1(mcx, perminfo).unwrap();
+        let rte = Node::mk(
+            mcx,
+            RangeTblEntry {
+                rtekind: RTEKind::RTE_RELATION,
+                perminfoindex: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let rtable = [rte.as_range_tbl_entry().unwrap()];
+        let mut cache = mcx::PgVec::new_in(mcx);
+        let first = rte_modified_cols_cached(&mut cache, mcx, &rtable, Some(&perminfos), 1).unwrap();
+        assert!(first.is_member(9));
+        let used = ctx.used();
+        for _ in 0..1000 {
+            let again =
+                rte_modified_cols_cached(&mut cache, mcx, &rtable, Some(&perminfos), 1).unwrap();
+            assert!(core::ptr::eq(first, again));
+        }
+        assert_eq!(ctx.used(), used);
+    }
 }
 
 // execute_attr_map_cols (attmap.c): translate a perminfo column bitmapset
@@ -4143,6 +4223,7 @@ fn merge_update_act<'mcx>(
     let result = if cross_part {
         TM_Result::TM_Ok
     } else {
+        let row_mcx = per_tuple_mcx(estate);
         let EStateData {
             es_relations,
             es_tupleTable,
@@ -4170,16 +4251,23 @@ fn merge_update_act<'mcx>(
                 Some(rr) => (rr.rti, es_relations[(rr.rti - 1) as usize].as_ref()),
                 None => (mt.rels[mt.cur].rti, None),
             };
-            let mod_cols = rte_modified_cols(mcx, &es_range_table[..], *es_rteperminfos, perm_rti)?;
-            let r = &mut mt.rels[mt.cur];
-            exec_constraints(
+            let mod_cols = rte_modified_cols_cached(
+                &mut mt.rte_mod_cols,
                 mcx,
+                &es_range_table[..],
+                *es_rteperminfos,
+                perm_rti,
+            )?;
+            let r = &mut mt.rels[mt.cur];
+            exec_constraints_in_row(
+                mcx,
+                row_mcx,
                 &mut r.check_exprs,
                 &mut r.virtual_nn_exprs,
                 rel,
                 slot,
                 err_root_rel,
-                Some(&mod_cols),
+                Some(mod_cols),
             )?;
         }
 
@@ -4421,17 +4509,6 @@ fn exec_merge_not_matched<'mcx>(
         u32,
     ) -> PgResult<Option<ExecSlotId>>,
 ) -> PgResult<Option<ExecSlotId>> {
-    // INSERT actions project into and insert via the root relation when the
-    // target is inherited/partitioned (C rootRelInfo).
-    let new_id = if mt.root.is_some() {
-        mt.root_rel()
-            .ri_newTupleSlot
-            .expect("ExecInitMerge built the root new slot")
-    } else {
-        mt.rel()
-            .ri_newTupleSlot
-            .expect("ExecInitMergeTupleSlots ran")
-    };
     let n_actions = mt
         .rel()
         .merge
@@ -4447,6 +4524,17 @@ fn exec_merge_not_matched<'mcx>(
         }
         match command_type {
             CmdType::CMD_INSERT => {
+                // Root slot (C rootRelInfo) exists only when an INSERT action
+                // does: a concurrently deleted MATCHED row lands here without one.
+                let new_id = if mt.root.is_some() {
+                    mt.root_rel()
+                        .ri_newTupleSlot
+                        .expect("ExecInitMerge built the root new slot")
+                } else {
+                    mt.rel()
+                        .ri_newTupleSlot
+                        .expect("ExecInitMergeTupleSlots ran")
+                };
                 merge_project_not_matched(mt, estate, ai, plan_slot, new_id)?;
                 mt.merge_active_cmd = Some(CmdType::CMD_INSERT);
                 mt.insert_target_root = mt.root.is_some();
@@ -5262,6 +5350,7 @@ fn exec_update<'mcx>(
         let result = if cross_part {
             TM_Result::TM_Ok
         } else {
+            let row_mcx = per_tuple_mcx(estate);
             let EStateData {
                 es_relations,
                 es_tupleTable,
@@ -5289,17 +5378,23 @@ fn exec_update<'mcx>(
                     Some(rr) => (rr.rti, es_relations[(rr.rti - 1) as usize].as_ref()),
                     None => (mt.rels[mt.cur].rti, None),
                 };
-                let mod_cols =
-                    rte_modified_cols(mcx, &es_range_table[..], *es_rteperminfos, perm_rti)?;
-                let r = &mut mt.rels[mt.cur];
-                exec_constraints(
+                let mod_cols = rte_modified_cols_cached(
+                    &mut mt.rte_mod_cols,
                     mcx,
+                    &es_range_table[..],
+                    *es_rteperminfos,
+                    perm_rti,
+                )?;
+                let r = &mut mt.rels[mt.cur];
+                exec_constraints_in_row(
+                    mcx,
+                    row_mcx,
                     &mut r.check_exprs,
                     &mut r.virtual_nn_exprs,
                     rel,
                     slot,
                     err_root_rel,
-                    Some(&mod_cols),
+                    Some(mod_cols),
                 )?;
             }
 
@@ -6347,8 +6442,8 @@ fn ensure_returning_slot<'mcx>(
 
 // ExecAR{Insert,Update,Delete}Triggers' opening guard (trigger.c:2555-2562 /
 // 2816-2823 / 3162-3170): `ri_FdwRoutine && transition_capture &&
-// tcs_<op>_table` -> 0A000, applied before the remote DML: C's error also
-// precedes any AFTER trigger work and rolls the remote change back.
+// tcs_<op>_table` -> 0A000, applied after the remote DML (a remote error is
+// what the user sees first) and before any AFTER trigger work, as C.
 fn foreign_transition_capture_check<'mcx>(
     mt: &ModifyTableState<'mcx>,
     estate: &EStateData<'mcx>,
@@ -8006,12 +8101,12 @@ fn exec_insert<'mcx>(
     // indexes are the remote's job; the tail (es_processed, WCO_VIEW_CHECK,
     // RETURNING via the caller) mirrors the common exit.
     if mt.rel().ri_FdwRoutine.is_some() {
-        // ExecARInsertTriggers' first check (trigger.c:2555-2562).
-        foreign_transition_capture_check(mt, estate, CmdType::CMD_INSERT)?;
         fdw_prepare_new_slot(mt, estate, CmdType::CMD_INSERT, slot_id)?;
         if !exec_foreign_modify_row(mt, estate, CmdType::CMD_INSERT, slot_id, slot_id)? {
             return Ok(None);
         }
+        // ExecARInsertTriggers' first check (trigger.c:2555-2562).
+        foreign_transition_capture_check(mt, estate, CmdType::CMD_INSERT)?;
         fdw_ar_row_triggers(mt, estate, types_trigger::TRIGGER_EVENT_INSERT, None, Some(slot_id), None)?;
         if !mt.rel().wco_exprs.is_empty() {
             let ecxt = mt.node_ecxt;
@@ -8044,6 +8139,8 @@ fn exec_insert<'mcx>(
         let EStateData {
             es_relations,
             es_tupleTable,
+            es_range_table,
+            es_rteperminfos,
             ..
         } = &mut *estate;
         let ModifyTableState {
@@ -8066,8 +8163,15 @@ fn exec_insert<'mcx>(
         {
             let slot = &mut es_tupleTable[slot_id.0 as usize];
             if !execpartition::exec_partition_check(mcx, &mut r.partition_check, target, slot)? {
+                // execMain.c:1955: the target's inserted/updated columns.
+                let mod_cols =
+                    rte_modified_cols(mcx, &es_range_table[..], *es_rteperminfos, r.rti)?;
                 return Err(execpartition::partition_constraint_violation(
-                    mcx, target, slot, None, None,
+                    mcx,
+                    target,
+                    slot,
+                    Some(&mod_cols),
+                    None,
                 ));
             }
         }
@@ -8083,12 +8187,16 @@ fn exec_insert<'mcx>(
             es_instrument,
             es_query_cxt,
             es_partition_directory,
+            es_range_table,
+            es_rteperminfos,
             ..
         } = &mut *estate;
         let target = es_relations[(mt.rel().rti - 1) as usize]
             .as_ref()
             .expect("result relation opened");
         if target.rd_rel.relkind == types_rel::RELKIND_PARTITIONED_TABLE {
+            let mod_cols =
+                rte_modified_cols(mcx, &es_range_table[..], *es_rteperminfos, mt.rel().rti)?;
             let slot = &mut es_tupleTable[slot_id.0 as usize];
             let router = match mt.router.as_mut() {
                 Some(r) => r,
@@ -8108,6 +8216,7 @@ fn exec_insert<'mcx>(
                     .expect("index_eval_cx live until ExecEndNode")
                     .mcx(),
                 es_partition_directory,
+                Some(&mod_cols),
             )?;
             while mt.leaf_indexes.len() <= idx {
                 mt.leaf_indexes.push(None);
@@ -8205,6 +8314,7 @@ fn exec_insert<'mcx>(
                         *es_query_cxt,
                         *es_instrument,
                         executils::TrigInstrRelKind::Routing,
+                        true,
                         lrelid,
                         std::str::from_utf8(lrelname.name_str()).unwrap_or(""),
                         td.as_deref(),
@@ -8416,11 +8526,13 @@ fn exec_insert<'mcx>(
         // re-routed INSERT, rels[cur] is the SOURCE partition, whose RTE
         // carries no perminfo (execUtils.c GetResultRTEPermissionInfo via
         // ri_RootResultRelInfo).
-        let target_rte = estate.es_range_table[(mt.rel().rti - 1) as usize];
-        let perminfos = estate.es_rteperminfos;
+        let target_rti = mt.rel().rti;
+        let row_mcx = per_tuple_mcx(estate);
         let EStateData {
             es_relations,
             es_tupleTable,
+            es_range_table,
+            es_rteperminfos,
             ..
         } = &mut *estate;
         let ModifyTableState {
@@ -8432,6 +8544,7 @@ fn exec_insert<'mcx>(
             leaf_checks,
             leaf_virtual_nn,
             leaf_partition_check,
+            rte_mod_cols,
             ..
         } = &mut *mt;
         let root_rti = root.as_ref().map_or(rels[0].rti, |rr| rr.rti);
@@ -8475,28 +8588,22 @@ fn exec_insert<'mcx>(
         // ExecGetInsertedCols/UpdatedCols via the target RTE's perminfo, in
         // the description rel's (root's) numbering (execUtils.c
         // GetResultRTEPermissionInfo).
-        let mod_cols = {
-            let rte = target_rte;
-            let mut cols = types_nodes::Bitmapset::empty();
-            if rte.perminfoindex > 0 {
-                if let Some(pis) = perminfos {
-                    let pi = pis
-                        .nth(rte.perminfoindex as usize - 1)
-                        .as_rte_permission_info()
-                        .expect("permInfos cell");
-                    cols = pi.insertedCols.union(&pi.updatedCols, mcx)?;
-                }
-            }
-            cols
-        };
-        exec_constraints(
+        let mod_cols = rte_modified_cols_cached(
+            rte_mod_cols,
             mcx,
+            &es_range_table[..],
+            *es_rteperminfos,
+            target_rti,
+        )?;
+        exec_constraints_in_row(
+            mcx,
+            row_mcx,
             check_exprs,
             virtual_nn_exprs,
             rel,
             slot,
             err_root_rel,
-            Some(&mod_cols),
+            Some(mod_cols),
         )?;
 
         // ExecInsert (nodeModifyTable.c): direct INSERTs into a partition
@@ -8508,7 +8615,7 @@ fn exec_insert<'mcx>(
                     mcx,
                     rel,
                     slot,
-                    Some(&mod_cols),
+                    Some(mod_cols),
                     err_root_rel,
                 ));
             }
@@ -8925,9 +9032,9 @@ fn oc_speculative_insert<'mcx>(
 
 // ExecUpdateLockMode (execMain.c): the conflicting row takes the weaker
 // NoKeyExclusive lock when the DO UPDATE SET columns don't overlap any key
-// column (ExecGetAllUpdatedCols vs INDEX_ATTR_BITMAP_KEY). Routed leaves map
-// the root's updated columns through the root->leaf attrmap; leaf-local
-// generated-column extras aren't recomputed (the root's, mapped, stand in).
+// column (ExecGetAllUpdatedCols vs INDEX_ATTR_BITMAP_KEY). A routed leaf's
+// updated columns are its own ExecGetAllUpdatedCols (mapped perminfo columns
+// plus the leaf's generated-column dependencies).
 fn exec_update_lock_mode<'mcx>(
     mt: &mut ModifyTableState<'mcx>,
     estate: &EStateData<'mcx>,
@@ -8935,30 +9042,24 @@ fn exec_update_lock_mode<'mcx>(
 ) -> PgResult<LockTupleMode> {
     const FLIHAN: i32 = types_tuple::htup::FirstLowInvalidHeapAttributeNumber;
     let mcx = estate.es_query_cxt;
-    ensure_all_updated_cols(mt, estate, false)?;
-    let rti = mt.rel().rti;
-    let rel = estate.es_relations[(rti - 1) as usize]
-        .as_ref()
-        .expect("result relation opened");
-    let mut cols = mt
-        .rel()
-        .all_updated_cols
-        .as_ref()
-        .expect("resolved above")
-        .clone_in(mcx)?;
-    let rel_id = match leaf {
-        None => rel.rd_id,
+    let (cols, rel_id) = match leaf {
+        None => {
+            ensure_all_updated_cols(mt, estate, false)?;
+            let rti = mt.rel().rti;
+            let rel = estate.es_relations[(rti - 1) as usize]
+                .as_ref()
+                .expect("result relation opened");
+            let cols = mt
+                .rel()
+                .all_updated_cols
+                .as_ref()
+                .expect("resolved above")
+                .clone_in(mcx)?;
+            (cols, rel.rd_id)
+        }
         Some(idx) => {
-            let leaf_rel = mt.router.as_ref().expect("routed").leaf_rel(idx);
-            if let Some(map) = tupdesc::build_attrmap_by_name_if_req(
-                mcx,
-                &rel.rd_att,
-                &leaf_rel.rd_att,
-                !leaf_rel.rd_rel.relispartition,
-            )? {
-                cols = execute_attr_map_cols(mcx, &map, &cols)?;
-            }
-            leaf_rel.rd_id
+            let cols = leaf_all_updated_cols(mt, estate, idx)?;
+            (cols, mt.router.as_ref().expect("routed").leaf_rel(idx).rd_id)
         }
     };
     let bitmaps = ::relcache_seams::relation_get_index_attr_bitmap::call(rel_id)?;
@@ -9562,25 +9663,12 @@ fn exec_leaf_conflict_update<'mcx>(
     {
         let ModifyTableState {
             router,
-            leaf_checks,
-            leaf_virtual_nn,
             leaf_generated_u,
             leaf_partition_check,
-            rels,
-            root,
-            cur,
             ..
         } = &mut *mt;
-        let _root_rti = root.as_ref().map_or(rels[0].rti, |rr| rr.rti);
         let rel = router.as_ref().expect("routed").leaf_rel(idx);
-        let EStateData {
-            es_tupleTable,
-            es_relations,
-            es_range_table,
-            es_rteperminfos,
-            ..
-        } = &mut *estate;
-        let slot = &mut es_tupleTable[proj_id.0 as usize];
+        let slot = &mut estate.es_tupleTable[proj_id.0 as usize];
 
         slot.base_mut().tts_tableOid = rel.rd_id;
         if rel
@@ -9607,6 +9695,39 @@ fn exec_leaf_conflict_update<'mcx>(
         {
             return Err(invalid_on_update_specification());
         }
+    }
+
+    // C ExecUpdateAct: UPDATE RLS WITH CHECK quals over the NEW row, evaluated
+    // on the routed leaf's translated WCO list (ExecInitPartitionInfo) before
+    // ExecConstraints (nodeModifyTable.c:2210) — the same WCO_RLS_UPDATE_CHECK
+    // enforcement and order the non-partitioned path (exec_update) applies.
+    if mt.leaf_wco[idx].as_ref().is_some_and(|w| !w.is_empty()) {
+        let ecxt = mt.node_ecxt;
+        let wcos = mt.leaf_wco[idx].as_mut().expect("checked");
+        exec_with_check_options(estate, ecxt, wcos, WCOKind::WCO_RLS_UPDATE_CHECK, proj_id)?;
+    }
+
+    {
+        let ModifyTableState {
+            router,
+            leaf_checks,
+            leaf_virtual_nn,
+            rels,
+            root,
+            cur,
+            rte_mod_cols,
+            ..
+        } = &mut *mt;
+        let rel = router.as_ref().expect("routed").leaf_rel(idx);
+        let row_mcx = per_tuple_mcx(estate);
+        let EStateData {
+            es_tupleTable,
+            es_relations,
+            es_range_table,
+            es_rteperminfos,
+            ..
+        } = &mut *estate;
+        let slot = &mut es_tupleTable[proj_id.0 as usize];
 
         // ri_RootResultRelInfo leg: the routed leaf reports through the
         // target's (root's) rel + perminfo (execMain.c ExecConstraints).
@@ -9617,26 +9738,23 @@ fn exec_leaf_conflict_update<'mcx>(
                 es_relations[(rels[*cur].rti - 1) as usize].as_ref(),
             ),
         };
-        let mod_cols = rte_modified_cols(mcx, &es_range_table[..], *es_rteperminfos, perm_rti)?;
-        exec_constraints(
+        let mod_cols = rte_modified_cols_cached(
+            rte_mod_cols,
             mcx,
+            &es_range_table[..],
+            *es_rteperminfos,
+            perm_rti,
+        )?;
+        exec_constraints_in_row(
+            mcx,
+            row_mcx,
             &mut leaf_checks[idx],
             &mut leaf_virtual_nn[idx],
             rel,
             slot,
             err_root_rel,
-            Some(&mod_cols),
+            Some(mod_cols),
         )?;
-    }
-
-    // C ExecUpdateAct: UPDATE RLS WITH CHECK quals over the NEW row, evaluated
-    // on the routed leaf's translated WCO list (ExecInitPartitionInfo) before
-    // table_tuple_update — the same WCO_RLS_UPDATE_CHECK enforcement the
-    // non-partitioned path (exec_update) already applies.
-    if mt.leaf_wco[idx].as_ref().is_some_and(|w| !w.is_empty()) {
-        let ecxt = mt.node_ecxt;
-        let wcos = mt.leaf_wco[idx].as_mut().expect("checked");
-        exec_with_check_options(estate, ecxt, wcos, WCOKind::WCO_RLS_UPDATE_CHECK, proj_id)?;
     }
 
     let result = {
@@ -10291,6 +10409,15 @@ fn wco_violation(w: &WcoExpr<'_>) -> Box<PgError> {
 }
 
 // ExecConstraints (execMain.c): NOT NULL + CHECK arms live.
+// GetPerTupleMemoryContext(estate): the row-scoped context mt_row_prologue
+// resets before the next child row.
+fn per_tuple_mcx<'mcx>(estate: &mut EStateData<'mcx>) -> mcx::Mcx<'mcx> {
+    let per_tuple: core::ptr::NonNull<mcx::MemoryContext> =
+        core::ptr::NonNull::from(estate.get_per_tuple_memory().context());
+    // SAFETY: the per-tuple ExprContext lives in the estate for the whole query.
+    unsafe { per_tuple.as_ref() }.mcx()
+}
+
 pub fn exec_constraints<'mcx>(
     mcx: mcx::Mcx<'mcx>,
     check_exprs: &mut Option<mcx::PgVec<'mcx, CheckExpr<'mcx>>>,
@@ -10348,7 +10475,7 @@ fn exec_constraints_impl<'mcx, const ROW: bool>(
         if constr.has_not_null {
             exec_not_null_constraints(mcx, rel, slot, root_rel, modified_cols)?;
             if constr.has_generated_virtual {
-                if let Some(i) = exec_rel_gen_virtual_notnull(mcx, virtual_nn_exprs, rel, slot)? {
+                if let Some(i) = exec_rel_gen_virtual_notnull(mcx, row_mcx, virtual_nn_exprs, rel, slot)? {
                     return Err(not_null_violation(
                         mcx,
                         rel,
@@ -10639,6 +10766,7 @@ fn expand_generated_columns_in_expr<'mcx>(
 // generation expression per virtual not-null column; compiled once.
 pub fn exec_rel_gen_virtual_notnull<'mcx>(
     mcx: mcx::Mcx<'mcx>,
+    row_mcx: mcx::Mcx<'_>,
     virtual_nn_exprs: &mut Option<mcx::PgVec<'mcx, VirtualNnExpr<'mcx>>>,
     rel: &Relation<'mcx>,
     slot: &mut SlotData<'mcx>,
@@ -10677,7 +10805,13 @@ pub fn exec_rel_gen_virtual_notnull<'mcx>(
             inner: None,
             outer: None,
         };
-        let r = execexpr::exec_eval_expr(&mut e.state, &mut slots)?;
+        // SAFETY: only the NullTest Boolean escapes; the generated value
+        // dies with the row (execMain.c:2139 evaluates in the per-tuple
+        // econtext); the persistent frame is restored below.
+        unsafe { e.state.arm_result_mcx_raw(row_mcx) };
+        let result = execexpr::exec_eval_expr(&mut e.state, &mut slots);
+        e.state.arm_result_mcx(mcx);
+        let r = result?;
         if !r.isnull && !r.value.as_bool() {
             return Ok(Some(e.attnum));
         }
@@ -10820,7 +10954,7 @@ mcx::forget_safe_struct!(
         mt_merge_pending_not_matched, outer_instr_idx, instr_idx, epq_origslot,
         rels, root, leaf_checks, leaf_virtual_nn, leaf_generated, leaf_generated_u, leaf_fdw_kind, leaf_slots,
         leaf_arbiters, leaf_existing, leaf_child_to_root, leaf_wco,
-        leaf_returning_old, leaf_all_null, leaf_ri_checked, leaf_trig_instr;
+        leaf_returning_old, leaf_all_null, leaf_ri_checked, leaf_trig_instr, rte_mod_cols;
         operation, snapshot_any, on_conflict, epq_subs, epq_arowmarks,
         router, leaf_indexes, leaf_partition_check,
         leaf_on_conflict, leaf_fdw_state,

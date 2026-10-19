@@ -427,8 +427,10 @@ pub fn SpeculativeInsertionWait(xid: TransactionId, token: u32) -> PgResult<()> 
     Ok(())
 }
 
-// C installs an error_context_stack callback around the wait; per the elog
-// stack design, ERROR-path context attaches on propagation instead.
+// C installs an error_context_stack callback around the wait (lmgr.c:684);
+// per the elog stack design, ERROR-path context attaches on propagation,
+// while the emit callback decorates the LOG reports raised mid-wait
+// (log_lock_waits) the way XactLockTableWaitErrorCb does.
 pub fn XactLockTableWait(
     xid: TransactionId,
     rel: Option<&RelationData<'_>>,
@@ -440,8 +442,16 @@ pub fn XactLockTableWait(
     }
     debug_assert!(rel.is_some());
     debug_assert!(ctid.is_some_and(ItemPointerIsValid));
-    xact_lock_table_wait_loop(xid).map_err(|mut e| {
-        if let Some(line) = xact_wait_context(rel, ctid, oper) {
+    let line = xact_wait_context(rel, ctid, oper);
+    let callback = line.clone().map(|line| {
+        elog::push_emit_context_callback(Box::new(move |e| e.add_context_line(line.clone())))
+    });
+    let result = xact_lock_table_wait_loop(xid);
+    if let Some(id) = callback {
+        elog::pop_emit_context_callback(id);
+    }
+    result.map_err(|mut e| {
+        if let Some(line) = line {
             e.add_context_line(line);
         }
         e

@@ -33,6 +33,13 @@ fn in_fastutf8() -> bool {
     })
 }
 
+// date.c:138 (and time_in/timetz_in): the input cstring bytes verbatim in
+// the parse-error message.
+fn in_raw<'a>(fcinfo: &'a Fcinfo) -> &'a [u8] {
+    // SAFETY: catalog arg 0 of the in-functions is cstring (typlen -2).
+    unsafe { fcinfo.arg_cstring(0) }.to_bytes()
+}
+
 fn in_arg<'a>(fcinfo: &'a Fcinfo) -> std::borrow::Cow<'a, str> {
     // SAFETY: catalog arg 0 of the in-functions is cstring (typlen -2).
     let s = unsafe { fcinfo.arg_cstring(0) };
@@ -66,10 +73,10 @@ fn arg_timetz(fcinfo: &Fcinfo, i: usize) -> TimeTzADT {
 }
 
 pub fn fc_date_in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let s = in_arg(fcinfo);
+    let s = in_raw(fcinfo);
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
-    Ok(Datum::from_i32(crate::date_in(&s, esc)?))
+    Ok(Datum::from_i32(crate::date_in(s, esc)?))
 }
 
 pub fn fc_date_out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -277,10 +284,10 @@ date_ts_cross! {
 
 pub fn fc_time_in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let typmod = fcinfo.arg_i32(2);
-    let s = in_arg(fcinfo);
+    let s = in_raw(fcinfo);
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
-    Ok(Datum::from_i64(crate::time_in(&s, typmod, esc)?))
+    Ok(Datum::from_i64(crate::time_in(s, typmod, esc)?))
 }
 
 pub fn fc_time_out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -927,10 +934,10 @@ time_part_fns! {
 
 pub fn fc_timetz_in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let typmod = fcinfo.arg_i32(2);
-    let s = in_arg(fcinfo);
+    let s = in_raw(fcinfo);
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
-    let t = crate::timetz_in(&s, typmod, esc)?;
+    let t = crate::timetz_in(s, typmod, esc)?;
     timetz_result(fcinfo, &t)
 }
 

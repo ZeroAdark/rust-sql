@@ -88,15 +88,25 @@ pub struct PgStatState {
 
 impl PgStatState {
     pub(crate) fn prep_pending_entry(&mut self, key: PgStat_HashKey) -> &mut PendingData {
+        self.prep_pending_entry_ext(key).0
+    }
+
+    // pgstat_prep_pending_entry with its `created_entry` out-parameter: true
+    // only when the SHARED entry was created now (pgstat.c:1247-1256), not
+    // when merely the backend's pending entry was.
+    pub(crate) fn prep_pending_entry_ext(
+        &mut self,
+        key: PgStat_HashKey,
+    ) -> (&mut PendingData, bool) {
         let mcx = self.ctx.mcx();
         match self.pending.entry(key) {
-            Entry::Occupied(e) => e.into_mut(),
+            Entry::Occupied(e) => (e.into_mut(), false),
             Entry::Vacant(v) => {
                 self.pending_order.push(key);
                 // Stale-true on a test-local state is harmless (see HAVE_PENDING).
                 HAVE_PENDING.with(|c| c.set(true));
-                crate::shmem::ensure_entry_for_pending(key);
-                v.insert(new_pending_data(key, mcx))
+                let created = crate::shmem::ensure_entry_for_pending(key);
+                (v.insert(new_pending_data(key, mcx)), created)
             }
         }
     }

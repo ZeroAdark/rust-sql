@@ -7,7 +7,7 @@ use types_error::{
     ERRCODE_INVALID_TEXT_REPRESENTATION, ERROR, WARNING,
 };
 use types_nodes::NodeTag;
-use types_portal::{ParamListHandle, QueryCompletion, QueryEnvHandle, CURSOR_OPT_PARALLEL_OK};
+use types_portal::{ParamListHandle, QueryEnvHandle, CURSOR_OPT_PARALLEL_OK};
 
 use crate::control::{get_extension_script_filename, read_whole_file, ExtensionControlFile};
 
@@ -68,8 +68,9 @@ fn clean_querytext(query: &str, location: &mut i32, len: &mut i32) -> (usize, us
     (begin, end)
 }
 
-// script_error_callback (extension.c:904-1030), applied on the propagation
-// path instead of C's error_context_stack (repo error-context divergence).
+// script_error_callback (extension.c:904-1030): on the emit-context stack for
+// reports raised inside the script (WARNING/NOTICE decorated at emit time)
+// and applied on the propagation path for an ERROR leaving execute_sql_string.
 fn apply_script_error_context(
     mut e: Box<PgError>,
     sql: &str,
@@ -77,6 +78,17 @@ fn apply_script_error_context(
     stmt_location: i32,
     stmt_len: i32,
 ) -> Box<PgError> {
+    script_error_callback(&mut e, sql, filename, stmt_location, stmt_len);
+    e
+}
+
+fn script_error_callback(
+    e: &mut PgError,
+    sql: &str,
+    filename: &str,
+    stmt_location: i32,
+    stmt_len: i32,
+) {
     let mut location = stmt_location;
     let mut len = stmt_len;
 
@@ -146,7 +158,33 @@ fn apply_script_error_context(
     } else {
         e.add_context_line(format!("extension script file \"{lastslash}\""));
     }
-    e
+}
+
+struct ScriptErrorContext {
+    bounds: std::rc::Rc<std::cell::Cell<(i32, i32)>>,
+    callback: u64,
+}
+
+impl ScriptErrorContext {
+    fn push(sql: &str, filename: &str) -> ScriptErrorContext {
+        let bounds = std::rc::Rc::new(std::cell::Cell::new((-1, -1)));
+        let callback = {
+            let bounds = std::rc::Rc::clone(&bounds);
+            let sql = sql.to_owned();
+            let filename = filename.to_owned();
+            elog::push_emit_context_callback(Box::new(move |e: &mut PgError| {
+                let (stmt_location, stmt_len) = bounds.get();
+                script_error_callback(e, &sql, &filename, stmt_location, stmt_len);
+            }))
+        };
+        ScriptErrorContext { bounds, callback }
+    }
+}
+
+impl Drop for ScriptErrorContext {
+    fn drop(&mut self) {
+        elog::pop_emit_context_callback(self.callback);
+    }
 }
 
 // execute_sql_string (extension.c:1045-1165). SPI is deliberately not used
@@ -159,7 +197,8 @@ pub(crate) fn execute_sql_string(sql: &str, filename: &str) -> PgResult<()> {
     let sql_ref: &str = sql_owned.as_str();
 
     let mut stmt_location: i32 = -1;
-    let mut stmt_len: i32 = 0;
+    let mut stmt_len: i32 = -1;
+    let errctx = ScriptErrorContext::push(sql, filename);
 
     let result = (|| -> PgResult<()> {
         let raw_parsetree_list = parser_seams::raw_parser::call(
@@ -173,49 +212,26 @@ pub(crate) fn execute_sql_string(sql: &str, filename: &str) -> PgResult<()> {
         for parsetree in raw_parsetree_list.iter() {
             stmt_location = parsetree.stmt_location;
             stmt_len = parsetree.stmt_len;
+            errctx.bounds.set((stmt_location, stmt_len));
 
             xact::CommandCounterIncrement()?;
 
-            let query = analyze_seams::parse_analyze_fixedparams::call(
+            // extension.c:1096-1102: pg_analyze_and_rewrite_fixedparams +
+            // pg_plan_queries carry debug_print_* and log_*_stats.
+            let query_list = postgres::simple_query::pg_analyze_and_rewrite_fixedparams(
                 mcx,
                 parsetree,
                 sql_ref,
                 &[],
                 QueryEnvHandle::NULL,
             )?;
-            let query_list = if query.commandType == types_nodes::nodes_enums::CmdType::CMD_UTILITY
-            {
-                let mut v = mcx::PgVec::new_in(mcx);
-                v.try_reserve_exact(1).map_err(|_| mcx.oom(1))?;
-                v.push(query);
-                v
-            } else {
-                rewrite_handler_seams::query_rewrite::call(mcx, query)?
-            };
-
-            let mut stmt_list = mcx::PgVec::new_in(mcx);
-            stmt_list.try_reserve_exact(query_list.len()).map_err(|_| mcx.oom(query_list.len()))?;
-            for query in query_list {
-                if query.commandType == types_nodes::nodes_enums::CmdType::CMD_UTILITY {
-                    stmt_list.push(types_nodes::plannodes::PlannedStmt {
-                        commandType: types_nodes::nodes_enums::CmdType::CMD_UTILITY,
-                        canSetTag: query.canSetTag,
-                        utilityStmt: query.utilityStmt,
-                        stmt_location: query.stmt_location,
-                        stmt_len: query.stmt_len,
-                        queryId: types_nodes::SyncCell::new(query.queryId),
-                        ..types_nodes::plannodes::PlannedStmt::default()
-                    });
-                } else {
-                    stmt_list.push(planner_seams::planner::call(
-                        mcx,
-                        mcx::leak_in(mcx::alloc_in(mcx, query)?),
-                        sql_ref,
-                        CURSOR_OPT_PARALLEL_OK,
-                        ParamListHandle::NULL,
-                    )?);
-                }
-            }
+            let stmt_list = postgres::simple_query::pg_plan_queries(
+                mcx,
+                query_list,
+                sql_ref,
+                CURSOR_OPT_PARALLEL_OK,
+                ParamListHandle::NULL,
+            )?;
 
             for stmt in stmt_list.iter() {
                 xact::CommandCounterIncrement()?;
@@ -269,7 +285,6 @@ pub(crate) fn execute_sql_string(sql: &str, filename: &str) -> PgResult<()> {
                             .into());
                     }
 
-                    let mut qc = QueryCompletion::default();
                     utility_seams::process_utility::call(
                         mcx,
                         stmt,
@@ -279,7 +294,7 @@ pub(crate) fn execute_sql_string(sql: &str, filename: &str) -> PgResult<()> {
                         ParamListHandle::NULL,
                         QueryEnvHandle::NULL,
                         &mut dest,
-                        Some(&mut qc),
+                        None,
                     )?;
                 }
 

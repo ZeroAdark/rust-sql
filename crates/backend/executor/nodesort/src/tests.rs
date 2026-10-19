@@ -240,6 +240,17 @@ fn rescan_without_random_access_resorts() {
 }
 
 #[test]
+fn rescan_reset_forgets_sort_stats() {
+    let rows = vec![vec![Some(2)], vec![Some(1)]];
+    let (mut node, mut estate, desc, mut feed) = setup(1, rows, 0);
+    let id = node.plan.plan.plan_node_id;
+    drain(&mut node, &mut estate, &desc, &mut feed);
+    assert!(estate.es_sort_instrumentation.iter().any(|(i, _)| *i == id));
+    assert!(exec_rescan_sort(&mut node, &mut estate).unwrap());
+    assert!(!estate.es_sort_instrumentation.iter().any(|(i, _)| *i == id));
+}
+
+#[test]
 fn bound_pushdown_uses_bounded_sort() {
     let rows: Vec<Vec<Option<i32>>> = (0..500).rev().map(|i| vec![Some(i)]).collect();
     let (mut node, mut estate, desc, mut feed) = setup(1, rows, 0);

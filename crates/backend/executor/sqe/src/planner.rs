@@ -2335,14 +2335,21 @@ pub fn plan_from_ap(bank: &Bank, faces: &Faces, ap: &APlan) -> Result<PlanNode, 
     // planes the engine cache serves, `col <> ''` joins the FRAME as a
     // varlena term; lane-A families keep the drop-empty-only lowering.
     // Family-driven lowering policy, not query policy.
-    if matches!(
-        node.family,
-        ir::Family::WindowReplay
-            | ir::Family::SurvivorGather
-            | ir::Family::ScanServe
-            | ir::Family::SortGrouped
-            | ir::Family::WindowServe
-    ) {
+    // The ungrouped filtered fold evaluates var terms and nothing else
+    // reads ne_empty_cols there: unpromoted, the conjunct would vanish.
+    let scalar_fold = node.family == ir::Family::FusedFilterAgg
+        && node.params.group_cols.is_empty()
+        && !node.agg.iter().any(|a| a.op == AggOp::EmitMatches);
+    if scalar_fold
+        || matches!(
+            node.family,
+            ir::Family::WindowReplay
+                | ir::Family::SurvivorGather
+                | ir::Family::ScanServe
+                | ir::Family::SortGrouped
+                | ir::Family::WindowServe
+        )
+    {
         let ne: Vec<u32> = node.params.ne_empty_cols.clone();
         if !ne.is_empty() {
             let spec = node.pred.get_or_insert_with(|| ir::PredSpec {

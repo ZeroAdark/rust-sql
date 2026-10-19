@@ -1485,6 +1485,21 @@ fn save_stmt_event<'mcx>(
                 continue;
             }
         }
+        let op = event & TRIGGER_EVENT_OPMASK;
+        if op == TRIGGER_EVENT_UPDATE || op == TRIGGER_EVENT_DELETE {
+            match ri_trigger_kind(trigger.tgfoid) {
+                RI_TRIGGER_PK => {
+                    ri_triggers_seams::ri_fkey_stmt_check_required::call(trigger, rel, true)?;
+                }
+                RI_TRIGGER_FK => {
+                    if rel.rd_rel.relkind == RELKIND_PARTITIONED_TABLE {
+                        continue;
+                    }
+                    ri_triggers_seams::ri_fkey_stmt_check_required::call(trigger, rel, false)?;
+                }
+                _ => {}
+            }
+        }
         // C's F_UNIQUE_KEY_RECHECK skip applies to statement-level events
         // too: recheckIndexes is NIL here, so the trigger is never queued
         // (trigger.c:6522-6526).

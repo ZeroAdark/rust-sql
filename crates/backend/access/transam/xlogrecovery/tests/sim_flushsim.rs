@@ -1,4 +1,4 @@
-// GL-FLUSHSIM-1 — deterministic multi-session COMMIT-PATH trajectory sim.
+// regression — deterministic multi-session COMMIT-PATH trajectory sim.
 //
 // The sim_crash_sweep enumeration pattern (writer child + recover child over
 // SimVfs, product WAL/commit/recovery paths) generalized to the commit path
@@ -1691,7 +1691,7 @@ fn flushsim_recover_child() {
             };
             let nblocks = smgr::smgrnblocks(key, ForkNumber::MAIN_FORKNUM).unwrap();
             // Page fold through the product's smgr/md read path (bufmgr's
-            // cold-read path is aio-native post-GL-AIO-1; this rig has no
+            // cold-read path is aio-native post-regression; this rig has no
             // aio bring-up and needs none). Visibility for this INSERT-ONLY
             // workload is exactly "xmin clog-committed" — the same
             // semantics the MVCC walk yields with every xid in the past.

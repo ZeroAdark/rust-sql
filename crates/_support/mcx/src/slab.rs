@@ -221,7 +221,8 @@ impl SlabArena {
         }
         let chunk = self.next_free_chunk(addr);
         let i = self.blocklist_index(block_mut(addr).nfree);
-        debug_assert_eq!(self.blocklist[i as usize], 0);
+        // Lane 0 (full blocks) legitimately chains: chunks_per_block == 1.
+        debug_assert!(i == 0 || self.blocklist[i as usize] == 0);
         self.push_head(i, addr);
         self.cur_blocklist_index = i;
         Ok(chunk_slice(chunk, self.full_chunk_size))
@@ -469,6 +470,28 @@ mod tests {
             assert!(p >= base + SLAB_BLKHDRSZ && p + CHUNK <= base + SLAB_DEFAULT_BLOCK_SIZE);
             assert_eq!((p - base - SLAB_BLKHDRSZ) % a.full_chunk_size, 0);
         }
+    }
+
+    #[test]
+    fn one_chunk_per_block_chains_full_blocks() {
+        let mut a = SlabArena::new(1024, 984);
+        assert_eq!(a.chunks_per_block, 1);
+        let acct = acct();
+        let layout = Layout::from_size_align(984, 8).unwrap();
+        let p0 = a.alloc(layout, &acct).unwrap().cast::<u8>();
+        let p1 = a.alloc(layout, &acct).unwrap().cast::<u8>();
+        let p2 = a.alloc(layout, &acct).unwrap().cast::<u8>();
+        assert_ne!(p0, p1);
+        assert_ne!(p1, p2);
+        assert_eq!(a.nblocks(), 3);
+        // SAFETY: all three are live from alloc with `layout`.
+        unsafe {
+            a.dealloc(p1, layout, &acct);
+            a.dealloc(p0, layout, &acct);
+            a.dealloc(p2, layout, &acct);
+        }
+        let q = a.alloc(layout, &acct).unwrap().cast::<u8>();
+        assert!([p0, p1, p2].contains(&q), "a parked empty block is reused");
     }
 
     #[test]

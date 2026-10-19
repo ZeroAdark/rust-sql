@@ -4,6 +4,20 @@ use super::*;
 // init through one gate and serialize the mutators.
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+// Shared by every test that needs the sizing/alloc seams and LWLocks: the
+// seams are set-once, so one gate installs them for all.
+fn stub_shmem_seams_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        shmem_seams::mul_size::set(|a, b| Ok(a.checked_mul(b).expect("mul_size overflow")));
+        shmem_seams::add_size::set(|a, b| Ok(a.checked_add(b).expect("add_size overflow")));
+        shmem_seams::shmem_alloc::set(|size| {
+            Ok(Box::leak(vec![0u8; size].into_boxed_slice()).as_mut_ptr())
+        });
+        lwlock::CreateLWLocks(false).unwrap();
+    });
+}
+
 fn shmem_for_tests() -> &'static CheckpointerShmemStruct {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| CheckpointerShmemInit(64).unwrap());
@@ -138,15 +152,7 @@ fn crash_reset_restores_boot_image() {
 fn absorb_oom_is_error_and_lock_release_recovers() {
     let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let cp = shmem_for_tests();
-    static LWLOCKS: std::sync::Once = std::sync::Once::new();
-    LWLOCKS.call_once(|| {
-        shmem_seams::mul_size::set(|a, b| Ok(a.checked_mul(b).expect("mul_size overflow")));
-        shmem_seams::add_size::set(|a, b| Ok(a.checked_add(b).expect("add_size overflow")));
-        shmem_seams::shmem_alloc::set(|size| {
-            Ok(Box::leak(vec![0u8; size].into_boxed_slice()).as_mut_ptr())
-        });
-        lwlock::CreateLWLocks(false).unwrap();
-    });
+    stub_shmem_seams_once();
 
     let prev_type = miscinit::GetMyBackendType();
     miscinit::SetMyBackendType(types_core::BackendType::Checkpointer);
@@ -194,4 +200,39 @@ fn shmem_init_registers_checkpointer_data() {
     );
     assert_eq!(cp.max_requests, 64);
     assert_eq!(cp.requests.len(), 64);
+}
+
+// checkpointer.c:829: a SIGHUP/SIGUSR1 pended while the checkpoint writes
+// buffers is dispatched by CheckpointWriteDelay itself, so a barrier or
+// reload does not wait for the write loop to finish.
+static HUP_OBSERVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn observe_hup() {
+    HUP_OBSERVED.store(true, Relaxed);
+}
+
+#[test]
+fn checkpoint_write_delay_drains_pended_thread_signals() {
+    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        stub_shmem_seams_once();
+        init_small::globals::SetMaxBackends(16);
+        procsignal::ProcSignalShmemInit();
+        procsignal_seams::proc_signal_barrier_pending::set(|| false);
+    });
+    const PID: i32 = 424_151;
+    procsignal::PreIdentitySignalAdopt(PID);
+    procsignal::pqsignal_thread(
+        procsignal::signums::SIGHUP,
+        procsignal::ThreadSignalHandler::Simple(observe_hup),
+    );
+    let prev_type = miscinit::GetMyBackendType();
+    miscinit::SetMyBackendType(types_core::BackendType::Checkpointer);
+    HUP_OBSERVED.store(false, Relaxed);
+    assert_eq!(procsignal::SendThreadSignal(PID, procsignal::signums::SIGHUP), 0);
+    assert!(!HUP_OBSERVED.load(Relaxed));
+    CheckpointWriteDelay(CHECKPOINT_IMMEDIATE, 0.0).unwrap();
+    assert!(HUP_OBSERVED.load(Relaxed));
+    miscinit::SetMyBackendType(prev_type);
+    procsignal::PreIdentitySignalRelease();
 }

@@ -338,6 +338,8 @@ fn XLogFileInitInternal(
         }
     }
 
+    let _ = elog::elog(types_error::DEBUG2, "creating and filling new WAL file");
+
     let tmppath = xlog_temp_path();
     let _ = fd::pg_unlink(&tmppath);
 
@@ -428,8 +430,10 @@ fn XLogFileInitInternal(
     let max_segno = logsegno + CheckPointSegments() as u64;
     if InstallXLogFileSegment(&mut installed_segno, &tmppath, true, max_segno, logtli)? {
         *added = true;
+        let _ = elog::elog(types_error::DEBUG2, "done creating and filling new WAL file");
     } else {
         let _ = fd::pg_unlink(&tmppath);
+        let _ = elog::elog(types_error::DEBUG2, "abandoned new WAL file");
     }
     Ok(-1)
 }
@@ -896,7 +900,7 @@ pub(crate) fn UpdateMinRecoveryPoint(lsn: XLogRecPtr, force: bool) -> PgResult<(
 /// [`XLogFlush`] and [`XLogFlushPipelined`]. Returns whether it slept (the
 /// caller then re-waits insertions, as C does).
 ///
-/// The sleep rides `waiter::sleep` (GL-FLUSHSIM-1 negotiated ask §5.3.2):
+/// The sleep rides `waiter::sleep` (regression negotiated ask §5.3.2):
 /// DST-schedulable (virtual clock), and native-equivalent — a pending
 /// unpark can end it early, exactly as C's pg_usleep returns early on
 /// EINTR (the delay is best-effort batching either way).
@@ -928,7 +932,7 @@ pub fn XLogFlush(record: XLogRecPtr) -> PgResult<()> {
     let insert_tli = ctl.InsertTimeLineID.load(Relaxed);
     init_small::globals::StartCriticalSection();
 
-    // GL-ERRFIX-1 E-2: every fallible step below sits INSIDE the critical
+    // regression E-2: every fallible step below sits INSIDE the critical
     // section opened above. Propagating with `?` from here skipped
     // EndCriticalSection and LEAKED CritSectionCount onto the calling thread
     // — and the caller can be a pool worker, whose Fatal arm never resets it,
@@ -971,7 +975,7 @@ pub fn XLogFlush(record: XLogRecPtr) -> PgResult<()> {
 
             XLogWrite((insertpos, insertpos), insert_tli, false)?;
             LWLockRelease(WALWriteLock())?;
-            // GL-FLUSHPIPE-1: this leader's flush may cover pipelined commit
+            // regression: this leader's flush may cover pipelined commit
             // waiters; complete them (after the lock release — wakes must not
             // lengthen the flush critical path). Knob-OFF cost: one memoized
             // bool read.
@@ -1003,7 +1007,7 @@ pub fn XLogFlush(record: XLogRecPtr) -> PgResult<()> {
     Ok(())
 }
 
-/// GL-FLUSHPIPE-1 — [`XLogFlush`] for the sync-commit call site (xact.c:1502's
+/// regression — [`XLogFlush`] for the sync-commit call site (xact.c:1502's
 /// `XLogFlush(XactLastRecEnd)`, and ONLY that site; every other flush caller
 /// keeps the incumbent path). Installed as the `xlog_flush_commit` seam.
 ///
@@ -1036,7 +1040,7 @@ pub fn XLogFlushPipelined(record: XLogRecPtr) -> PgResult<()> {
     let insert_tli = ctl.InsertTimeLineID.load(Relaxed);
     init_small::globals::StartCriticalSection();
 
-    // GL-ERRFIX-1 (E-2, the "escape being uncounted" half): balance the critical
+    // regression (E-2, the "escape being uncounted" half): balance the critical
     // section on the `?`-escape paths exactly as [`XLogFlush`] above — the loop
     // runs in a closure so EndCriticalSection is unconditional before any error
     // from a lock op or XLogWrite propagates out (C's END_CRIT_SECTION is
@@ -1240,7 +1244,7 @@ pub fn XLogBackgroundFlush(pacing: &mut WalFlushPacing) -> PgResult<bool> {
         flexible = false;
     }
 
-    // GL-FLUSHPIPE-1 (armed only; knob-OFF cost one memoized bool read):
+    // regression (armed only; knob-OFF cost one memoized bool read):
     // pipelined commit waiters are SYNC durability requests — raise the
     // write request to the pending max (which can exceed both LogwrtRqst
     // and asyncXactLSN: a mid-page commit record bumps neither) and treat
@@ -1256,7 +1260,7 @@ pub fn XLogBackgroundFlush(pacing: &mut WalFlushPacing) -> PgResult<bool> {
     }
 
     if write_rqst_write <= LOGWRT_RESULT.get().1 {
-        // GL-FLUSHPIPE-1 safety drain: nothing to flush, but a registrant
+        // regression safety drain: nothing to flush, but a registrant
         // covered by an earlier flush may still be parked (e.g. its
         // completer raced its link — the fence pair makes one side win,
         // and this cycle is the guaranteed winner's backstop).
@@ -1297,7 +1301,7 @@ pub fn XLogBackgroundFlush(pacing: &mut WalFlushPacing) -> PgResult<bool> {
 
     init_small::globals::EndCriticalSection();
 
-    // GL-FLUSHPIPE-1: complete pipelined commit waiters this cycle's flush
+    // regression: complete pipelined commit waiters this cycle's flush
     // covered (after the lock release; no-op when the knob is off).
     crate::flushpipe::complete_up_to(LOGWRT_RESULT.get().1);
 

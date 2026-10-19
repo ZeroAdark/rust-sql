@@ -1,5 +1,5 @@
 -- bugs/batch-36-backend-replication-misc: expected captured from C 18.6.
--- fp-logical-origin#1: replication origin names keep their database-encoded
+-- regression: replication origin names keep their database-encoded
 -- bytes (text_to_cstring, origin.c:1308): in a SQL_ASCII database two
 -- distinct non-UTF-8 names are two origins.
 CREATE DATABASE b36_ascii TEMPLATE template0 ENCODING 'SQL_ASCII' LC_COLLATE 'C' LC_CTYPE 'C';

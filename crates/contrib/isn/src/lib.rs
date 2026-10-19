@@ -443,6 +443,15 @@ pub fn ean2string(
     Ok(())
 }
 
+// C's errmsg("...%s...", str) carries the input bytes as-is (isn.c:901).
+fn input_error(before: &str, input: &[u8], after: &str) -> PgError {
+    let mut msg = Vec::with_capacity(before.len() + input.len() + after.len());
+    msg.extend_from_slice(before.as_bytes());
+    msg.extend_from_slice(input);
+    msg.extend_from_slice(after.as_bytes());
+    PgError::error_raw_message(msg)
+}
+
 /// `string2ean`: parse text into an ean13. `Ok(None)` = soft error saved into
 /// `escontext` (C's ereturn(false)). `weak` is the isn.weak GUC value (C reads
 /// the g_weak global here).
@@ -468,17 +477,15 @@ pub fn string2ean(
             0
         }
     };
-    let shown = || String::from_utf8_lossy(input).into_owned();
-
     let eaninvalid = |escontext: Option<&mut SoftErrorContext>| {
         ereturn(
             escontext,
             None,
-            PgError::error(format!(
-                "invalid input syntax for {} number: \"{}\"",
-                isn_name(accept),
-                String::from_utf8_lossy(input)
-            ))
+            input_error(
+                &format!("invalid input syntax for {} number: \"", isn_name(accept)),
+                input,
+                "\"",
+            )
             .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION),
         )
     };
@@ -486,12 +493,11 @@ pub fn string2ean(
         ereturn(
             escontext,
             None,
-            PgError::error(format!(
-                "cannot cast {} to {} for number: \"{}\"",
-                isn_name(ty),
-                isn_name(accept),
-                String::from_utf8_lossy(input)
-            ))
+            input_error(
+                &format!("cannot cast {} to {} for number: \"", isn_name(ty), isn_name(accept)),
+                input,
+                "\"",
+            )
             .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION),
         )
     };
@@ -559,11 +565,11 @@ pub fn string2ean(
                 return ereturn(
                     escontext,
                     None,
-                    PgError::error(format!(
-                        "value \"{}\" is out of range for {} type",
-                        shown(),
-                        isn_name(accept)
-                    ))
+                    input_error(
+                        "value \"",
+                        input,
+                        &format!("\" is out of range for {} type", isn_name(accept)),
+                    )
                     .with_sqlstate(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                 );
             }
@@ -678,23 +684,19 @@ pub fn string2ean(
             return Ok(Some(str2ean(&buf[start..]) | 1));
         }
         let err = if rcheck == u32::MAX {
-            PgError::error(format!(
-                "invalid {} number: \"{}\"",
-                isn_name(accept),
-                shown()
-            ))
-            .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
+            input_error(&format!("invalid {} number: \"", isn_name(accept)), input, "\"")
+                .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
         } else {
             let rc = if rcheck == 10 {
                 'X'
             } else {
                 (b'0' + rcheck as u8) as char
             };
-            PgError::error(format!(
-                "invalid check digit for {} number: \"{}\", should be {rc}",
-                isn_name(accept),
-                shown()
-            ))
+            input_error(
+                &format!("invalid check digit for {} number: \"", isn_name(accept)),
+                input,
+                &format!("\", should be {rc}"),
+            )
             .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
         };
         return ereturn(escontext, None, err);

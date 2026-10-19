@@ -694,3 +694,13 @@ fn collation_scratch_buffers_have_palloc_admission() {
     let e = icu::uchar_buf_admission(536_870_911).unwrap_err();
     assert_eq!(e.message(), "invalid memory alloc request size 1073741824");
 }
+
+// pg_locale.c:1141 builds the REFRESH VERSION hint with
+// quote_qualified_identifier: reserved words quote, plain names do not.
+#[test]
+fn version_mismatch_hint_quotes_like_ruleutils() {
+    assert_eq!(version_mismatch_target(Some("public"), "select"), "public.\"select\"");
+    assert_eq!(version_mismatch_target(Some("public"), "b226coll"), "public.b226coll");
+    assert_eq!(version_mismatch_target(Some("My Schema"), "x"), "\"My Schema\".x");
+    assert_eq!(version_mismatch_target(None, "user"), "\"user\"");
+}

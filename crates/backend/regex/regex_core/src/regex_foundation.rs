@@ -4,7 +4,7 @@ extern crate alloc;
 use ::mcx::Mcx;
 
 use crate::regex_consts::REG_ECOLORS;
-use crate::regex_error::{RegError, RegResult};
+use crate::regex_error::{err_espace, RegError, RegResult};
 use crate::regguts::{
     chr, color, ColorDesc, ColorMap, ColorMapRange, Cvec, CvecRange, Nfa, StateId, CHR_MIN,
     COLORLESS, FREECOL, MAX_COLOR, MAX_SIMPLE_CHR, NOSUB, PLAIN, PSEUDO, WHITE,
@@ -95,6 +95,7 @@ pub fn initcm<'mcx>(_mcx: Mcx<'mcx>, cm: &mut ColorMap) -> RegResult<()> {
 
     cm.hiarrayrows = 1;
     cm.hiarraycols = 1;
+    cm.maxarrayrows = 4;
     cm.hicolormap.clear();
     cm.hicolormap.try_reserve(1)?;
     cm.hicolormap.push(WHITE);
@@ -291,6 +292,19 @@ pub fn newhicolorrow<'mcx>(_mcx: Mcx<'mcx>, cm: &mut ColorMap, oldrow: i32) -> R
     let newrow = cm.hiarrayrows;
     let cols = cm.hiarraycols as usize;
 
+    // C grows hicolormap by doubling maxarrayrows; the REALLOC_ARRAY request
+    // (maxarrayrows * 2 * hiarraycols colors) is what palloc admits.
+    if newrow >= cm.maxarrayrows {
+        if cm.maxarrayrows >= i32::MAX / (cm.hiarraycols * 2) {
+            return Err(err_espace());
+        }
+        crate::regex_error::check_alloc_request(
+            (cm.maxarrayrows as usize) * 2 * cols,
+            core::mem::size_of::<color>(),
+        )?;
+        cm.maxarrayrows *= 2;
+    }
+
     let oldbase = (oldrow as usize) * cols;
     let mut rowdata: alloc::vec::Vec<color> = alloc::vec::Vec::new();
     rowdata.try_reserve_exact(cols)?;
@@ -312,6 +326,13 @@ pub fn newhicolorcols<'mcx>(_mcx: Mcx<'mcx>, cm: &mut ColorMap) -> RegResult<()>
     let oldcols = cm.hiarraycols as usize;
     let newcols = oldcols * 2;
 
+    if cm.hiarraycols >= i32::MAX / (cm.maxarrayrows * 2) {
+        return Err(err_espace());
+    }
+    crate::regex_error::check_alloc_request(
+        (cm.maxarrayrows as usize) * newcols,
+        core::mem::size_of::<color>(),
+    )?;
     let mut newarray: alloc::vec::Vec<color> = alloc::vec::Vec::new();
     newarray.try_reserve_exact(rows * newcols)?;
     for r in 0..rows {

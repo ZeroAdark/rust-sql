@@ -185,7 +185,9 @@ fn ts_stat_sql(mcx: Mcx<'_>, txt: &[u8], ws: Option<&[u8]>) -> PgResult<Vec<(Vec
     Ok(rows)
 }
 
-fn stat_rows(fcinfo: &Fcinfo, ws_arg: bool) -> PgResult<Vec<Vec<u8>>> {
+type StatRows = Vec<(Vec<u8>, i32, i32)>;
+
+fn stat_collect(fcinfo: &Fcinfo, ws_arg: bool) -> PgResult<StatRows> {
     let mcx = fcinfo.result_mcx();
     ::spi::SPI_connect()?;
     let result = (|| {
@@ -194,8 +196,11 @@ fn stat_rows(fcinfo: &Fcinfo, ws_arg: bool) -> PgResult<Vec<Vec<u8>>> {
         ts_stat_sql(mcx, txt, ws)
     })();
     ::spi::SPI_finish()?;
-    let stats = result?;
+    result
+}
 
+fn stat_rows(fcinfo: &Fcinfo, stats: StatRows) -> PgResult<Vec<Vec<u8>>> {
+    let mcx = fcinfo.result_mcx();
     let mut desc = ::tupdesc::CreateTemplateTupleDesc(mcx, 3)?;
     ::tupdesc::TupleDescInitEntry(&mut desc, 1, Some("word"), TEXTOID, -1, 0)?;
     ::tupdesc::TupleDescInitEntry(&mut desc, 2, Some("ndoc"), INT4OID, -1, 0)?;
@@ -224,13 +229,24 @@ fn srf_drive(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
     name: &'static str,
-    collect: impl FnOnce(&Fcinfo) -> PgResult<Vec<Vec<u8>>>,
+    ws_arg: bool,
 ) -> PgResult<Datum> {
     let flinfo = flinfo.unwrap_or_else(|| panic!("{name}: NULL flinfo"));
     if !flinfo.has_fn_extra() {
-        let rows = collect(fcinfo)?;
-        let fctx = ::funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
-        fctx.user_fctx = Some(Box::new(rows));
+        ::funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
+        let stats = stat_collect(fcinfo, ws_arg)?;
+        // SAFETY: expectedDesc contract — the executor armed it with the scan
+        // tupdesc, live for the duration of this call.
+        let expected = fcinfo
+            .rsinfo_mut()
+            .and_then(|rsi| rsi.expectedDesc)
+            .map(|p| unsafe { p.cast::<::types_tuple::TupleDescData<'_>>().as_ref() });
+        let class = ::funcapi::get_call_result_type(fcinfo.result_mcx(), flinfo, expected)?.class;
+        if class != ::funcapi::TypeFuncClass::Composite {
+            return Err(Box::new(PgError::error("return type must be a row type")));
+        }
+        let rows = stat_rows(fcinfo, stats)?;
+        ::funcapi::per_MultiFuncCall(flinfo).user_fctx = Some(Box::new(rows));
     }
     let fctx = ::funcapi::per_MultiFuncCall(flinfo);
     let idx = fctx.call_cntr as usize;
@@ -250,11 +266,11 @@ fn srf_drive(
 }
 
 pub fn fc_ts_stat1(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    srf_drive(flinfo, fcinfo, "ts_stat1", |fcinfo| stat_rows(fcinfo, false))
+    srf_drive(flinfo, fcinfo, "ts_stat1", false)
 }
 
 pub fn fc_ts_stat2(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    srf_drive(flinfo, fcinfo, "ts_stat2", |fcinfo| stat_rows(fcinfo, true))
+    srf_drive(flinfo, fcinfo, "ts_stat2", true)
 }
 
 const fn srf(foid: Oid, name: &'static str, nargs: i16, func: PGFunction) -> FmgrBuiltin {

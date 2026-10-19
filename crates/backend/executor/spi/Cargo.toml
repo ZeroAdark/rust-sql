@@ -47,6 +47,10 @@ utility = { path = "../../tcop/utility" }
 utility_seams = { path = "../../tcop/utility_seams" }
 xact = { path = "../../access/transam/xact" }
 elog = { path = "../../utils/error/elog" }
+guc_tables = { path = "../../utils/misc/guc_tables" }
+nodes_core = { path = "../../nodes/nodes_core" }
+outfuncs = { path = "../../nodes/outfuncs" }
+postgres_seams = { path = "../../tcop/postgres_seams" }
 
 [dev-dependencies]
 portalcmds = { path = "../../commands/portalcmds" }
@@ -74,7 +78,6 @@ deadlock_seams = { path = "../../storage/lmgr/deadlock_seams" }
 fd = { path = "../../storage/file/fd" }
 freespace_seams = { path = "../../storage/freespace/freespace_seams" }
 guc = { path = "../../utils/misc/guc" }
-guc_tables = { path = "../../utils/misc/guc_tables" }
 heapam_visibility = { path = "../../access/heap/heapam_visibility" }
 init_small = { path = "../../utils/init/init_small" }
 inval = { path = "../../utils/cache/inval" }

@@ -13,7 +13,9 @@ elog = { path = "../../error/elog" }
 fd = { path = "../../../storage/file/fd" }
 init_small = { path = "../../init/init_small" }
 libc = "0.2"
+lwlock = { path = "../../../storage/lmgr/lwlock" }
 mcx = { path = "../../../../_support/mcx" }
 postgres_seams = { path = "../../../tcop/postgres_seams" }
 types_error = { path = "../../../../_support/types/types_error" }
+types_storage = { path = "../../../../_support/types/types_storage" }
 types_tuple = { path = "../../../../_support/types/types_tuple" }

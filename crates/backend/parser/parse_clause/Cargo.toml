@@ -19,6 +19,7 @@ catalog = { path = "../../catalog/catalog" }
 table = { path = "../../access/table/table" }
 types_rel = { path = "../../../_support/types/rel" }
 coerce = { path = "../coerce" }
+copyfuncs = { path = "../../nodes/copyfuncs" }
 elog = { path = "../../utils/error/elog" }
 format_type = { path = "../../utils/adt/format_type" }
 lsyscache = { path = "../../utils/cache/lsyscache" }

@@ -25,8 +25,11 @@ const LIBRARY: &str = "ltree";
 // Full 4B-header image of a by-ref varlena arg; short/toasted forms are
 // canonicalized because the repr walkers read VARSIZE = word >> 2.
 unsafe fn arg_image<'a>(fcinfo: &'a Fcinfo, i: usize) -> PgResult<Vec<u8>> {
+    // PG_FREE_IF_COPY parity (ltree_op.c:121): the detoasted copy dies here
+    // instead of accumulating in a sort's context.
+    let scratch = mcx::MemoryContext::new_bump("ltree arg detoast");
     // SAFETY: forwarded caller contract — non-null varlena arg (strict fn).
-    let v = unsafe { fcinfo.arg_varlena_packed(i)? };
+    let v = unsafe { types_fmgr::datum_varlena_packed(fcinfo.arg(i), scratch.mcx())? };
     let payload = v.data();
     let total = payload.len() + repr::VARHDRSZ;
     let mut img = vec![0u8; total];
@@ -38,6 +41,12 @@ unsafe fn arg_image<'a>(fcinfo: &'a Fcinfo, i: usize) -> PgResult<Vec<u8>> {
 unsafe fn arg_payload<'a>(fcinfo: &'a Fcinfo, i: usize) -> PgResult<&'a [u8]> {
     // SAFETY: forwarded caller contract — non-null varlena arg (strict fn).
     Ok(unsafe { fcinfo.arg_varlena_packed(i)? }.data())
+}
+
+// text_to_cstring (ltree_op.c:425/510/637): ltree_in sees the text only up
+// to its first NUL.
+fn cstring_prefix(b: &[u8]) -> &[u8] {
+    &b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())]
 }
 
 fn ret_image(fcinfo: &Fcinfo, img: &[u8]) -> PgResult<Datum> {
@@ -257,13 +266,13 @@ fn fc_ltree_addltree(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult
 
 fn fc_ltree_addtext(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let a = unsafe { arg_image(fcinfo, 0)? };
-    let b = unsafe { arg_payload(fcinfo, 1)? }.to_vec();
+    let b = cstring_prefix(unsafe { arg_payload(fcinfo, 1)? }).to_vec();
     let tmp = io::parse_ltree(&b)?;
     ret_image(fcinfo, &op::ltree_concat(&a, &tmp)?)
 }
 
 fn fc_ltree_textadd(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let b = unsafe { arg_payload(fcinfo, 0)? }.to_vec();
+    let b = cstring_prefix(unsafe { arg_payload(fcinfo, 0)? }).to_vec();
     let a = unsafe { arg_image(fcinfo, 1)? };
     let tmp = io::parse_ltree(&b)?;
     ret_image(fcinfo, &op::ltree_concat(&tmp, &a)?)
@@ -287,7 +296,7 @@ fn fc_lca(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
 }
 
 fn fc_text2ltree(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let s = unsafe { arg_payload(fcinfo, 0)? }.to_vec();
+    let s = cstring_prefix(unsafe { arg_payload(fcinfo, 0)? }).to_vec();
     ret_image(fcinfo, &io::parse_ltree(&s)?)
 }
 

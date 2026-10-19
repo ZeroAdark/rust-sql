@@ -2487,7 +2487,7 @@ fn recv_null_element_still_calls_a_non_strict_receiver() {
     assert!(crate::foundation::arr_hasnull(&img));
 }
 
-// audit-18.6 fp-adt-arrayfuncs-p1#3: arrayfuncs.c:1218-1249 sizes the
+// audit-18.6 regression: arrayfuncs.c:1218-1249 sizes the
 // output exactly, so one 512 MiB unquoted element fits under MaxAllocSize;
 // the per-element reservation is the element's real length, not 2n+2.
 #[test]
@@ -2499,7 +2499,7 @@ fn array_out_reserves_exact_element_length() {
     assert!(big + crate::io::element_reserve(b"", false, 1) < 1_073_741_823);
 }
 
-// audit-18.6 fp-adt-arrayfuncs-p1#4: arrayfuncs.c:1297-1358 validates the
+// audit-18.6 regression: arrayfuncs.c:1297-1358 validates the
 // wire header (dimensions, flags, element type, bounds) before resolving the
 // element receive function, so FF FF FF FF into aclitem[] is 22P03, not the
 // 42883 "no binary input function" of the element lookup.
@@ -2516,4 +2516,41 @@ fn recv_header_is_validated_before_element_meta() {
         "22P03"
     );
     assert_eq!(e.message(), "invalid number of dimensions: -1");
+}
+
+#[test]
+fn high_byte_typdelim_detail_is_raw() {
+    let ctx = MemoryContext::new_bump("t");
+    let mcx = ctx.mcx();
+    let m = ArrayIoMeta { typdelim: 0xC3, ..meta_text() };
+    let mut ip = text_in();
+    let err = array_in(mcx, b"{\xC3a}", &m, &mut ip, -1, None).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"malformed array literal: \"{\xC3a}\"".as_slice())
+    );
+    assert_eq!(err.detail_raw.as_deref(), Some(b"Unexpected \"\xC3\" character.".as_slice()));
+    assert_eq!(err.detail(), Some("Unexpected \"\u{FFFD}\" character."));
+}
+
+// audit-18.6 regression / regression:
+// array_contains_nulls propagates ArrayGetNItems' 54000 (arrayfuncs.c:3733)
+// instead of answering "has nulls" for a negative dimension.
+#[test]
+fn array_contains_nulls_propagates_negative_dimension() {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&1i32.to_ne_bytes()); // ndim
+    payload.extend_from_slice(&24i32.to_ne_bytes()); // dataoffset: has nulls
+    payload.extend_from_slice(&INT4OID.to_ne_bytes());
+    payload.extend_from_slice(&(-1i32).to_ne_bytes()); // dim[0]
+    payload.extend_from_slice(&1i32.to_ne_bytes()); // lbound[0]
+    payload.extend_from_slice(&[0xff, 0, 0, 0]);
+    let mut img = ::datum::varlena::set_varsize_4b(4 + payload.len()).to_vec();
+    img.extend_from_slice(&payload);
+    let e = crate::construct::array_contains_nulls(&img).unwrap_err();
+    assert_eq!(e.sqlstate(), ::types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+    assert_eq!(e.message(), "array size exceeds the maximum allowed (134217727)");
+
+    img[4 + 12..4 + 16].copy_from_slice(&1i32.to_ne_bytes());
+    assert!(!crate::construct::array_contains_nulls(&img).unwrap());
 }

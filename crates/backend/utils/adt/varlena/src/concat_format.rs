@@ -83,21 +83,22 @@ fn too_few_arguments() -> Box<PgError> {
 #[inline(never)]
 fn unrecognized_specifier(fmt: &[u8], cp: usize) -> Box<PgError> {
     let tail = &fmt[cp..];
-    let ch = match core::str::from_utf8(tail) {
-        Ok(s) => s.chars().next().map(String::from).unwrap_or_default(),
-        Err(e) if e.valid_up_to() > 0 => {
-            // SAFETY: valid_up_to bytes are valid UTF-8.
-            unsafe { core::str::from_utf8_unchecked(&tail[..e.valid_up_to()]) }
-                .chars()
-                .next()
-                .map(String::from)
-                .unwrap_or_default()
+    let len = match mbutils::pg_mblen_range(tail) {
+        Ok(len) => len as usize,
+        Err(e) => return e,
+    };
+    let ch = &tail[..len];
+    let err = match core::str::from_utf8(ch) {
+        Ok(s) => PgError::error(format!("unrecognized format() type specifier \"{s}\"")),
+        Err(_) => {
+            let mut msg = b"unrecognized format() type specifier \"".to_vec();
+            msg.extend_from_slice(ch);
+            msg.push(b'"');
+            PgError::error_raw_message(msg)
         }
-        Err(_) => String::from_utf8_lossy(&tail[..1]).into_owned(),
     };
     Box::new(
-        PgError::error(format!("unrecognized format() type specifier \"{ch}\""))
-            .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE)
+        err.with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE)
             .with_hint("For a single \"%\" use \"%%\"."),
     )
 }
@@ -154,6 +155,11 @@ fn array_out_cache<'f>(
         flinfo.set_fn_extra(ArrayOutCache { element_type, typlen, typbyval, typalign, finfo });
     }
     Ok(flinfo.fn_extra_mut::<ArrayOutCache>().unwrap())
+}
+
+// ruleutils.c:13121 quote_identifier: palloc(strlen(ident) + nquotes + 3).
+pub(crate) fn quote_identifier_alloc_check(len: usize, nquotes: usize) -> PgResult<()> {
+    mcx::check_alloc_size(len + nquotes + 3)
 }
 
 #[cold]
@@ -437,6 +443,7 @@ fn string_conversion<'mcx>(
     let s = output_to_bytes(finfo, mcx, value)?;
     match conversion {
         b'I' => {
+            quote_identifier_alloc_check(s.len(), s.iter().filter(|&&b| b == b'"').count())?;
             let quoted = format_type::quote_identifier_bytes(s);
             append_padded(out, &quoted, flags, width)
         }

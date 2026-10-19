@@ -9,12 +9,12 @@ use types_error::{PgResult, ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE, ERRCODE_RE
 use types_fmgr::{FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData};
 
 use crate::{
-    is_reserved_origin_name, loc, replorigin_advance, replorigin_by_name, replorigin_by_oid,
-    replorigin_check_prerequisites, replorigin_create, replorigin_drop_by_name,
-    replorigin_get_progress, replorigin_session_get_progress, replorigin_session_is_setup,
-    replorigin_session_origin, replorigin_session_reset, replorigin_session_setup,
-    set_replorigin_session_origin, set_replorigin_session_origin_lsn,
-    set_replorigin_session_origin_timestamp, show_status_rows,
+    for_each_status_row, is_reserved_origin_name, loc, replorigin_advance, replorigin_by_name,
+    replorigin_by_oid, replorigin_check_prerequisites, replorigin_create,
+    replorigin_drop_by_name, replorigin_get_progress, replorigin_session_get_progress,
+    replorigin_session_is_setup, replorigin_session_origin, replorigin_session_reset,
+    replorigin_session_setup, set_replorigin_session_origin, set_replorigin_session_origin_lsn,
+    set_replorigin_session_origin_timestamp,
 };
 
 // text_to_cstring: the name's bytes as stored, whatever the database encoding.
@@ -202,7 +202,10 @@ pub fn fc_pg_show_replication_origin_status(
 
     let mut srf = funcapi::InitMaterializedSRF(mcx, flinfo, fcinfo, 0)?;
 
-    for (roident, remote_lsn, local_lsn) in show_status_rows()? {
+    // The name lookup runs under ReplicationOriginLock like C (origin.c:1551
+    // holds it across the loop), so the row cannot pair a reused id's new
+    // name with the old slot's progress.
+    for_each_status_row(|roident, remote_lsn, local_lsn| {
         let mut values = [Datum::null(); 4];
         let mut nulls = [true; 4];
 
@@ -221,8 +224,8 @@ pub fn fc_pg_show_replication_origin_status(
         values[3] = Datum::from_usize(local_lsn as usize);
         nulls[3] = false;
 
-        srf.putvalues(&values, &nulls)?;
-    }
+        srf.putvalues(&values, &nulls)
+    })?;
 
     Ok(srf.finish(fcinfo))
 }

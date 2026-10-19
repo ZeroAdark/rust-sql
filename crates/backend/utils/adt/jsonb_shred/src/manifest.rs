@@ -1,6 +1,6 @@
 //! The shred manifest (memo §2.6): the one new decode surface a reader ever
 //! learns. Self-contained versioned bytes — the future per-column footer
-//! section stores them verbatim; parts stay self-describing (GL-BANKGEOM
+//! section stores them verbatim; parts stay self-describing (regression
 //! discipline: verifiable without trusting external state).
 
 use crate::path::{cmp_borrowed, JsonPath};

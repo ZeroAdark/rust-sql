@@ -159,7 +159,9 @@ pub fn exec_material_restr_pos(node: &mut MaterialState<'_>) -> PgResult<()> {
 }
 
 pub fn exec_end_material(node: &mut MaterialState<'_>) {
-    node.tuplestorestate = None;
+    if let Some(ts) = node.tuplestorestate.take() {
+        ts.end();
+    }
     node.ps_ResultTupleDesc = None;
 }
 
@@ -171,7 +173,9 @@ pub fn exec_rescan_material_chg<'mcx>(
 ) {
     let mcx = estate.es_query_cxt;
     exectuples::exec_clear_tuple(estate.slot_mut(node.ps_ResultTupleSlot), mcx);
-    node.tuplestorestate = None;
+    if let Some(ts) = node.tuplestorestate.take() {
+        ts.end();
+    }
     node.eof_underlying = false;
 }
 
@@ -189,7 +193,9 @@ pub fn exec_rescan_material<'mcx>(
         // Without REWIND the store can't rewind (MARK-only mergejoin inner):
         // forget it and re-read the subplan.
         if node.eflags & EXEC_FLAG_REWIND == 0 {
-            node.tuplestorestate = None;
+            if let Some(ts) = node.tuplestorestate.take() {
+                ts.end();
+            }
             node.eof_underlying = false;
             true
         } else {

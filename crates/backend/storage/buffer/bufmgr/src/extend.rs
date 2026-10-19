@@ -180,7 +180,12 @@ fn extend_to_guts(
     // A concurrent extension may have covered extend_to already: fall back to
     // reading the target block (C keeps the caller's original mode here).
     if buffer == InvalidBuffer {
-        buffer = ReadBuffer_common(smgr, relpersistence, fork, extend_to - 1, mode, strategy)?.0;
+        let (b, acct) =
+            crate::read::ReadBuffer_common_acct(smgr, relpersistence, fork, extend_to - 1, mode, strategy, false)?;
+        if let Some(rel) = rel {
+            crate::pgstat_count_buffer_acct(rel, acct);
+        }
+        buffer = b;
     }
     Ok(buffer)
 }

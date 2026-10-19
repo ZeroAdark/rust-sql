@@ -9,6 +9,7 @@ name = "walsummarizer"
 path = "src/lib.rs"
 
 [dependencies]
+shmem = { path = "../../storage/ipc/shmem" }
 pg_clock = { path = "../../../port/pg_clock" }
 auxprocess = { path = "../auxprocess" }
 blkreftable = { path = "../../../common/blkreftable" }

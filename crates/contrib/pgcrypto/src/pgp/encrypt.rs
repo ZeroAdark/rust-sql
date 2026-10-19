@@ -15,7 +15,8 @@ fn build_literal_packet(ctx: &PgpContext, data: &[u8]) -> Vec<u8> {
     } else {
         b'b'
     };
-    let t: u32 = 0; // deterministic mtime=0 (round-trip safe; mtime is ignored on decrypt)
+    // pgp-encrypt.c:397: the creation time, so the packet has as few known bytes as possible.
+    let t = ::pg_clock::wall_timeval().0 as u32;
     let mut body = Vec::with_capacity(6 + data.len());
     body.push(ty);
     body.push(0); // filename length
@@ -101,6 +102,27 @@ pub fn write_encdata_packet(
     out: &mut Vec<u8>,
 ) -> Result<(), String> {
     let bs = cipher_block_size(ctx.cipher_algo);
+    let mdc = ctx.disable_mdc == 0;
+    let resync = !mdc;
+
+    // pgp-encrypt.c:651 pgp_encrypt chains encrypt_filter, mdc_filter,
+    // write_prefix, then init_compress: a bad cipher is reported before a
+    // bad compression algorithm.
+    // upstream 4c5128ca0b30 (18.6): pgcrypto: Add option to revert to prior decryption behavior
+    let mut cfb = PgpCfb::create(ctx.cipher_algo, sess_key, resync, None, false)
+        .map_err(|e| e.to_string())?;
+    let mut md = if mdc {
+        Some(Digest::new(PGP_DIGEST_SHA1).ok_or(UNSUPPORTED_HASH.to_string())?)
+    } else {
+        None
+    };
+
+    let mut prefix = vec![0u8; bs + 2];
+    if !fill_random(&mut prefix[..bs]) {
+        return Err(NO_RANDOM.to_string());
+    }
+    prefix[bs] = prefix[bs - 2];
+    prefix[bs + 1] = prefix[bs - 1];
 
     let mut literal = if ctx.text_mode != 0 && ctx.convert_crlf != 0 {
         build_literal_packet(ctx, &convert_crlf(data))
@@ -111,21 +133,11 @@ pub fn write_encdata_packet(
         literal = build_compressed_packet(ctx, &literal)?;
     }
 
-    let mut prefix = vec![0u8; bs + 2];
-    if !fill_random(&mut prefix[..bs]) {
-        return Err(NO_RANDOM.to_string());
-    }
-    prefix[bs] = prefix[bs - 2];
-    prefix[bs + 1] = prefix[bs - 1];
-
-    let mdc = ctx.disable_mdc == 0;
-
     let mut plaintext = Vec::new();
     plaintext.extend_from_slice(&prefix);
     plaintext.extend_from_slice(&literal);
 
-    if mdc {
-        let mut md = Digest::new(PGP_DIGEST_SHA1).ok_or(UNSUPPORTED_HASH.to_string())?;
+    if let Some(md) = md.as_mut() {
         md.update(&prefix);
         md.update(&literal);
         let hdr = [0xD3u8, 0x14u8];
@@ -135,10 +147,6 @@ pub fn write_encdata_packet(
         plaintext.extend_from_slice(&digest);
     }
 
-    let resync = !mdc;
-    // upstream 4c5128ca0b30 (18.6): pgcrypto: Add option to revert to prior decryption behavior
-    let mut cfb = PgpCfb::create(ctx.cipher_algo, sess_key, resync, None, false)
-        .map_err(|e| e.to_string())?;
     let ciphertext = cfb.encrypt(&plaintext);
 
     let tag = if mdc {

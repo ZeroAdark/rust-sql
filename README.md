@@ -7,7 +7,7 @@
 <p align="center">
   <img alt="Postgres 18.6" src="https://img.shields.io/badge/Postgres-18.6-336791">
   <img alt="Regression suite: 100%" src="https://img.shields.io/badge/regression_suite-46%2C066%2F46%2C066-brightgreen">
-  <img alt="Version: v0.3" src="https://img.shields.io/badge/version-v0.3-blue">
+  <img alt="Version: v0.3.1" src="https://img.shields.io/badge/version-v0.3.1-blue">
   <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
 </p>
 
@@ -23,11 +23,11 @@
 
 <br />
 
-> **New:** [Video of Michael's talk at PlanetScale on pgrust](https://www.youtube.com/watch?v=7L_nG3EBjck) — and the [slides](https://drive.google.com/file/d/1_wDk4HPE9-MuiPBo_X-QdJUmFtVV0p8p/view).
+> **New: v0.3.1** is a bug-fix release. [Release notes](RELEASE-NOTES.md) · [What's new in v0.3](#whats-new-in-v03)
+>
+> [Video of Michael's talk at PlanetScale on pgrust](https://www.youtube.com/watch?v=7L_nG3EBjck) and the [slides](https://drive.google.com/file/d/1_wDk4HPE9-MuiPBo_X-QdJUmFtVV0p8p/view)
 >
 > [How AI Changes the Economics of JIT Compilers](https://malisper.me/how-ai-changes-the-economics-of-jit-compilers/)
->
-> [What's new in v0.3](#whats-new-in-v03).
 
 pgrust is a re-implementation of Postgres meant to show what Postgres would
 look like if it was built in 2026. It is wire compatible and even SQL dialect

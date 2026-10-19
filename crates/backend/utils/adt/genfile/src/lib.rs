@@ -20,14 +20,6 @@ pub(crate) const XLOGDIR: &str = "pg_wal";
 pub(crate) const PG_LOGICAL_SNAPSHOTS_DIR: &str = "pg_logical/snapshots";
 pub(crate) const PG_LOGICAL_MAPPINGS_DIR: &str = "pg_logical/mappings";
 
-pub(crate) fn io_error(e: &std::io::Error, message: String) -> Box<PgError> {
-    let mut builder = ereport(ERROR);
-    if let Some(errno) = e.raw_os_error() {
-        builder = builder.with_saved_errno(errno);
-    }
-    Box::new(builder.errcode_for_file_access().errmsg(message).into_error())
-}
-
 // Filenames are raw server-encoding bytes (C's char *): a SQL_ASCII database
 // hands these builtins text that need not be UTF-8, and a directory may hold
 // entries whose names are not UTF-8 either; C passes both through untouched.
@@ -53,21 +45,14 @@ pub(crate) fn io_error_path(
     path: &[u8],
     suffix: &str,
 ) -> Box<PgError> {
-    let lossy = String::from_utf8_lossy(path);
-    let mut err = io_error(e, format!("{prefix}\"{lossy}\"{suffix}"));
-    if core::str::from_utf8(path).is_err() {
-        // %m is already expanded in `message`; splice the raw filename bytes
-        // into that same text in place of the lossy rendering.
-        let head = format!("{prefix}\"");
-        let tail_start = head.len() + lossy.len();
-        let msg = err.message().as_bytes();
-        let mut raw = Vec::with_capacity(msg.len() + path.len());
-        raw.extend_from_slice(head.as_bytes());
-        raw.extend_from_slice(path);
-        raw.extend_from_slice(&msg[tail_start..]);
-        err.message_raw = Some(raw);
-    }
-    err
+    // %m expands in the format only: a filename containing "%m" is a %s
+    // argument in C and stays verbatim.
+    let errno = e.raw_os_error().unwrap_or(0);
+    let suffix = elog::errno::replace_percent_m(suffix, errno);
+    let mut err = PgError::error_bytes(&format!("{prefix}\""), path, &format!("\"{suffix}"))
+        .with_sqlstate(elog::errno::sqlstate_for_file_access(errno));
+    err.saved_errno = Some(errno);
+    Box::new(err)
 }
 
 // IS_DIR_SEP / is_absolute_path (path.c), non-Windows.

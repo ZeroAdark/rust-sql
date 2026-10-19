@@ -1,4 +1,4 @@
--- fp-cache-relcache-p1#1: a non-mapped catalog rewritten between retained
+-- regression: a non-mapped catalog rewritten between retained
 -- changes; decoding rebuilds its relcache entry under the historic snapshot
 -- and must address the current relfilenode. Expected captured from C 18.6.
 \set VERBOSITY verbose

@@ -22,11 +22,11 @@ fn arg_snap<'a>(fcinfo: &'a Fcinfo, i: usize) -> PgResult<SnapView<'a>> {
 pub fn fc_pg_snapshot_in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 of the in-function is cstring (typlen -2).
     let s = unsafe { fcinfo.arg_cstring(0) };
-    let s = String::from_utf8_lossy(s.to_bytes());
+    let s = s.to_bytes();
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
     let mcx = fcinfo.result_mcx();
-    match crate::parse_snapshot(mcx, &s, esc)? {
+    match crate::parse_snapshot(mcx, s, esc)? {
         Some(v) => Ok(varlena_result(v)),
         None => Ok(varlena_result(crate::snapshot_image(mcx, 1, 1, &[])?)),
     }

@@ -43,19 +43,21 @@ fn numeric_host_hint() -> AddrInfoHint {
     }
 }
 
-// C atoi (ldapport / radiusports values).
+// C atoi (ldapport / radiusports values) = (int) strtol(s, NULL, 10): the
+// long result saturates at LONG_MIN/LONG_MAX and then narrows modulo 2^32.
 pub(crate) fn atoi(s: &str) -> i32 {
     let t = s.trim_start_matches(|c: char| c.is_ascii() && pg_string::isspace_c_locale(c as u8));
-    let (sign, digits) = match t.as_bytes().first() {
-        Some(b'-') => (-1i64, &t[1..]),
-        Some(b'+') => (1, &t[1..]),
-        _ => (1, t),
+    let (neg, digits) = match t.as_bytes().first() {
+        Some(b'-') => (true, &t[1..]),
+        Some(b'+') => (false, &t[1..]),
+        _ => (false, t),
     };
-    let mut v: i64 = 0;
+    let mut v: i128 = 0;
     for b in digits.bytes().take_while(|b| b.is_ascii_digit()) {
-        v = (v * 10 + (b - b'0') as i64).min(i32::MAX as i64 + 1);
+        v = (v * 10 + (b - b'0') as i128).min(i64::MAX as i128 + 1);
     }
-    (sign * v).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+    let v = if neg { -v } else { v };
+    v.clamp(i64::MIN as i128, i64::MAX as i128) as i64 as i32
 }
 
 pub(crate) fn gai_strerror(errcode: i32) -> String {
@@ -727,6 +729,22 @@ pub(crate) fn parse_hba_auth_opt(
         }};
     }
 
+    // hba.c:2206/2219: the two ldapurl reports carry no errcontext.
+    macro_rules! opt_error_plain {
+        ($cline:expr, $msg:expr) => {{
+            let msg: String = $msg;
+            crate::report_plain(
+                elevel,
+                $cline,
+                "parse_hba_auth_opt",
+                ::types_error::ERRCODE_CONFIG_FILE_ERROR,
+                msg.clone(),
+            )?;
+            *err_msg = Some(msg);
+            return Ok(false);
+        }};
+    }
+
     // INVALID_AUTH_OPTION(optname, validmethods).
     macro_rules! invalid_auth_option {
         ($optname:expr, $validmethods:expr) => {{
@@ -838,7 +856,7 @@ pub(crate) fn parse_hba_auth_opt(
             let urldata = match ldap_url_parse(val) {
                 Ok(u) => u,
                 Err(rc) => {
-                    opt_error!(
+                    opt_error_plain!(
                         2208,
                         format!(
                             "could not parse LDAP URL \"{val}\": {}",
@@ -848,7 +866,7 @@ pub(crate) fn parse_hba_auth_opt(
                 }
             };
             if urldata.scheme != "ldap" && urldata.scheme != "ldaps" {
-                opt_error!(
+                opt_error_plain!(
                     2219,
                     format!("unsupported LDAP URL scheme: {}", urldata.scheme)
                 );

@@ -1,5 +1,5 @@
 use ::mcx::{vec_with_capacity_in, Mcx, PgVec};
-use ::ts_locale::dict_api::{def_get_boolean, DictInitData, LexizeResult};
+use ::ts_locale::dict_api::{def_get_boolean, def_get_string, DictInitData, LexizeResult};
 use ::ts_locale::{
     could_not_open_error, get_tsearch_config_filename, lowerstr, tsearch_readline_begin, TsLexeme,
     TSL_PREFIX,
@@ -53,9 +53,10 @@ pub fn dsynonym_init(init: &DictInitData<'static>) -> PgResult<DictSyn> {
     let mut case_sensitive = false;
     for (i, (name, value)) in init.dict_options.iter().enumerate() {
         if name.as_slice() == b"synonyms" {
-            filename = Some(value.as_slice());
+            filename = Some(def_get_string(name, value)?);
         } else if name.as_slice() == b"casesensitive" {
-            case_sensitive = def_get_boolean(name, value, init.int_options[i])?;
+            case_sensitive =
+                def_get_boolean(name, value.as_ref().map(|v| v.as_slice()), init.int_options[i])?;
         } else {
             return Err(invalid_param(format!(
                 "unrecognized synonym parameter: \"{}\"",

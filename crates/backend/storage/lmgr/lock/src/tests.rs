@@ -183,10 +183,16 @@ fn setup() {
         // warn_not_owned goes through the full-PgError seam (it carries C's
         // file/line/routine); record it in the same log the tests read.
         elog_seams::ereport::set(|err| {
+            // proc.c/lock.c wait diagnostics are errdetail_log; a client-visible
+            // detail on those lines is the batch-232 regression.
+            assert!(
+                err.detail().is_none() || !err.message().starts_with("process "),
+                "lock-wait LOG carries a client-visible detail: {err:?}"
+            );
             logged().lock().unwrap_or_else(|e| e.into_inner()).push((
                 err.level(),
                 err.message().to_string(),
-                err.detail().map(|d| d.to_string()),
+                err.detail_log().or(err.detail()).map(|d| d.to_string()),
             ));
             Ok(())
         });
@@ -907,4 +913,14 @@ fn shmem_init_registers_fast_path_strong_relation_lock_data() {
         found,
         "\"Fast Path Strong Relation Lock Data\" (4100 bytes) is not registered in the ShmemIndex"
     );
+}
+
+// proc.c:1610-1614 formats the lock-wait interval through
+// TimestampDifference, which clamps a nonpositive difference to 0.000 ms.
+#[test]
+fn lock_wait_elapsed_clamps_backward_clock_step() {
+    assert_eq!(waitqueue::lock_wait_elapsed(1_000_000, 999_000), (0, 0));
+    assert_eq!(waitqueue::lock_wait_elapsed(5, 5), (0, 0));
+    assert_eq!(waitqueue::lock_wait_elapsed(0, 1_234_567), (1234, 567));
+    assert_eq!(waitqueue::lock_wait_elapsed(10, 1_010), (1, 0));
 }

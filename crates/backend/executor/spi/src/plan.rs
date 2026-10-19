@@ -58,6 +58,7 @@ fn analyze_and_rewrite(
     argtypes: &[Oid],
     query_env: types_portal::QueryEnvHandle,
 ) -> PgResult<PgVec<'static, Query<'static>>> {
+    usage_reset();
     let query = analyze_seams::parse_analyze_fixedparams::call(
         qmcx,
         raw,
@@ -65,14 +66,63 @@ fn analyze_and_rewrite(
         argtypes,
         query_env,
     )?;
-    if query.commandType == CmdType::CMD_UTILITY {
+    usage_show("PARSE ANALYSIS STATISTICS")?;
+    pg_rewrite_query(qmcx, query)
+}
+
+fn log_parser_stats() -> bool {
+    guc_tables::backing::log_parser_stats()
+}
+
+fn usage_reset() {
+    if log_parser_stats() {
+        postgres_seams::reset_usage::call();
+    }
+}
+
+fn usage_show(title: &str) -> PgResult<()> {
+    if log_parser_stats() {
+        postgres_seams::show_usage::call(title)?;
+    }
+    Ok(())
+}
+
+fn debug_print_tree<'mcx>(
+    mcx: Mcx<'mcx>,
+    title: &str,
+    dump: PgResult<::mcx::PgString<'mcx>>,
+) -> PgResult<()> {
+    nodes_core::print::debug_print_tree(mcx, title, dump, guc_tables::backing::Debug_pretty_print())
+}
+
+// pg_rewrite_query (postgres.c:796-822), reached from pg_analyze_and_rewrite_
+// withcb / _fixedparams (spi.c:2271/2277): the debug_print_* dumps and the
+// REWRITER bracket apply to SPI-prepared statements too.
+fn pg_rewrite_query(
+    qmcx: Mcx<'static>,
+    query: Query<'static>,
+) -> PgResult<PgVec<'static, Query<'static>>> {
+    if guc_tables::backing::Debug_print_parse() {
+        debug_print_tree(qmcx, "parse tree", outfuncs::queryToStringWithLocations(qmcx, &query))?;
+    }
+    usage_reset();
+    let querytree_list = if query.commandType == CmdType::CMD_UTILITY {
         let mut v = PgVec::new_in(qmcx);
         v.try_reserve_exact(1).map_err(|_| qmcx.oom(1))?;
         v.push(query);
-        Ok(v)
+        v
     } else {
-        rewrite_handler_seams::query_rewrite::call(qmcx, query)
+        rewrite_handler_seams::query_rewrite::call(qmcx, query)?
+    };
+    usage_show("REWRITER STATISTICS")?;
+    if guc_tables::backing::Debug_print_rewritten() {
+        debug_print_tree(
+            qmcx,
+            "rewritten parse tree",
+            outfuncs::queryListToStringWithLocations(qmcx, &querytree_list),
+        )?;
     }
+    Ok(querytree_list)
 }
 
 // One-shot completion (C's in-_SPI_execute_plan parse-analysis arm); analysis
@@ -340,6 +390,7 @@ pub fn SPI_prepare_plpgsql(
                 // scanner warnings C doesn't (plpgsql strtest).
                 let qraw = plancache::CachedPlanRawParseTreeCopy(qmcx, psrc)?
                     .expect("created with a raw tree");
+                usage_reset();
                 let query = analyze_seams::parse_analyze_plpgsql::call(
                     qmcx,
                     qraw,
@@ -347,14 +398,8 @@ pub fn SPI_prepare_plpgsql(
                     hooks,
                     crate::current_query_env(),
                 )?;
-                let query_list = if query.commandType == CmdType::CMD_UTILITY {
-                    let mut v = PgVec::new_in(qmcx);
-                    v.try_reserve_exact(1).map_err(|_| qmcx.oom(1))?;
-                    v.push(query);
-                    v
-                } else {
-                    rewrite_handler_seams::query_rewrite::call(qmcx, query)?
-                };
+                usage_show("PARSE ANALYSIS STATISTICS")?;
+                let query_list = pg_rewrite_query(qmcx, query)?;
                 plancache::CompleteCachedPlan(psrc, query_list, &argtypes, cursor_options, false)?;
             }
             Ok(())

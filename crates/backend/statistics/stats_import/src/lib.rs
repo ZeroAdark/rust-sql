@@ -111,14 +111,9 @@ pub(crate) fn warn(
 }
 
 // ThrowErrorData with elevel forced to WARNING (text_to_stavalues soft path).
-pub(crate) fn warn_error_data(funcname: &'static str, err: PgError) -> PgResult<()> {
-    warn(
-        funcname,
-        err.message().to_string(),
-        Some(err.sqlstate()),
-        err.detail().map(|s| s.to_string()),
-        err.hint().map(|s| s.to_string()),
-    )
+pub(crate) fn warn_error_data(mut err: PgError) -> PgResult<()> {
+    err.level = WARNING;
+    elog::ThrowErrorData(err)
 }
 
 pub(crate) fn text_datum_string(mcx: Mcx<'_>, d: Datum) -> PgResult<String> {
@@ -180,7 +175,7 @@ pub(crate) fn stats_check_arg_array(
         return Ok(false);
     }
 
-    if arrayfuncs::array_contains_nulls(&arr) {
+    if arrayfuncs::array_contains_nulls(&arr)? {
         warn(
             "stats_check_arg_array",
             format!(

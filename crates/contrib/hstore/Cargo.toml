@@ -32,7 +32,9 @@ crc32c = { path = "../../port/crc32c" }
 pg_qsort = { path = "../../_support/pg_qsort" }
 pqformat = { path = "../../backend/libpq/pqformat" }
 lsyscache = { path = "../../backend/utils/cache/lsyscache" }
+mbutils = { path = "../../backend/utils/mb/mbutils" }
 typcache = { path = "../../backend/utils/cache/typcache" }
+typcache_seams = { path = "../../backend/utils/cache/typcache_seams" }
 funcapi = { path = "../../backend/utils/fmgr/funcapi" }
 fmgr_seams = { path = "../../backend/utils/fmgr/fmgr_seams" }
 dfmgr = { path = "../../backend/utils/fmgr/dfmgr" }

@@ -1,0 +1,60 @@
+CREATE TABLE zc AS SELECT g FROM generate_series(1, 5000) g;
+ANALYZE zc;
+SET cpu_tuple_cost = 0;
+EXPLAIN (COSTS OFF) SELECT UNION SELECT;
+     QUERY PLAN     
+--------------------
+ HashAggregate
+   ->  Append
+         ->  Result
+         ->  Result
+(4 rows)
+
+SELECT UNION SELECT;
+--
+(1 row)
+
+SELECT count(*) FROM (SELECT UNION SELECT) s;
+ count 
+-------
+     1
+(1 row)
+
+EXPLAIN (COSTS OFF) SELECT count(*) FROM (SELECT FROM zc UNION SELECT FROM zc) s;
+              QUERY PLAN               
+---------------------------------------
+ Aggregate
+   ->  Unique
+         ->  Append
+               ->  Seq Scan on zc
+               ->  Seq Scan on zc zc_1
+(5 rows)
+
+SELECT count(*) FROM (SELECT FROM zc UNION SELECT FROM zc) s;
+ count 
+-------
+     1
+(1 row)
+
+SELECT count(*) FROM (SELECT FROM zc WHERE false UNION SELECT FROM zc WHERE false) s;
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM (SELECT FROM zc UNION ALL SELECT FROM zc UNION SELECT) s;
+ count 
+-------
+     1
+(1 row)
+
+SET work_mem = '64kB';
+SELECT count(*) FROM (SELECT FROM zc UNION SELECT FROM zc) s;
+ count 
+-------
+     1
+(1 row)
+
+RESET work_mem;
+RESET cpu_tuple_cost;
+DROP TABLE zc;

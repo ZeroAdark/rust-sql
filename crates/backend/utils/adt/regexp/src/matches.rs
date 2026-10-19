@@ -46,14 +46,24 @@ pub fn setup_regexp_matches<'a, 'mcx>(
     mut use_subpatterns: bool,
     ignore_degenerate: bool,
 ) -> PgResult<RegexpMatchesCtx<'a, 'mcx>> {
-    regex_core::regex_locale::pg_set_regex_collation(mcx, collation)?;
     // regex_engine dispatch: RE2-compatible patterns take the byte-offset
     // path; everything else runs the untouched Spencer path below. Callers
     // consuming submatches need the capture-safe tier; whole-match callers
-    // (count, split, instr/substr subexpr 0) ride RE2 either way.
-    if let Some(re) = regexp_alt::dispatch(pattern, re_flags.cflags, orig_str)?
-        .filter(|re| re.capture_safe() || !use_subpatterns || re.ngroups() == 0)
+    // (count, split, instr/substr subexpr 0) ride RE2 either way. Invalid
+    // cflags skip it: regcomp.c:396 rejects them before the collation check.
+    let cflags_ok = regex_core::regex_compile::check_cflags(re_flags.cflags).is_ok();
+    if cflags_ok {
+        regex_core::regex_locale::pg_set_regex_collation(mcx, collation)?;
+    }
+    if let Some(re) = if cflags_ok {
+        regexp_alt::dispatch(pattern, re_flags.cflags, orig_str)?
+    } else {
+        None
+    }
+    .filter(|re| re.capture_safe() || !use_subpatterns || re.ngroups() == 0)
     {
+        // regexp.c:1515: the wide_str palloc of (orig_len + 1) pg_wchars.
+        ::mcx::check_alloc_size((orig_str.len() + 1) * core::mem::size_of::<::types_core::PgWChar>())?;
         return setup_regexp_matches_re2(
             mcx,
             orig_str,

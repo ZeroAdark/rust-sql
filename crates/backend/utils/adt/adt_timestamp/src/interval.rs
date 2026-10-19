@@ -1568,11 +1568,8 @@ pub fn timestamptz_age(dt1: TimestampTz, dt2: TimestampTz) -> PgResult<Interval>
 #[cold]
 fn interval_unit_not_supported(lowunits: &[u8]) -> Box<PgError> {
     Box::new(
-        PgError::error(format!(
-            "unit \"{}\" not supported for type interval",
-            String::from_utf8_lossy(lowunits)
-        ))
-        .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
+        crate::unit_error(lowunits, " not supported for type interval")
+            .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
     )
 }
 
@@ -1580,12 +1577,9 @@ fn interval_unit_not_supported(lowunits: &[u8]) -> Box<PgError> {
 #[cold]
 fn interval_trunc_week_not_supported(lowunits: &[u8]) -> Box<PgError> {
     Box::new(
-        PgError::error(format!(
-            "unit \"{}\" not supported for type interval",
-            String::from_utf8_lossy(lowunits)
-        ))
-        .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED)
-        .with_detail("Months usually have fractional weeks."),
+        crate::unit_error(lowunits, " not supported for type interval")
+            .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED)
+            .with_detail("Months usually have fractional weeks."),
     )
 }
 
@@ -1593,11 +1587,8 @@ fn interval_trunc_week_not_supported(lowunits: &[u8]) -> Box<PgError> {
 #[cold]
 fn interval_unit_not_recognized(lowunits: &[u8]) -> Box<PgError> {
     Box::new(
-        PgError::error(format!(
-            "unit \"{}\" not recognized for type interval",
-            String::from_utf8_lossy(lowunits)
-        ))
-        .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE),
+        crate::unit_error(lowunits, " not recognized for type interval")
+            .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE),
     )
 }
 

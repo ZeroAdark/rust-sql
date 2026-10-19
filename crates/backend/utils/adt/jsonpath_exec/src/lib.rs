@@ -384,13 +384,15 @@ impl<'a, 'x, 'mcx: 'a> ExecCtx<'a, 'x, 'mcx> {
             }
         };
         match found {
-            None => Err(Box::new(
-                PgError::error(format!(
-                    "could not find jsonpath variable \"{}\"",
-                    String::from_utf8_lossy(name)
+            None => {
+                // jsonpath_exec.c:3145 pnstrdup's the raw name bytes into %s.
+                let mut msg = b"could not find jsonpath variable \"".to_vec();
+                msg.extend_from_slice(name);
+                msg.push(b'"');
+                Err(Box::new(
+                    PgError::error_raw_message(msg).with_sqlstate(ERRCODE_UNDEFINED_OBJECT),
                 ))
-                .with_sqlstate(ERRCODE_UNDEFINED_OBJECT),
-            )),
+            }
             Some((v, base, id)) => {
                 if id > 0 {
                     self.set_base_object(&base, id);
@@ -675,13 +677,7 @@ impl<'a, 'x, 'mcx: 'a> ExecCtx<'a, 'x, 'mcx> {
                             if !self.throw_errors {
                                 return Ok(Jper::Error);
                             }
-                            return Err(Box::new(
-                                PgError::error(format!(
-                                    "JSON object does not contain key \"{}\"",
-                                    String::from_utf8_lossy(key)
-                                ))
-                                .with_sqlstate(ERRCODE_SQL_JSON_MEMBER_NOT_FOUND),
-                            ));
+                            return Err(Box::new(missing_key_err(key)));
                         }
                         None => {}
                     }
@@ -794,7 +790,7 @@ impl<'a, 'x, 'mcx: 'a> ExecCtx<'a, 'x, 'mcx> {
                             as_str(tmp),
                             None,
                             "double precision",
-                            as_str(tmp),
+                            tmp,
                             Some(&mut esc),
                         )?;
                         if esc.error_occurred() {
@@ -812,7 +808,7 @@ impl<'a, 'x, 'mcx: 'a> ExecCtx<'a, 'x, 'mcx> {
                             as_str(tmp),
                             None,
                             "double precision",
-                            as_str(tmp),
+                            tmp,
                             Some(&mut esc),
                         )?;
                         if esc.error_occurred() {
@@ -3102,4 +3098,21 @@ pub fn json_path_value<'a, 'mcx: 'a>(
     }
 
     Ok(JsonPathValueResult::Value(res_v))
+}
+
+// jsonpath_exec.c:1040: the key bytes verbatim in the message (a SQL_ASCII
+// database or a byteain alias can hand over non-UTF-8 bytes).
+#[cold]
+#[inline(never)]
+fn missing_key_err(key: &[u8]) -> PgError {
+    let e = match core::str::from_utf8(key) {
+        Ok(key) => PgError::error(format!("JSON object does not contain key \"{key}\"")),
+        Err(_) => {
+            let mut msg = b"JSON object does not contain key \"".to_vec();
+            msg.extend_from_slice(key);
+            msg.push(b'"');
+            PgError::error_raw_message(msg)
+        }
+    };
+    e.with_sqlstate(ERRCODE_SQL_JSON_MEMBER_NOT_FOUND)
 }

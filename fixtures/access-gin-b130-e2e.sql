@@ -1,0 +1,90 @@
+-- bugs/batch-130-backend-access-gin: C-vs-pgrust parity for the fixes in
+-- access/gin. Expected file captured from C 18.6
+-- (scripts/regress-diff.sh --capture).
+\set VERBOSITY verbose
+CREATE EXTENSION pageinspect;
+
+-- ginbulk.c ginInsertBAEntry: the accumulator identifies keys through the
+-- comparator, which detoasts. Key A (3000 bytes) is stored pglz-compressed
+-- by GinFormTuple; key B is a flat bytea whose payload is byte-identical to
+-- A's compressed image. Pending-list cleanup must keep them apart.
+CREATE TABLE b130_bulk(id int, a bytea[]);
+CREATE INDEX b130_bulk_idx ON b130_bulk USING gin(a);
+INSERT INTO b130_bulk VALUES (1, ARRAY[decode(repeat('6162', 1500), 'hex')]);
+INSERT INTO b130_bulk VALUES (2, ARRAY['\xb6000000b80b0000fc61620f02ff0f02ff0f02ff0f02ff0f02ff0f02ff1f0f02ff0f02ff0f02ff0f02ff0f02fa'::bytea]);
+SET enable_seqscan = off;
+SELECT id FROM b130_bulk WHERE a @> ARRAY[decode(repeat('6162', 1500), 'hex')] ORDER BY id;
+SELECT id FROM b130_bulk WHERE a @> ARRAY['\xb6000000b80b0000fc61620f02ff0f02ff0f02ff0f02ff0f02ff0f02ff1f0f02ff0f02ff0f02ff0f02ff0f02fa'::bytea] ORDER BY id;
+SELECT gin_clean_pending_list('b130_bulk_idx') > 0 AS cleaned;
+SELECT id FROM b130_bulk WHERE a @> ARRAY[decode(repeat('6162', 1500), 'hex')] ORDER BY id;
+SELECT id FROM b130_bulk WHERE a @> ARRAY['\xb6000000b80b0000fc61620f02ff0f02ff0f02ff0f02ff0f02ff0f02ff1f0f02ff0f02ff0f02ff0f02ff0f02fa'::bytea] ORDER BY id;
+SELECT id FROM b130_bulk WHERE a = ARRAY['\xb6000000b80b0000fc61620f02ff0f02ff0f02ff0f02ff0f02ff0f02ff1f0f02ff0f02ff0f02ff0f02ff0f02fa'::bytea] ORDER BY id;
+RESET enable_seqscan;
+DROP TABLE b130_bulk;
+
+-- ginvacuum.c ginDeletePage: GinPageSetDeleted ORs GIN_DELETED into the
+-- flags, so a deleted posting-tree leaf keeps data/leaf/compressed and
+-- ginvacuumcleanup still counts it as a data page.
+CREATE TABLE b130_vac(a int[]);
+CREATE INDEX b130_vac_idx ON b130_vac USING gin(a) WITH (fastupdate=off);
+INSERT INTO b130_vac SELECT ARRAY[1] FROM generate_series(1, 30000);
+SELECT pg_relation_size('b130_vac_idx') / 8192 AS pages;
+DELETE FROM b130_vac;
+VACUUM b130_vac;
+SELECT b AS blkno, flags
+  FROM generate_series(1, (pg_relation_size('b130_vac_idx') / 8192)::int - 1) b,
+       LATERAL gin_page_opaque_info(get_raw_page('b130_vac_idx', b))
+ WHERE 'deleted' = ANY(flags) ORDER BY b;
+SELECT n_entry_pages, n_data_pages, n_entries FROM gin_metapage_info(get_raw_page('b130_vac_idx', 0));
+DROP TABLE b130_vac;
+
+-- ginscan.c ginFillScanEntry: entries carrying extra_data (every tsquery
+-- operand) are never deduplicated, so 'foo & foo' keeps two entries and
+-- gin_fuzzy_search_limit's threshold (limit * totalentries) is not reached.
+CREATE TABLE b130_fuzzy(id int, tsv tsvector);
+INSERT INTO b130_fuzzy SELECT g, to_tsvector('simple', 'foo bar' || (g % 7)) FROM generate_series(1, 1500) g;
+CREATE INDEX b130_fuzzy_idx ON b130_fuzzy USING gin(tsv) WITH (fastupdate=off);
+SET enable_seqscan = off;
+SET gin_fuzzy_search_limit = 1000;
+SELECT count(*) FROM b130_fuzzy WHERE tsv @@ 'foo & foo'::tsquery;
+SELECT count(*) FROM b130_fuzzy WHERE tsv @@ 'foo & bar1 & foo'::tsquery;
+RESET gin_fuzzy_search_limit;
+RESET enable_seqscan;
+DROP TABLE b130_fuzzy;
+
+-- ginget.c keyGetItem: the GIN_TRUE arm leaves recheckCurItem as the tri
+-- consistent fn left it, and a native tri fn never writes it, so once a
+-- lossy page (GIN_MAYBE) has set it every later exact match is rechecked
+-- too. A counting operator over tsvector_ops witnesses the recheck calls.
+CREATE SEQUENCE b130_rechecks;
+CREATE FUNCTION b130_match(tsvector, tsquery) RETURNS bool LANGUAGE plpgsql
+  AS $$ BEGIN PERFORM nextval('b130_rechecks'); RETURN $1 @@ $2; END $$;
+CREATE OPERATOR @@% (LEFTARG = tsvector, RIGHTARG = tsquery, FUNCTION = b130_match);
+CREATE OPERATOR CLASS b130_ts_ops FOR TYPE tsvector USING gin AS
+  OPERATOR 1 @@%(tsvector,tsquery),
+  FUNCTION 1 gin_cmp_tslexeme(text,text),
+  FUNCTION 2 gin_extract_tsvector(tsvector,internal,internal),
+  FUNCTION 3 gin_extract_tsquery(tsvector,internal,smallint,internal,internal,internal,internal),
+  FUNCTION 4 gin_tsquery_consistent(internal,smallint,tsvector,integer,internal,internal,internal,internal),
+  FUNCTION 5 gin_cmp_prefix(text,text,smallint,internal),
+  FUNCTION 6 gin_tsquery_triconsistent(internal,smallint,tsvector,integer,internal,internal,internal),
+  STORAGE text;
+CREATE TABLE b130_lossy(id int, tsv tsvector, pad text) WITH (fillfactor = 10);
+INSERT INTO b130_lossy SELECT g, to_tsvector('simple', 'foo' || g), repeat('x', 500) FROM generate_series(1, 1500) g;
+CREATE INDEX b130_lossy_idx ON b130_lossy USING gin(tsv b130_ts_ops) WITH (fastupdate = off);
+SELECT pg_relation_size('b130_lossy') / 8192 AS heap_pages;
+SET enable_seqscan = off;
+SET work_mem = '64kB';
+EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF, BUFFERS OFF)
+  SELECT count(*) FROM b130_lossy WHERE tsv @@% 'foo:*'::tsquery;
+SELECT last_value AS rechecks_after_explain, is_called FROM b130_rechecks;
+SELECT setval('b130_rechecks', 1, false);
+SELECT count(*) FROM b130_lossy WHERE tsv @@% 'foo:*'::tsquery;
+SELECT last_value AS rechecks, is_called FROM b130_rechecks;
+RESET work_mem;
+RESET enable_seqscan;
+DROP TABLE b130_lossy;
+DROP OPERATOR CLASS b130_ts_ops USING gin;
+DROP OPERATOR @@%(tsvector, tsquery);
+DROP FUNCTION b130_match(tsvector, tsquery);
+DROP SEQUENCE b130_rechecks;

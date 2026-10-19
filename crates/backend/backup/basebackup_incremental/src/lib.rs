@@ -308,6 +308,16 @@ impl IncrementalBackupInfo {
         // C: Assert(ib->buf.data == NULL) — manifest must be finalized.
         assert!(self.finalized, "PrepareForIncrementalBackup before FinalizeIncrementalManifest");
 
+        // basebackup_incremental.c:288: the empty-manifest check precedes
+        // readTimeLineHistory.
+        if self.manifest_wal_ranges.is_empty() {
+            ereport(ERROR)
+                .errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE)
+                .errmsg("manifest contains no required WAL ranges")
+                .finish(loc("PrepareForIncrementalBackup"))?;
+            unreachable!();
+        }
+
         // Match the manifest's WAL ranges against this server's timeline
         // history (C's readTimeLineHistory of the backup-start TLI).
         let expected_tles = timeline_seams::read_timeline_history::call(mcx, backup_state.starttli)?;

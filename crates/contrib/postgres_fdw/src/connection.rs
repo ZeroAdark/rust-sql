@@ -17,7 +17,7 @@
 // Deliberate divergences (recorded in notes/contrib-pgfdw-p2.md):
 // - parallel_commit / parallel_abort server options are parsed but the
 //   commit/abort paths always run C's serial arms.
-// - GSSAPI delegation + SCRAM passthrough are dormant (same as dblink).
+// - GSSAPI delegation is dormant (same as dblink).
 // - postgres_fdw.application_name rides the placeholder custom-GUC store
 //   (SET works; no DefineCustomStringVariable metadata).
 use std::cell::{Cell, RefCell};
@@ -56,10 +56,13 @@ const RETRY_CANCEL_TIMEOUT_MS: i64 = 1_000;
 // C PgFdwConnState.pendingAreq, by value: the in-flight async FETCH's cursor
 // plus its requestor Append's plan_node_id (C reaches the AsyncRequest by
 // pointer; we cannot reach another node's state, so ownership is by id).
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct PendingFetch {
     pub(crate) cursor_number: u32,
     pub(crate) requestor_plan_id: i32,
+    /// The owning scan's remote SELECT (C fsstate->query): a failed FETCH
+    /// drained on another scan's behalf is reported against it.
+    pub(crate) query: String,
 }
 
 pub(crate) struct ConnCacheEntry {
@@ -113,6 +116,7 @@ type ConnMap = HashMap<Oid, ConnCacheEntry, FxBuildHasher>;
 thread_local! {
     static CONNECTIONS: RefCell<ConnMap> = RefCell::new(HashMap::with_hasher(FxBuildHasher));
     static CALLBACKS_REGISTERED: Cell<bool> = const { Cell::new(false) };
+    static EXIT_CLOSE_ARMED: Cell<bool> = const { Cell::new(false) };
     static XACT_GOT_CONNECTION: Cell<bool> = const { Cell::new(false) };
     static CURSOR_NUMBER: Cell<u32> = const { Cell::new(0) };
     static PREP_STMT_NUMBER: Cell<u32> = const { Cell::new(0) };
@@ -152,10 +156,10 @@ pub(crate) fn remote_error(res: &QueryResult, sql: Option<&str>) -> Box<PgError>
     } else {
         ERRCODE_CONNECTION_FAILURE
     };
-    let mut primary = diag.primary.clone();
-    if primary.is_empty() {
-        primary = pchomp(&res.err);
-    }
+    let primary = match &res.diag {
+        Some(d) => d.primary.clone(),
+        None => pchomp(&res.err),
+    };
     let mut e = if !primary.is_empty() {
         PgError::error(primary)
     } else {
@@ -280,17 +284,21 @@ fn drain_last_result(conn: &mut PgConn, query: Option<&str>) -> PgResult<QueryRe
 
 // process_pending_request's connection half: drain the in-flight FETCH and
 // park its rows for the owning scan to adopt.
+// C's fetch_more_data raises a failed FETCH here, before any other command
+// reaches the (now aborted) remote transaction (postgres_fdw.c:3798).
 pub(crate) fn park_pending_entry(e: &mut ConnCacheEntry) -> PgResult<()> {
-    let Some(p) = e.pending_fetch else { return Ok(()) };
+    let Some(p) = e.pending_fetch.take() else { return Ok(()) };
     let conn = e.conn.as_mut().expect("live connection");
-    let res = drain_last_result(conn, None)?;
-    e.pending_fetch = None;
+    let res = drain_last_result(conn, Some(&p.query))?;
+    if res.status != pgclient::ExecStatus::TuplesOk {
+        return Err(remote_error(&res, Some(&p.query)));
+    }
     e.parked.push((p.cursor_number, res));
     Ok(())
 }
 
 pub(crate) fn pending_fetch(key: Oid) -> PgResult<Option<PendingFetch>> {
-    with_entry(key, |e| e.pending_fetch)
+    with_entry(key, |e| e.pending_fetch.clone())
 }
 
 pub(crate) fn socket(key: Oid) -> PgResult<types_core::pgsocket> {
@@ -315,7 +323,8 @@ pub(crate) fn begin_async_fetch(
                 Some(query),
             ));
         }
-        e.pending_fetch = Some(PendingFetch { cursor_number, requestor_plan_id });
+        e.pending_fetch =
+            Some(PendingFetch { cursor_number, requestor_plan_id, query: query.to_string() });
         Ok(())
     })?
 }
@@ -530,14 +539,21 @@ fn make_new_connection<'mcx>(
     entry.parallel_abort = false;
     for opt in server.options.iter() {
         match opt.name {
-            "keep_connections" => entry.keep_connections = def_get_boolean(opt.value),
-            "parallel_commit" => entry.parallel_commit = def_get_boolean(opt.value),
-            "parallel_abort" => entry.parallel_abort = def_get_boolean(opt.value),
+            "keep_connections" => {
+                entry.keep_connections = crate::option::def_get_boolean(opt.name, opt.value)?
+            }
+            "parallel_commit" => {
+                entry.parallel_commit = crate::option::def_get_boolean(opt.name, opt.value)?
+            }
+            "parallel_abort" => {
+                entry.parallel_abort = crate::option::def_get_boolean(opt.name, opt.value)?
+            }
             _ => {}
         }
     }
 
     entry.conn = Some(Box::new(connect_pg_server(&server, user)?));
+    arm_exit_close();
     // connection.c:421, elog(DEBUG3).
     debug3(format!(
         "new postgres_fdw connection {} for server \"{}\" (user mapping oid {}, userid {})",
@@ -547,14 +563,6 @@ fn make_new_connection<'mcx>(
         user.userid
     ));
     Ok(())
-}
-
-fn def_get_boolean(value: Option<&str>) -> bool {
-    // C defGetBoolean: a DefElem with a NULL arg means true.
-    match value {
-        None => true,
-        Some(v) => matches!(v.to_ascii_lowercase().as_str(), "true" | "t" | "on" | "1" | "yes" | "y"),
-    }
 }
 
 // connect_pg_server: assemble libpq options (server options, then
@@ -583,27 +591,10 @@ fn connect_pg_server<'mcx>(
             opts.push(("application_name".to_string(), v));
         }
     }
-    // Search backwards for the last non-empty application_name and expand
-    // its escape sequences; empty expansions unset the slot and keep looking.
-    let mut i = opts.len();
-    while i > 0 {
-        i -= 1;
-        if opts[i].0 == "application_name" && !opts[i].1.is_empty() {
-            let expanded = crate::option::process_pgfdw_appname(&opts[i].1)?;
-            if !expanded.is_empty() {
-                opts[i].1 = expanded;
-                break;
-            }
-            opts.remove(i);
-        }
-    }
-    // fallback_application_name "postgres_fdw" (libpq applies the fallback
-    // only when no application_name won; emulated here).
-    if !opts.iter().any(|(k, v)| k == "application_name" && !v.is_empty()) {
-        opts.push(("application_name".to_string(), "postgres_fdw".to_string()));
-    }
+    resolve_application_name(&mut opts)?;
+    add_scram_passthrough_options(&mut opts, server, user)?;
 
-    check_conn_params(&opts, user)?;
+    check_conn_params(&opts, server, user)?;
 
     // Build a conninfo string; pgclient's resolver applies libpq's defaults
     // ladder exactly as PQconnectdbParams would.
@@ -634,7 +625,7 @@ fn connect_pg_server<'mcx>(
         }
     };
 
-    if let Err(e) = pgfdw_security_check(&opts, user, &conn) {
+    if let Err(e) = pgfdw_security_check(&opts, server, user, &conn) {
         let mut conn = conn;
         conn.terminate();
         return Err(e);
@@ -648,6 +639,95 @@ fn connect_pg_server<'mcx>(
     Ok(conn)
 }
 
+// connection.c:522-560: search backwards for the last non-empty
+// application_name and expand its escape sequences; an empty expansion
+// unsets that slot and the search continues. "postgres_fdw" is supplied as
+// fallback_application_name, so libpq's service-file / PGAPPNAME defaults
+// still win over it (they lose only to an explicit application_name).
+fn resolve_application_name(opts: &mut Vec<(String, String)>) -> PgResult<()> {
+    let mut i = opts.len();
+    while i > 0 {
+        i -= 1;
+        if opts[i].0 == "application_name" && !opts[i].1.is_empty() {
+            let expanded = crate::option::process_pgfdw_appname(&opts[i].1)?;
+            if !expanded.is_empty() {
+                opts[i].1 = expanded;
+                break;
+            }
+            opts.remove(i);
+        }
+    }
+    opts.push(("fallback_application_name".to_string(), "postgres_fdw".to_string()));
+    Ok(())
+}
+
+// connection.c:572-608: with SCRAM pass-through enabled and the local
+// session authenticated by SCRAM, hand the saved ClientKey/ServerKey to
+// libpq and require scram-sha-256 on the remote.
+fn add_scram_passthrough_options(
+    opts: &mut Vec<(String, String)>,
+    server: &ForeignServer<'_>,
+    user: &UserMapping<'_>,
+) -> PgResult<()> {
+    if !init_small::globals::HaveMyProcPort() || !use_scram_passthrough(server, user)? {
+        return Ok(());
+    }
+    let Some((client_key, server_key)) = init_small::globals::TryWithMyProcPort(|p| {
+        p.has_scram_keys.then_some((p.scram_client_key, p.scram_server_key))
+    })
+    .flatten() else {
+        return Ok(());
+    };
+    opts.push(("scram_client_key".to_string(), b64_scram_key(&client_key)?));
+    opts.push(("scram_server_key".to_string(), b64_scram_key(&server_key)?));
+    opts.push(("require_auth".to_string(), "scram-sha-256".to_string()));
+    Ok(())
+}
+
+fn b64_scram_key(key: &[u8]) -> PgResult<String> {
+    let len = pg_b64::pg_b64_enc_len(key.len() as i32);
+    let mut out = vec![0u8; len as usize];
+    let encoded_len = pg_b64::pg_b64_encode(key, key.len() as i32, &mut out, len);
+    if encoded_len < 0 {
+        return Err(Box::new(PgError::error("could not encode SCRAM client key")));
+    }
+    out.truncate(encoded_len as usize);
+    Ok(String::from_utf8(out).expect("base64 is ASCII"))
+}
+
+// UseScramPassthrough (connection.c:690): the user mapping's setting takes
+// precedence over the server's.
+fn use_scram_passthrough(server: &ForeignServer<'_>, user: &UserMapping<'_>) -> PgResult<bool> {
+    for opt in user.options.iter().chain(server.options.iter()) {
+        if opt.name == "use_scram_passthrough" {
+            return crate::option::def_get_boolean(opt.name, opt.value);
+        }
+    }
+    Ok(false)
+}
+
+// pgfdw_has_required_scram_options (connection.c:2530): every occurrence
+// counts, so a later empty duplicate of a key un-sets it.
+fn has_required_scram_options(opts: &[(String, String)]) -> bool {
+    let mut has_client_key = false;
+    let mut has_server_key = false;
+    let mut has_require_auth = false;
+    for (k, v) in opts {
+        match k.as_str() {
+            "scram_client_key" => has_client_key = !v.is_empty(),
+            "scram_server_key" => has_server_key = !v.is_empty(),
+            "require_auth" => has_require_auth = v == "scram-sha-256",
+            _ => {}
+        }
+    }
+    has_client_key && has_server_key && has_require_auth
+}
+
+fn session_has_scram_keys() -> bool {
+    init_small::globals::HaveMyProcPort()
+        && init_small::globals::TryWithMyProcPort(|p| p.has_scram_keys).unwrap_or(false)
+}
+
 fn escape_param_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -659,29 +739,37 @@ fn escape_param_str(s: &str) -> String {
     out
 }
 
-fn user_mapping_password_required(user: &UserMapping<'_>) -> bool {
+fn user_mapping_password_required(user: &UserMapping<'_>) -> PgResult<bool> {
     for opt in user.options.iter() {
         if opt.name == "password_required" {
-            return def_get_boolean(opt.value);
+            return crate::option::def_get_boolean(opt.name, opt.value);
         }
     }
-    true
+    Ok(true)
 }
 
 fn opts_have_password(opts: &[(String, String)]) -> bool {
     opts.iter().any(|(k, v)| k == "password" && !v.is_empty())
 }
 
-// check_conn_params: pre-connect. GSS delegation and SCRAM passthrough are
-// dormant (no delegated creds / has_scram_keys on this server).
-fn check_conn_params(opts: &[(String, String)], user: &UserMapping<'_>) -> PgResult<()> {
+// check_conn_params (connection.c:722): pre-connect. GSS delegation is
+// dormant (no GSSAPI on this server, as a C build without ENABLE_GSS).
+fn check_conn_params(
+    opts: &[(String, String)],
+    server: &ForeignServer<'_>,
+    user: &UserMapping<'_>,
+) -> PgResult<()> {
     if superuser::superuser_arg(user.userid)? {
         return Ok(());
     }
     if opts_have_password(opts) {
         return Ok(());
     }
-    if !user_mapping_password_required(user) {
+    if !user_mapping_password_required(user)? {
+        return Ok(());
+    }
+    if session_has_scram_keys() && has_required_scram_options(opts) {
+        debug_assert!(use_scram_passthrough(server, user)?);
         return Ok(());
     }
     Err(Box::new(
@@ -697,16 +785,21 @@ fn check_conn_params(opts: &[(String, String)], user: &UserMapping<'_>) -> PgRes
 // used by the server's auth exchange.
 fn pgfdw_security_check(
     opts: &[(String, String)],
+    server: &ForeignServer<'_>,
     user: &UserMapping<'_>,
     conn: &PgConn,
 ) -> PgResult<()> {
     if superuser::superuser_arg(user.userid)? {
         return Ok(());
     }
-    if !user_mapping_password_required(user) {
+    if !user_mapping_password_required(user)? {
         return Ok(());
     }
     if conn.used_password() && opts_have_password(opts) {
+        return Ok(());
+    }
+    if session_has_scram_keys() && has_required_scram_options(opts) {
+        debug_assert!(use_scram_passthrough(server, user)?);
         return Ok(());
     }
     Err(Box::new(
@@ -775,6 +868,27 @@ fn begin_remote_xact(entry: &mut ConnCacheEntry) -> PgResult<()> {
     Ok(())
 }
 
+// A C backend's connections die with its process. A pooled worker thread
+// outlives its task, so close the cache when the task's proc_exit drains.
+fn arm_exit_close() {
+    if !EXIT_CLOSE_ARMED.with(Cell::get) {
+        EXIT_CLOSE_ARMED.with(|c| c.set(true));
+        ipc::on_proc_exit(close_connections_at_exit, 0);
+    }
+}
+
+fn close_connections_at_exit(_code: i32, _arg: usize) {
+    EXIT_CLOSE_ARMED.with(|c| c.set(false));
+    let _ = CONNECTIONS.try_with(|c| {
+        if let Ok(mut map) = c.try_borrow_mut() {
+            for entry in map.values_mut() {
+                disconnect_entry(entry);
+            }
+            map.clear();
+        }
+    });
+}
+
 fn disconnect_entry(entry: &mut ConnCacheEntry) {
     if let Some(mut conn) = entry.conn.take() {
         conn.terminate();
@@ -831,12 +945,12 @@ fn pgfdw_xact_callback(event: XactEvent, _arg: Datum) -> PgResult<()> {
                         )?;
                         entry.changing_xact_state = false;
                         if entry.have_prep_stmt && entry.have_error {
-                            // Errors deliberately ignored (DEALLOCATE ALL).
-                            let _ = entry
+                            // Remote errors deliberately ignored (DEALLOCATE ALL).
+                            entry
                                 .conn
                                 .as_mut()
                                 .expect("live connection")
-                                .exec("DEALLOCATE ALL");
+                                .exec("DEALLOCATE ALL")?;
                         }
                         entry.have_prep_stmt = false;
                         entry.have_error = false;
@@ -882,9 +996,10 @@ fn pgfdw_xact_callback(event: XactEvent, _arg: Datum) -> PgResult<()> {
 #[cold]
 fn abort_cleanup_failure_error(serverid: Oid) -> Box<PgError> {
     let scratch = mcx::MemoryContext::new("postgres_fdw connection error");
-    let name = foreigncmds::foreign::GetForeignServer(scratch.mcx(), serverid)
-        .map(|s| s.servername.to_string())
-        .unwrap_or_else(|_| format!("{serverid}"));
+    let name = match foreigncmds::foreign::GetForeignServer(scratch.mcx(), serverid) {
+        Ok(s) => s.servername.to_string(),
+        Err(e) => return e,
+    };
     Box::new(
         PgError::error(format!(
             "connection to server \"{name}\" cannot be used due to abort cleanup failure"
@@ -1406,6 +1521,7 @@ fn pgfdw_get_cleanup_result(
 ) -> PgResult<CleanupResult> {
     let mut canceldelta = Duration::from_millis((RETRY_CANCEL_TIMEOUT_MS * 2) as u64);
     let mut last: Option<QueryResult> = None;
+    let we_cleanup = we_lazy(&WE_CLEANUP_RESULT, "PostgresFdwCleanupResult")?;
     loop {
         while conn.is_busy() {
             let now = Instant::now();
@@ -1426,7 +1542,7 @@ fn pgfdw_get_cleanup_result(
             if ms <= 0 {
                 continue;
             }
-            if !conn.wait_readable_timeout(ms)? {
+            if !conn.wait_readable_timeout_ev(ms, we_cleanup)? {
                 continue; // timeout: loop re-checks the deadlines
             }
             if !conn.consume_input() {
@@ -1445,6 +1561,100 @@ fn pgfdw_get_cleanup_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // connection.c:522-560: "postgres_fdw" is a fallback_application_name,
+    // never an explicit application_name (libpq lets a service-file or
+    // PGAPPNAME application_name beat the fallback); the last non-empty
+    // application_name wins after escape expansion, and one that expands to
+    // nothing is dropped so the search continues.
+    #[test]
+    fn appname_resolution_supplies_a_fallback_not_an_explicit_name() {
+        let mut opts = vec![("dbname".to_string(), "db".to_string())];
+        resolve_application_name(&mut opts).unwrap();
+        assert!(!opts.iter().any(|(k, _)| k == "application_name"));
+        assert_eq!(
+            opts.last().unwrap(),
+            &("fallback_application_name".to_string(), "postgres_fdw".to_string())
+        );
+
+        let mut opts = vec![
+            ("application_name".to_string(), "first%%".to_string()),
+            ("application_name".to_string(), "".to_string()),
+            ("application_name".to_string(), "%z".to_string()),
+        ];
+        resolve_application_name(&mut opts).unwrap();
+        assert_eq!(
+            opts,
+            vec![
+                ("application_name".to_string(), "first%".to_string()),
+                ("application_name".to_string(), "".to_string()),
+                ("fallback_application_name".to_string(), "postgres_fdw".to_string()),
+            ]
+        );
+    }
+
+    // pgfdw_has_required_scram_options (connection.c:2530): all three of
+    // scram_client_key, scram_server_key and require_auth=scram-sha-256 must
+    // be present, and a later duplicate overrides an earlier one.
+    #[test]
+    fn required_scram_options_need_both_keys_and_require_auth() {
+        let o = |v: &[(&str, &str)]| -> Vec<(String, String)> {
+            v.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        };
+        assert!(has_required_scram_options(&o(&[
+            ("scram_client_key", "a"),
+            ("scram_server_key", "b"),
+            ("require_auth", "scram-sha-256"),
+        ])));
+        assert!(!has_required_scram_options(&o(&[
+            ("scram_client_key", "a"),
+            ("require_auth", "scram-sha-256"),
+        ])));
+        assert!(!has_required_scram_options(&o(&[
+            ("scram_client_key", "a"),
+            ("scram_server_key", "b"),
+            ("require_auth", "password"),
+        ])));
+        assert!(!has_required_scram_options(&o(&[
+            ("scram_client_key", "a"),
+            ("scram_server_key", "b"),
+            ("require_auth", "scram-sha-256"),
+            ("scram_server_key", ""),
+        ])));
+    }
+
+    // The saved 32-byte keys travel as libpq's base64 scram_client_key /
+    // scram_server_key (connection.c:578-598).
+    #[test]
+    fn scram_keys_are_base64_encoded_for_libpq() {
+        let key = [0x01u8; 32];
+        assert_eq!(b64_scram_key(&key).unwrap(), "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=");
+    }
+
+    // pgfdw_report_error (connection.c:1011-1022): only an ABSENT primary
+    // falls back to PQerrorMessage; a present but empty one reports "could
+    // not obtain message string for remote error".
+    #[test]
+    fn empty_remote_primary_is_not_absent() {
+        let diag = pgclient::ErrorFields {
+            severity: "ERROR".into(),
+            sqlstate: "P0001".into(),
+            ..Default::default()
+        };
+        let res = QueryResult {
+            status: pgclient::ExecStatus::Error,
+            nfields: 0,
+            rows: Vec::new(),
+            cmd_tag: String::new(),
+            diag: Some(diag),
+            err: "ERROR:  missing error text\n".into(),
+        };
+        let e = remote_error(&res, Some("SELECT 1"));
+        assert_eq!(e.message(), "could not obtain message string for remote error");
+        assert_eq!(e.sqlstate(), make_sqlstate(*b"P0001"));
+        let e = remote_error(&QueryResult::conn_error("server closed the connection\n".into()), None);
+        assert_eq!(e.message(), "server closed the connection");
+    }
 
     // closed-column gate (connection.c:2295): NULL unless check_conn was
     // passed AND the platform supports the POLLRDHUP probe. On Linux the

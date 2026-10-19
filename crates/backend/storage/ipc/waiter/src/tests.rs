@@ -7,7 +7,7 @@ use super::*;
 // NOTE: PGRUST_TEST_DROP_WAKE_1IN / recheck-cadence env vars are read once
 // per process; these tests assume the default environment (no injection).
 // The cadence default (1000ms) bounds park() AND park_timeout laps
-// (GL-RECWAKE-1); every sub-second timed park below is unaffected
+// (regression); every sub-second timed park below is unaffected
 // (min(timeout, cadence) picks the timeout), and untimed parks are bounded
 // by delivering a real unpark.
 
@@ -58,7 +58,7 @@ fn park_timeout_expires() {
     assert!(start.elapsed() >= Duration::from_millis(25));
 }
 
-// GL-RECWAKE-1: timed parks are ALSO bounded by the recheck cadence. A
+// regression: timed parks are ALSO bounded by the recheck cadence. A
 // dropped cross-thread unpark leaves the caller's predicate flagged but the
 // slot un-notified; a minutes-class caller timeout (the checkpointer main
 // lap) must not be the only backstop. Driven through Slot::park_core with a
@@ -242,7 +242,7 @@ fn virtual_time_drives_timeouts() {
     let done = Arc::new(AtomicU64::new(0));
     let done2 = Arc::clone(&done);
     let t = std::thread::spawn(move || {
-        // Timed parks lap at the recheck cadence (GL-RECWAKE-1): re-park for
+        // Timed parks lap at the recheck cadence (regression): re-park for
         // the remainder as real callers do, judging the deadline on the
         // installed (virtual) clock.
         let deadline = now_ms() + 5_000;
@@ -424,4 +424,111 @@ fn io_wait_with_degrades_to_blocking_reap_when_owner_never_reaps() {
     );
     assert_eq!(outcome, io::IoWaitOutcome::Reaped);
     assert!(reaped.load(Ordering::Relaxed));
+}
+
+// -- signal-route unpark (regression) ---------------------------------------
+//
+// The postmaster's sigaction handlers reach SetLatch -> unpark; C's SetLatch
+// is handler-safe (latch.c:290), so the route must never block on the slot
+// mutex the interrupted thread itself may hold.
+
+#[cfg(not(target_family = "wasm"))]
+mod signal_route {
+    use super::*;
+
+    static HANDLE_WORD: AtomicU64 = AtomicU64::new(0);
+    static HANDLER_RESULT: AtomicU64 = AtomicU64::new(u64::MAX);
+
+    extern "C" fn on_signal(_sig: i32) {
+        let r = match unpark_word_from_signal(HANDLE_WORD.load(Ordering::SeqCst)) {
+            Unparked::Delivered => 0,
+            Unparked::Pending => 1,
+            Unparked::Stale => 2,
+        };
+        HANDLER_RESULT.store(r, Ordering::SeqCst);
+    }
+
+    fn install(handler: usize) -> libc::sigaction {
+        // SAFETY: standard sigaction install/restore on a test-private signal.
+        unsafe {
+            let mut sa: libc::sigaction = std::mem::zeroed();
+            sa.sa_sigaction = handler;
+            libc::sigfillset(&mut sa.sa_mask);
+            sa.sa_flags = libc::SA_RESTART;
+            let mut old: libc::sigaction = std::mem::zeroed();
+            libc::sigaction(libc::SIGUSR2, &sa, &mut old);
+            old
+        }
+    }
+
+    /// The worst point: the signal lands while THIS thread holds its own
+    /// slot mutex (the begin_fd_park / issue_token window). The blocking
+    /// unpark would self-deadlock here; the signal route must return, leave
+    /// the wake latched, and have written the self-pipe byte.
+    #[test]
+    fn delivered_while_this_thread_holds_its_slot_mutex() {
+        ensure_wake_pipe().expect("wake pipe");
+        HANDLE_WORD.store(current_handle().as_u64(), Ordering::SeqCst);
+        HANDLER_RESULT.store(u64::MAX, Ordering::SeqCst);
+        let old = install(on_signal as extern "C" fn(i32) as usize);
+
+        let guard = global::lock_current_slot_for_test();
+        // SAFETY: raise(2) delivers synchronously to the calling thread.
+        unsafe { libc::raise(libc::SIGUSR2) };
+        drop(guard);
+        // SAFETY: restore the previous disposition.
+        unsafe { libc::sigaction(libc::SIGUSR2, &old, std::ptr::null_mut()) };
+
+        assert_eq!(HANDLER_RESULT.load(Ordering::SeqCst), 0, "handler did not run to Delivered");
+        // The byte is in the pipe (a kernel block would have ended)...
+        let mut b = [0u8; 1];
+        // SAFETY: 1-byte read from this thread's nonblocking wake pipe.
+        let n = unsafe { libc::read(wake_read_fd(), b.as_mut_ptr().cast(), 1) };
+        assert_eq!(n, 1, "no wake byte in the self-pipe");
+        // ...and the notification is latched for the next park.
+        assert!(!begin_fd_park(), "signal wake not latched");
+        assert_eq!(park_timeout(Duration::from_millis(0)), ParkResult::TimedOut);
+    }
+
+    /// A peer holding the target slot's mutex (an unpark in flight) must not
+    /// block the signal route either; the owner's next park sees the wake.
+    #[test]
+    fn does_not_block_on_a_mutex_held_by_another_thread() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let held = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(false));
+        let (held2, release2) = (Arc::clone(&held), Arc::clone(&release));
+        let t = std::thread::spawn(move || {
+            tx.send(current_handle()).unwrap();
+            let g = global::lock_current_slot_for_test();
+            held2.store(true, Ordering::SeqCst);
+            while !release2.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            drop(g);
+            park()
+        });
+        let h = rx.recv().unwrap();
+        while !held.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        let start = std::time::Instant::now();
+        assert_eq!(unpark_word_from_signal(h.as_u64()), Unparked::Delivered);
+        assert!(start.elapsed() < Duration::from_millis(200), "signal route blocked");
+        release.store(true, Ordering::SeqCst);
+        assert_eq!(t.join().unwrap(), ParkResult::Notified);
+    }
+
+    /// Uncontended, the route is the ordinary transition (Pending latches,
+    /// the next park consumes it exactly once) and stale handles are no-ops.
+    #[test]
+    fn uncontended_is_the_ordinary_transition() {
+        let h = current_handle();
+        assert_eq!(unpark_word_from_signal(h.as_u64()), Unparked::Pending);
+        assert_eq!(park(), ParkResult::Notified);
+        assert_eq!(park_timeout(Duration::from_millis(5)), ParkResult::TimedOut);
+        assert_eq!(unpark_word_from_signal(0), Unparked::Stale);
+        let stale = WakerHandle::new(h.unpack().0, h.unpack().1.wrapping_add(7));
+        assert_eq!(unpark_word_from_signal(stale.as_u64()), Unparked::Stale);
+    }
 }

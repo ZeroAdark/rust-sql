@@ -181,7 +181,7 @@ pub(crate) fn _hash_checkpage(rel: &Relation<'_>, buf: types_core::Buffer, flags
             true,
         ));
     }
-    let special_size = ::types_core::BLCKSZ - page.pd_special() as usize;
+    let special_size = page.special_size() as usize;
     if special_size != core::mem::size_of::<HashPageOpaqueData>() {
         return Err(index_corrupted(
             format!(

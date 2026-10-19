@@ -4,13 +4,21 @@
 
 use datum::Datum;
 use types_error::PgResult;
-use types_fmgr::{FmgrInfo, FunctionCallInfoBaseData as Fcinfo, PGFunction};
+use types_fmgr::{datum_varlena_packed, FmgrInfo, FunctionCallInfoBaseData as Fcinfo, PGFunction};
 
 const LIBRARY: &str = "citext";
 
+// PG_FREE_IF_COPY (citext.c:118-119): detoasted copies die with the call
+// instead of accumulating in a sort's context.
 fn fc_citext_cmp(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    let scratch = mcx::MemoryContext::new_bump("citext cmp detoast");
     // SAFETY: catalog args are non-null citext/text varlenas (strict fn).
-    let (a, b) = unsafe { (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?) };
+    let (a, b) = unsafe {
+        (
+            datum_varlena_packed(fcinfo.arg(0), scratch.mcx())?,
+            datum_varlena_packed(fcinfo.arg(1), scratch.mcx())?,
+        )
+    };
     Ok(Datum::from_i32(crate::citextcmp(
         a.data(),
         b.data(),
@@ -19,8 +27,14 @@ fn fc_citext_cmp(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
 }
 
 fn fc_citext_pattern_cmp(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    let scratch = mcx::MemoryContext::new_bump("citext cmp detoast");
     // SAFETY: catalog args are non-null citext/text varlenas (strict fn).
-    let (a, b) = unsafe { (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?) };
+    let (a, b) = unsafe {
+        (
+            datum_varlena_packed(fcinfo.arg(0), scratch.mcx())?,
+            datum_varlena_packed(fcinfo.arg(1), scratch.mcx())?,
+        )
+    };
     Ok(Datum::from_i32(crate::citext_pattern_cmp(a.data(), b.data())?))
 }
 

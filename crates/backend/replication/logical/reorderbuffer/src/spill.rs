@@ -19,7 +19,7 @@ use std::path::PathBuf;
 
 use mcx::PgVec;
 use types_core::{InvalidXLogRecPtr, Oid, TransactionId, XLogRecPtr};
-use types_error::{PgError, PgResult, ERRCODE_DATA_CORRUPTED, ERRCODE_OUT_OF_MEMORY};
+use types_error::{PgError, PgResult, DEBUG2, ERRCODE_DATA_CORRUPTED, ERRCODE_OUT_OF_MEMORY};
 use types_snapshot::{SnapshotData, SnapshotType};
 use types_storage::{RelFileLocator, SharedInvalidationMessage};
 use types_tuple::{BlockIdData, ItemPointerData, SizeofHeapTupleHeader};
@@ -351,6 +351,15 @@ impl ReorderBuffer {
     pub(crate) fn serialize_txn(&mut self, txn: TxnId) -> PgResult<()> {
         let size = self.txn(txn).size;
         let nentries_mem = self.txn(txn).nentries_mem;
+
+        let _ = elog::elog(
+            DEBUG2,
+            format!(
+                "spill {} changes in XID {} to disk",
+                nentries_mem as u32,
+                self.txn(txn).xid
+            ),
+        );
 
         // Do the same to all child TXs.
         let subs: Vec<TxnId> = dl_iter(&self.txns, self.txn(txn).subtxns, |t| t.node).collect();

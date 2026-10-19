@@ -16,6 +16,21 @@ fn terminate_rejects_negative_timeout_before_signaling() {
     assert!(msg.contains("must not be negative"), "{msg}");
 }
 
+// signalfuncs.c:290 standalone: kill(0, SIGHUP) lands on this backend.
+#[test]
+fn reload_conf_standalone_pends_a_config_reload() {
+    setup();
+    if !latch_seams::set_latch_my_latch::is_installed() {
+        latch_seams::set_latch_my_latch::set(|| {});
+    }
+    init_small::globals::SetIsUnderPostmaster(false);
+    interrupt::SetConfigReloadPending(false);
+    let mut fci = ::types_fmgr::LocalFcinfo::<0>::new(0);
+    assert!(fc_pg_reload_conf(None, &mut fci).unwrap().as_bool());
+    assert!(interrupt::ConfigReloadPending());
+    interrupt::SetConfigReloadPending(false);
+}
+
 #[test]
 fn builtin_table_shape() {
     let rows = SIGNALFUNCS_BUILTINS;

@@ -242,3 +242,37 @@ fn parse_options_feeds_specification_like_pg_dump() {
     assert_eq!(spec.level, 0);
     assert!(validate_compress_specification(&spec).is_none());
 }
+
+#[test]
+fn integer_values_skip_c_isspace_vertical_tab_and_form_feed() {
+    // compression.c expect_integer_value/parse_compress_specification use
+    // strtol, whose leading-whitespace skip is isspace(): \v and \f included.
+    let s = parse(PgCompressAlgorithm::Gzip, Some("level=\x0b1"));
+    assert!(s.parse_error.is_none(), "{:?}", s.parse_error);
+    assert_eq!(s.level, 1);
+    let s = parse(PgCompressAlgorithm::Gzip, Some("\x0c5"));
+    assert!(s.parse_error.is_none(), "{:?}", s.parse_error);
+    assert_eq!(s.level, 5);
+    assert_eq!(parse_compress_options("\x0b0"), ("none".to_string(), None));
+}
+
+#[test]
+fn integer_overflow_clamps_like_strtol_then_truncates_to_int() {
+    // strtol yields LONG_MIN for -9223372036854775808 (and any negative
+    // overflow); assigned to an int that is 0, so "none" accepts it.
+    let s = parse(PgCompressAlgorithm::None, Some("-9223372036854775808"));
+    assert!(s.parse_error.is_none(), "{:?}", s.parse_error);
+    assert_eq!(s.level, 0);
+    assert!(validate_compress_specification(&s).is_none());
+    let s = parse(PgCompressAlgorithm::None, Some("level=-99999999999999999999"));
+    assert!(s.parse_error.is_none(), "{:?}", s.parse_error);
+    assert_eq!(s.level, 0);
+    // LONG_MAX truncates to -1.
+    let s = parse(PgCompressAlgorithm::Gzip, Some("99999999999999999999"));
+    assert_eq!(s.level, -1);
+    // parse_compress_options compares the long itself, so LONG_MIN is not 0.
+    assert_eq!(
+        parse_compress_options("-9223372036854775808"),
+        ("gzip".to_string(), Some("-9223372036854775808".to_string()))
+    );
+}

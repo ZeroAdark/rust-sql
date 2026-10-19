@@ -40,7 +40,7 @@
 //! still asserting count+flags+bound-values, counted) when and only when a
 //! representation tie is what differs. See its comment and D1.
 //!
-//! WITHIN-TIE ORDER FENCE (ratified non-surface; GL-PARMERGE-1 precedent).
+//! WITHIN-TIE ORDER FENCE (ratified non-surface; regression precedent).
 //! C canonicalizes with qsort_arg — vendored verbatim, so the algorithm
 //! matches — but the shipped Rust uses a stable sort. For two input ranges
 //! that COMPARE EQUAL yet carry DIFFERENT bytes, which representative survives

@@ -91,10 +91,15 @@ pub fn fc_gin_clean_pending_list(
         gin::ginInsertCleanup(mcx, &indexRel, &state, true, true, true, Some(&mut stats))?;
         stats.pages_deleted as i64
     } else {
-        let _ = elog::elog(
-            DEBUG1,
-            format!("index \"{}\" is not valid", indexRel.name()),
-        );
+        // ginfast.c:1083-1086 ereport(DEBUG1, errcode(55000), ...).
+        elog::ereport(DEBUG1)
+            .errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE)
+            .errmsg(format!("index \"{}\" is not valid", indexRel.name()))
+            .finish(::types_error::ErrorLocation::new(
+                "ginfast.c",
+                1086,
+                "gin_clean_pending_list",
+            ))?;
         0
     };
 

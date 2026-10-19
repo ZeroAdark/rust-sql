@@ -367,6 +367,7 @@ fn tupdesc_mirror(core: &Arc<RelCoreShared>) -> PgResult<Rc<TupleDescData<'stati
                     defval,
                     check,
                     missing: PgVec::new_in(mcx),
+                    missing_store: PgVec::new_in(mcx),
                     num_defval: c.num_defval,
                     num_check: c.num_check,
                     relchecks: c.relchecks,

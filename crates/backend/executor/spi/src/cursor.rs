@@ -46,7 +46,6 @@ fn cursor_params(
     argtypes: &[types_core::Oid],
     values: &[Datum],
     nulls: &[bool],
-    hooked: bool,
 ) -> PgResult<ParamListHandle> {
     if argtypes.is_empty() {
         return Ok(ParamListHandle::NULL);
@@ -71,17 +70,9 @@ fn cursor_params(
     let v = nodes_params::copy_param_list(mcx, &caller_params)?;
     let slice = mcx::vec_borrow_in(mcx, v)?;
     // SAFETY: slice lives in portalContext, which PortalDrop deletes only
-    // after release_portal_registry_handles frees the handle.
-    // SAFETY: same lifetime argument as above; `hooked` records PL
-    // provenance (C: the source list's paramFetch != NULL — plpgsql's
-    // datum-table environment arrives via the *_with_paramlist entry).
-    let params = unsafe {
-        if hooked {
-            types_portal::params::register_hooked(slice)
-        } else {
-            types_portal::params::register(slice)
-        }
-    };
+    // after release_portal_registry_handles frees the handle. The copy has
+    // no paramFetch hook (params.c:53), whatever the source list carried.
+    let params = unsafe { types_portal::params::register(slice) };
     portal.borrow_mut().portalParams = params;
     Ok(params)
 }
@@ -95,14 +86,13 @@ pub fn SPI_cursor_open(
     nulls: &[bool],
     read_only: bool,
 ) -> PgResult<SpiCursor> {
-    cursor_open_internal(name, ptr, values, nulls, read_only, false)
+    cursor_open_internal(name, ptr, values, nulls, read_only)
 }
 
 // SPI_cursor_open_with_paramlist (spi.c): C's entry for a PL-built
 // ParamListInfo (plpgsql setup_param_list). This port materializes PL
-// variables into value arrays, so the shape matches SPI_cursor_open; the
-// surviving C-observable difference is the hooked provenance bit on the
-// registered params (the SPI_execute_plan_with_paramlist precedent).
+// variables into value arrays, so the shape matches SPI_cursor_open, and
+// C's copyParamList leaves the portal's list hookless either way.
 pub fn SPI_cursor_open_with_paramlist(
     name: Option<&str>,
     ptr: SpiPlanPtr,
@@ -110,7 +100,7 @@ pub fn SPI_cursor_open_with_paramlist(
     nulls: &[bool],
     read_only: bool,
 ) -> PgResult<SpiCursor> {
-    cursor_open_internal(name, ptr, values, nulls, read_only, true)
+    cursor_open_internal(name, ptr, values, nulls, read_only)
 }
 
 fn cursor_open_internal(
@@ -119,7 +109,6 @@ fn cursor_open_internal(
     values: &[Datum],
     nulls: &[bool],
     read_only: bool,
-    params_hooked: bool,
 ) -> PgResult<SpiCursor> {
     let Some(state) = crate::plan::state_snapshot(ptr) else {
         panic!("SPI_cursor_open: invalid plan");
@@ -173,7 +162,7 @@ fn cursor_open_internal(
         let query_string = plancache::CachedPlanQueryString(psrc);
         errctx.set_query(query_string);
 
-        let params = cursor_params(&portal, &state.argtypes, values, nulls, params_hooked)?;
+        let params = cursor_params(&portal, &state.argtypes, values, nulls)?;
 
         let cplan = plancache::GetCachedPlan(psrc, params, None, crate::current_query_env())?;
         let stmt_slice = plancache::CachedPlanStmtList(cplan);

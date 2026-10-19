@@ -136,8 +136,10 @@ pub(crate) fn add_relation_new_constraints_ext<'mcx>(
     }
 
     let mut numchecks = numoldchecks;
-    let mut checknames: PgVec<'mcx, &str> = PgVec::new_in(mcx);
-    let mut nnnames: PgVec<'mcx, &str> = PgVec::new_in(mcx);
+    let mut checknames: PgVec<'mcx, &[u8]> = PgVec::new_in(mcx);
+    // Constraint names are bytes (C char*): a ChooseConstraintName result
+    // may be byte-clipped inside a multibyte character (SQL_ASCII).
+    let mut nnnames: PgVec<'mcx, &[u8]> = PgVec::new_in(mcx);
     for cnode in new_constraints.iter() {
         let cdef = cnode.as_variant::<Constraint>().expect("Constraint");
         let relname = core::str::from_utf8(rel.rd_rel.relname.name_str()).expect("relname");
@@ -180,7 +182,7 @@ pub(crate) fn add_relation_new_constraints_ext<'mcx>(
                         mcx,
                         pg_constraint::ConstraintCategory::Relation,
                         rel.rd_id,
-                        name,
+                        name.as_bytes(),
                     )? {
                         return Err(Box::new(
                             PgError::error(format!(
@@ -189,7 +191,7 @@ pub(crate) fn add_relation_new_constraints_ext<'mcx>(
                             .with_sqlstate(ERRCODE_DUPLICATE_OBJECT),
                         ));
                     }
-                    mcx::PgString::from_str_in(name, mcx)?
+                    bytes_vec(mcx, name.as_bytes())?
                 }
                 None => pg_constraint::ChooseConstraintName(
                     mcx,
@@ -200,10 +202,13 @@ pub(crate) fn add_relation_new_constraints_ext<'mcx>(
                     &nnnames,
                 )?,
             };
-            nnnames.push(str_in(mcx, nnname.as_str())?);
+            nnnames.push(bytes_in(mcx, &nnname)?);
+            // CookedCon.name rides the child-recursion parse tree as &str:
+            // a non-UTF-8 byte clip is a typed refusal before the write.
+            let nnname_str = pg_constraint::generated_name_utf8(&nnname, "not-null constraint")?;
             let conkey = [colnum];
             let mut entry = pg_constraint::ConstraintEntry::base(
-                nnname.as_str(),
+                &nnname,
                 rel.rd_rel.relnamespace,
                 pg_constraint::CONSTRAINT_NOTNULL,
                 rel.rd_id,
@@ -218,7 +223,7 @@ pub(crate) fn add_relation_new_constraints_ext<'mcx>(
             cooked.push(CookedCon {
                 contype: ConstrType::CONSTR_NOTNULL,
                 conoid: con_oid,
-                name: str_in(mcx, nnname.as_str())?,
+                name: str_in(mcx, nnname_str)?,
                 attnum: colnum,
                 expr: None,
                 skip_validation: cdef.skip_validation,
@@ -259,10 +264,10 @@ pub(crate) fn add_relation_new_constraints_ext<'mcx>(
 
         let ccname = match cdef.conname {
             Some(name) => {
-                if checknames.iter().any(|&n| n == name) {
+                if checknames.iter().any(|&n| n == name.as_bytes()) {
                     return Err(check_constraint_exists(name));
                 }
-                checknames.push(name);
+                checknames.push(name.as_bytes());
                 if merge_with_existing_constraint(
                     mcx,
                     rel,
@@ -319,8 +324,13 @@ pub(crate) fn add_relation_new_constraints_ext<'mcx>(
                     rel.rd_rel.relnamespace,
                     &checknames,
                 )?;
-                checknames.push(str_in(mcx, name.as_str())?);
-                name
+                checknames.push(bytes_in(mcx, &name)?);
+                // A CHECK name rides CookedConstraint.name (&str): typed
+                // refusal for a non-UTF-8 byte clip, never a panic.
+                mcx::PgString::from_str_in(
+                    pg_constraint::generated_name_utf8(&name, "check constraint")?,
+                    mcx,
+                )?
             }
         };
 
@@ -368,9 +378,9 @@ pub(crate) fn add_relation_not_null_constraints<'mcx>(
 ) -> PgResult<PgVec<'mcx, AttrNumber>> {
     let relname = core::str::from_utf8(rel.rd_rel.relname.name_str()).expect("relname");
     let mut nncols: PgVec<'mcx, AttrNumber> = PgVec::new_in(mcx);
-    let mut nnnames: PgVec<'mcx, &str> = PgVec::new_in(mcx);
+    let mut nnnames: PgVec<'mcx, &[u8]> = PgVec::new_in(mcx);
     for &n in existing_constraints {
-        nnnames.push(str_in(mcx, n)?);
+        nnnames.push(bytes_in(mcx, n.as_bytes())?);
     }
     let mut givennames: PgVec<'mcx, &str> = PgVec::new_in(mcx);
     let mut old_pending: PgVec<'mcx, bool> = mcx::vec_from_elem_in(mcx, true, old_notnulls.len());
@@ -494,7 +504,7 @@ pub(crate) fn add_relation_not_null_constraints<'mcx>(
                     ));
                 }
                 givennames.push(str_in(mcx, given)?);
-                mcx::PgString::from_str_in(given, mcx)?
+                bytes_vec(mcx, given.as_bytes())?
             }
             None => pg_constraint::ChooseConstraintName(
                 mcx,
@@ -505,10 +515,10 @@ pub(crate) fn add_relation_not_null_constraints<'mcx>(
                 &nnnames,
             )?,
         };
-        nnnames.push(str_in(mcx, name.as_str())?);
+        nnnames.push(bytes_in(mcx, &name)?);
         let conkey = [attnum];
         let mut entry = pg_constraint::ConstraintEntry::base(
-            name.as_str(),
+            &name,
             rel.rd_rel.relnamespace,
             pg_constraint::CONSTRAINT_NOTNULL,
             rel.rd_id,
@@ -535,12 +545,12 @@ pub(crate) fn add_relation_not_null_constraints<'mcx>(
             }
         }
         if let Some(n) = conname {
-            if nnnames.iter().any(|&t| t == n) {
+            if nnnames.iter().any(|&t| t == n.as_bytes()) {
                 conname = None;
             }
         }
         let name = match conname {
-            Some(n) => mcx::PgString::from_str_in(n, mcx)?,
+            Some(n) => bytes_vec(mcx, n.as_bytes())?,
             None => {
                 let colname = {
                     let att = rel.rd_att.attr(cooked.attnum as usize - 1);
@@ -559,10 +569,10 @@ pub(crate) fn add_relation_not_null_constraints<'mcx>(
                 )?
             }
         };
-        nnnames.push(str_in(mcx, name.as_str())?);
+        nnnames.push(bytes_in(mcx, &name)?);
         let conkey = [cooked.attnum];
         let mut entry = pg_constraint::ConstraintEntry::base(
-            name.as_str(),
+            &name,
             rel.rd_rel.relnamespace,
             pg_constraint::CONSTRAINT_NOTNULL,
             rel.rd_id,
@@ -821,7 +831,7 @@ fn store_rel_check<'mcx>(
         ));
     }
     let mut entry = pg_constraint::ConstraintEntry::base(
-        ccname,
+        ccname.as_bytes(),
         rel.rd_rel.relnamespace,
         pg_constraint::CONSTRAINT_CHECK,
         rel.rd_id,
@@ -1118,6 +1128,12 @@ pub(crate) fn collect_column_defaults<'mcx>(
         }
     }
     Ok((raw, cooked))
+}
+
+fn bytes_vec<'mcx>(mcx: Mcx<'mcx>, b: &[u8]) -> PgResult<PgVec<'mcx, u8>> {
+    let mut v: PgVec<'mcx, u8> = mcx::vec_with_capacity_in(mcx, b.len())?;
+    mcx::vec_append_bytes(&mut v, b)?;
+    Ok(v)
 }
 
 fn bytes_in<'mcx>(mcx: Mcx<'mcx>, b: &[u8]) -> PgResult<&'mcx [u8]> {

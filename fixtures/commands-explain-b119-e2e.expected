@@ -1,0 +1,338 @@
+-- bugs/batch-119-backend-commands-explain: C-vs-pgrust parity for the EXPLAIN
+-- fixes (Infinity cost spelling; Incremental Sort and HashAgg worker stats).
+-- Expected file captured from C 18.6 (scripts/regress-diff.sh --capture).
+\set VERBOSITY verbose
+-- explain_format: an infinite cost prints as C's snprintf spells it
+CREATE TABLE b119_inf AS SELECT g AS a, repeat('x', 100) AS b FROM generate_series(1, 500) g;
+ANALYZE b119_inf;
+SET max_parallel_workers_per_gather = 0;
+SET seq_page_cost = 1e308;
+EXPLAIN SELECT * FROM b119_inf;
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Seq Scan on b119_inf  (cost=0.00..Infinity rows=500 width=105)
+(1 row)
+
+EXPLAIN (FORMAT JSON) SELECT * FROM b119_inf;
+             QUERY PLAN             
+------------------------------------
+ [                                 +
+   {                               +
+     "Plan": {                     +
+       "Node Type": "Seq Scan",    +
+       "Parallel Aware": false,    +
+       "Async Capable": false,     +
+       "Relation Name": "b119_inf",+
+       "Alias": "b119_inf",        +
+       "Startup Cost": 0.00,       +
+       "Total Cost": Infinity,     +
+       "Plan Rows": 500,           +
+       "Plan Width": 105,          +
+       "Disabled": false           +
+     }                             +
+   }                               +
+ ]
+(1 row)
+
+EXPLAIN (FORMAT XML) SELECT * FROM b119_inf;
+                        QUERY PLAN                        
+----------------------------------------------------------
+ <explain xmlns="http://www.postgresql.org/2009/explain">+
+   <Query>                                               +
+     <Plan>                                              +
+       <Node-Type>Seq Scan</Node-Type>                   +
+       <Parallel-Aware>false</Parallel-Aware>            +
+       <Async-Capable>false</Async-Capable>              +
+       <Relation-Name>b119_inf</Relation-Name>           +
+       <Alias>b119_inf</Alias>                           +
+       <Startup-Cost>0.00</Startup-Cost>                 +
+       <Total-Cost>Infinity</Total-Cost>                 +
+       <Plan-Rows>500</Plan-Rows>                        +
+       <Plan-Width>105</Plan-Width>                      +
+       <Disabled>false</Disabled>                        +
+     </Plan>                                             +
+   </Query>                                              +
+ </explain>
+(1 row)
+
+EXPLAIN (FORMAT YAML) SELECT * FROM b119_inf;
+          QUERY PLAN           
+-------------------------------
+ - Plan:                      +
+     Node Type: "Seq Scan"    +
+     Parallel Aware: false    +
+     Async Capable: false     +
+     Relation Name: "b119_inf"+
+     Alias: "b119_inf"        +
+     Startup Cost: 0.00       +
+     Total Cost: Infinity     +
+     Plan Rows: 500           +
+     Plan Width: 105          +
+     Disabled: false
+(1 row)
+
+SET cpu_tuple_cost = 1e308;
+EXPLAIN SELECT * FROM b119_inf ORDER BY a;
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Sort  (cost=Infinity..Infinity rows=500 width=105)
+   Sort Key: a
+   ->  Seq Scan on b119_inf  (cost=0.00..Infinity rows=500 width=105)
+(3 rows)
+
+RESET seq_page_cost;
+RESET cpu_tuple_cost;
+RESET max_parallel_workers_per_gather;
+-- worker stanzas: digits masked (group counts, memory and row splits vary)
+CREATE TABLE b119_pt AS SELECT (g % 1000) AS k, g AS b FROM generate_series(1, 300000) g;
+CREATE INDEX b119_pt_k ON b119_pt(k);
+ANALYZE b119_pt;
+CREATE FUNCTION b119_explain(opts text, q text, pat text) RETURNS SETOF text
+LANGUAGE plpgsql AS $$
+DECLARE l text;
+BEGIN
+  FOR l IN EXECUTE 'EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF, BUFFERS OFF, ' || opts || ') ' || q LOOP
+    IF l ~ pat THEN
+      RETURN NEXT regexp_replace(l, '\d+', 'N', 'g');
+    END IF;
+  END LOOP;
+END $$;
+SET parallel_setup_cost = 0;
+SET parallel_tuple_cost = 0;
+SET min_parallel_table_scan_size = 0;
+SET min_parallel_index_scan_size = 0;
+SET max_parallel_workers_per_gather = 2;
+SET parallel_leader_participation = off;
+-- show_incremental_sort_info: the leader sorted no groups, the workers did
+SET enable_seqscan = off;
+SET enable_sort = off;
+EXPLAIN (COSTS OFF) SELECT k, b FROM b119_pt ORDER BY k, b;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Gather Merge
+   Workers Planned: 2
+   ->  Incremental Sort
+         Sort Key: k, b
+         Presorted Key: k
+         ->  Parallel Index Scan using b119_pt_k on b119_pt
+(6 rows)
+
+SELECT * FROM b119_explain('VERBOSE', 'SELECT k, b FROM b119_pt ORDER BY k, b', 'Worker|Groups');
+                                         b119_explain                                          
+-----------------------------------------------------------------------------------------------
+   Workers Planned: N
+   Workers Launched: N
+         Worker N:  actual rows=N.N loops=N
+           Full-sort Groups: N  Sort Method: quicksort  Average Memory: NkB  Peak Memory: NkB
+           Pre-sorted Groups: N  Sort Method: quicksort  Average Memory: NkB  Peak Memory: NkB
+         Worker N:  actual rows=N.N loops=N
+           Full-sort Groups: N  Sort Method: quicksort  Average Memory: NkB  Peak Memory: NkB
+           Pre-sorted Groups: N  Sort Method: quicksort  Average Memory: NkB  Peak Memory: NkB
+               Worker N:  actual rows=N.N loops=N
+               Worker N:  actual rows=N.N loops=N
+(10 rows)
+
+SELECT * FROM b119_explain('FORMAT JSON', 'SELECT k, b FROM b119_pt ORDER BY k, b', 'Worker Number|Groups');
+                    b119_explain                     
+-----------------------------------------------------
+ [                                                  +
+   {                                                +
+     "Plan": {                                      +
+       "Node Type": "Gather Merge",                 +
+       "Parallel Aware": false,                     +
+       "Async Capable": false,                      +
+       "Actual Rows": N.N,                          +
+       "Actual Loops": N,                           +
+       "Disabled": false,                           +
+       "Workers Planned": N,                        +
+       "Workers Launched": N,                       +
+       "Plans": [                                   +
+         {                                          +
+           "Node Type": "Incremental Sort",         +
+           "Parent Relationship": "Outer",          +
+           "Parallel Aware": false,                 +
+           "Async Capable": false,                  +
+           "Actual Rows": N.N,                      +
+           "Actual Loops": N,                       +
+           "Disabled": false,                       +
+           "Sort Key": ["k", "b"],                  +
+           "Presorted Key": ["k"],                  +
+           "Workers": [                             +
+             {                                      +
+               "Worker Number": N,                  +
+               "Full-sort Groups": {                +
+                 "Group Count": N,                  +
+                 "Sort Methods Used": ["quicksort"],+
+                 "Sort Space Memory": {             +
+                   "Average Sort Space Used": N,    +
+                   "Peak Sort Space Used": N        +
+                 }                                  +
+               },                                   +
+               "Pre-sorted Groups": {               +
+                 "Group Count": N,                  +
+                 "Sort Methods Used": ["quicksort"],+
+                 "Sort Space Memory": {             +
+                   "Average Sort Space Used": N,    +
+                   "Peak Sort Space Used": N        +
+                 }                                  +
+               }                                    +
+             },                                     +
+             {                                      +
+               "Worker Number": N,                  +
+               "Full-sort Groups": {                +
+                 "Group Count": N,                  +
+                 "Sort Methods Used": ["quicksort"],+
+                 "Sort Space Memory": {             +
+                   "Average Sort Space Used": N,    +
+                   "Peak Sort Space Used": N        +
+                 }                                  +
+               },                                   +
+               "Pre-sorted Groups": {               +
+                 "Group Count": N,                  +
+                 "Sort Methods Used": ["quicksort"],+
+                 "Sort Space Memory": {             +
+                   "Average Sort Space Used": N,    +
+                   "Peak Sort Space Used": N        +
+                 }                                  +
+               }                                    +
+             }                                      +
+           ],                                       +
+           "Plans": [                               +
+             {                                      +
+               "Node Type": "Index Scan",           +
+               "Parent Relationship": "Outer",      +
+               "Parallel Aware": true,              +
+               "Async Capable": false,              +
+               "Scan Direction": "Forward",         +
+               "Index Name": "bN_pt_k",             +
+               "Relation Name": "bN_pt",            +
+               "Alias": "bN_pt",                    +
+               "Actual Rows": N.N,                  +
+               "Actual Loops": N,                   +
+               "Disabled": false,                   +
+               "Index Searches": N,                 +
+               "Workers": [                         +
+               ]                                    +
+             }                                      +
+           ]                                        +
+         }                                          +
+       ]                                            +
+     },                                             +
+     "Triggers": [                                  +
+     ]                                              +
+   }                                                +
+ ]
+(1 row)
+
+-- show_hashagg_info: per-worker batches and memory
+SET enable_seqscan = on;
+SET enable_indexscan = off;
+SET enable_indexonlyscan = off;
+EXPLAIN (COSTS OFF) SELECT k, count(*) FROM b119_pt GROUP BY k;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize HashAggregate
+   Group Key: k
+   ->  Gather
+         Workers Planned: 2
+         ->  Partial HashAggregate
+               Group Key: k
+               ->  Parallel Seq Scan on b119_pt
+(7 rows)
+
+SELECT * FROM b119_explain('VERBOSE', 'SELECT k, count(*) FROM b119_pt GROUP BY k', 'Worker|Batches');
+                      b119_explain                      
+--------------------------------------------------------
+   Batches: N  Memory Usage: NkB
+         Workers Planned: N
+         Workers Launched: N
+               Worker N:  actual rows=N.N loops=N
+                 Batches: N  Memory Usage: NkB
+               Worker N:  actual rows=N.N loops=N
+                 Batches: N  Memory Usage: NkB
+                     Worker N:  actual rows=N.N loops=N
+                     Worker N:  actual rows=N.N loops=N
+(9 rows)
+
+SELECT * FROM b119_explain('FORMAT JSON', 'SELECT k, count(*) FROM b119_pt GROUP BY k', 'Worker Number|Batches|Peak Memory|Disk Usage');
+                   b119_explain                    
+---------------------------------------------------
+ [                                                +
+   {                                              +
+     "Plan": {                                    +
+       "Node Type": "Aggregate",                  +
+       "Strategy": "Hashed",                      +
+       "Partial Mode": "Finalize",                +
+       "Parallel Aware": false,                   +
+       "Async Capable": false,                    +
+       "Actual Rows": N.N,                        +
+       "Actual Loops": N,                         +
+       "Disabled": false,                         +
+       "Group Key": ["k"],                        +
+       "HashAgg Batches": N,                      +
+       "Peak Memory Usage": N,                    +
+       "Disk Usage": N,                           +
+       "Plans": [                                 +
+         {                                        +
+           "Node Type": "Gather",                 +
+           "Parent Relationship": "Outer",        +
+           "Parallel Aware": false,               +
+           "Async Capable": false,                +
+           "Actual Rows": N.N,                    +
+           "Actual Loops": N,                     +
+           "Disabled": false,                     +
+           "Workers Planned": N,                  +
+           "Workers Launched": N,                 +
+           "Single Copy": false,                  +
+           "Plans": [                             +
+             {                                    +
+               "Node Type": "Aggregate",          +
+               "Strategy": "Hashed",              +
+               "Partial Mode": "Partial",         +
+               "Parent Relationship": "Outer",    +
+               "Parallel Aware": false,           +
+               "Async Capable": false,            +
+               "Actual Rows": N.N,                +
+               "Actual Loops": N,                 +
+               "Disabled": false,                 +
+               "Group Key": ["k"],                +
+               "Workers": [                       +
+                 {                                +
+                   "Worker Number": N,            +
+                   "HashAgg Batches": N,          +
+                   "Peak Memory Usage": N,        +
+                   "Disk Usage": N                +
+                 },                               +
+                 {                                +
+                   "Worker Number": N,            +
+                   "HashAgg Batches": N,          +
+                   "Peak Memory Usage": N,        +
+                   "Disk Usage": N                +
+                 }                                +
+               ],                                 +
+               "Plans": [                         +
+                 {                                +
+                   "Node Type": "Seq Scan",       +
+                   "Parent Relationship": "Outer",+
+                   "Parallel Aware": true,        +
+                   "Async Capable": false,        +
+                   "Relation Name": "bN_pt",      +
+                   "Alias": "bN_pt",              +
+                   "Actual Rows": N.N,            +
+                   "Actual Loops": N,             +
+                   "Disabled": false,             +
+                   "Workers": [                   +
+                   ]                              +
+                 }                                +
+               ]                                  +
+             }                                    +
+           ]                                      +
+         }                                        +
+       ]                                          +
+     },                                           +
+     "Triggers": [                                +
+     ]                                            +
+   }                                              +
+ ]
+(1 row)
+

@@ -367,7 +367,7 @@ pub static pgrust_version_string_style: GucEnumVar = GucSlot::new("pgrust_versio
 pub static pgrust_runtime: GucBoolVar = GucSlot::new("pgrust_runtime");
 pub static pgrust_mem_autotune: GucBoolVar = GucSlot::new("pgrust_mem_autotune");
 pub static pgrust_runtime_vacuum_pool: GucBoolVar = GucSlot::new("pgrust_runtime_vacuum_pool");
-// pgrust-only (GL-MEMWATCH-1, no C symbol): the memory watchdog family —
+// pgrust-only (regression, no C symbol): the memory watchdog family —
 // master switch, breach context-dump fan-out, sampler cadence (ms), base
 // warn threshold (percent of limit), absolute limit (MB, 0 = cgroup auto),
 // and the developer per-query context hog for the standing e2e.

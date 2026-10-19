@@ -903,7 +903,7 @@ fn heap_vac_scan_next_block_flags_eager_page() {
     vr.next_unskippable_vmbuffer.release();
 }
 
-/// C-parity of the index-vacuuming bypass threshold (Antithesis RB-3 root
+/// C-parity of the index-vacuuming bypass threshold (regression test root
 /// cause): C stores `rel_pages * BYPASS_THRESHOLD_PAGES` into an integer
 /// BlockNumber, truncating the fraction, so `lpdead_item_pages == floor(t)`
 /// must NOT bypass. Comparing against the untruncated double bypassed the
@@ -930,8 +930,8 @@ fn bypass_threshold_truncates_like_c() {
 // --- audit-18.6 remediation batch b008: critical-section witnesses ---
 
 /// Makes the harness's WAL seams fail for the test's duration and leaves the
-/// critical-section counter clean afterwards (an escaped Err deliberately
-/// leaves the section open, as C's ereport promotion would have PANICked).
+/// critical-section counter clean afterwards (belt and braces: the
+/// CritSection guard already restores it while the PANIC unwinds).
 struct FailingWal;
 impl FailingWal {
     fn arm() -> Self {
@@ -949,9 +949,9 @@ impl Drop for FailingWal {
 // vacuumlazy.c:2872-2915 lazy_vacuum_heap_page: the LP_DEAD -> LP_UNUSED
 // rewrite, the line-pointer truncation, MarkBufferDirty and the
 // PRUNE_VACUUM_CLEANUP record are one START/END_CRIT_SECTION bracket, so a
-// failure while logging escapes with CritSectionCount > 0 (the elog boundary
-// promotes it to PANIC; miscadmin.h) instead of unwinding as a plain ERROR
-// over a dirty, unlogged page
+// failure while logging is promoted to PANIC at the bracket's edge
+// (elog::CritSection::run; miscadmin.h) instead of unwinding as a plain
+// ERROR over a dirty, unlogged page
 // (a186-candidate-fp-heap-vacuumlazy-p2-a11bd96b5e063ce5abeb-1).
 #[test]
 fn lazy_vacuum_heap_page_wal_failure_escapes_inside_critical_section() {
@@ -980,18 +980,19 @@ fn lazy_vacuum_heap_page_wal_failure_escapes_inside_critical_section() {
     let mut vr = vacrel(&rel, mcx);
     assert_eq!(init_small::globals::CritSectionCount(), 0);
     let vmb = VmBuffer::new();
-    let err = {
+    let result = {
         let _wal = FailingWal::arm();
-        let err = lazy_vacuum_heap_page(&mut vr, 0, heap_buf, &[1, 2], &vmb)
-            .expect_err("the failing WAL insert must escape");
-        assert_eq!(
-            init_small::globals::CritSectionCount(),
-            1,
-            "the WAL failure must escape while the critical section is still open"
-        );
-        err
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            lazy_vacuum_heap_page(&mut vr, 0, heap_buf, &[1, 2], &vmb)
+        }))
     };
-    assert_eq!(err.message, "simulated XLogInsert failure");
+    assert!(
+        result
+            .expect_err("the failing WAL insert must PANIC inside the critical section")
+            .is::<::types_error::PanicExitThread>(),
+        "C's in-crit-section promotion: PANIC (abort class), not a recoverable Err"
+    );
+    assert_eq!(init_small::globals::CritSectionCount(), 0, "the guard unwound cleanly");
     // The page had already been rewritten when the WAL insert failed — the
     // state C refuses to leave behind without a PANIC.
     // SAFETY: test page, live.
@@ -1039,16 +1040,18 @@ fn lazy_vacuum_heap_rel_error_carries_vacuum_heap_context() {
     }
     vr.folds.counters.lpdead_items = 2;
 
-    let err = {
+    // The WAL failure fires inside lazy_vacuum_heap_page's critical section,
+    // so it PANICs (CritSection::run) rather than returning; the phase-III
+    // CONTEXT line is on the emitted PANIC report, the same errcontext C's
+    // vacuum_error_callback would add to the PANIC.
+    let result = {
         let _wal = FailingWal::arm();
-        lazy_vacuum_heap_rel(&mut vr).expect_err("the failing WAL insert must escape")
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lazy_vacuum_heap_rel(&mut vr)))
     };
-    assert_eq!(err.message, "simulated XLogInsert failure");
-    assert_eq!(
-        err.context(),
-        Some("while vacuuming block 0 of relation \"public.t\""),
-        "vacuum_error_callback's VACUUM_ERRCB_PHASE_VACUUM_HEAP line (vacuumlazy.c:3807)"
-    );
+    assert!(result
+        .expect_err("the failing WAL insert must PANIC inside the critical section")
+        .is::<::types_error::PanicExitThread>());
+    assert_eq!(init_small::globals::CritSectionCount(), 0);
 }
 
 // vacuumlazy.c:1890-1914 lazy_scan_new_or_empty: marking an empty page
@@ -1078,20 +1081,18 @@ fn lazy_scan_new_or_empty_wal_failure_escapes_inside_critical_section() {
     let mut vr = vacrel(&rel, mcx);
     assert_eq!(init_small::globals::CritSectionCount(), 0);
     let vmb = VmBuffer::new();
-    let err = {
+    let result = {
         let _wal = FailingWal::arm();
-        let err = with_scan_parts(&mut vr, |env, folds, _sink| {
-            lazy_scan_new_or_empty(env, folds, buf, 0, page, false, &vmb)
-        })
-        .expect_err("the failing log_newpage_buffer must escape");
-        assert_eq!(
-            init_small::globals::CritSectionCount(),
-            1,
-            "the WAL failure must escape while the critical section is still open"
-        );
-        err
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_scan_parts(&mut vr, |env, folds, _sink| {
+                lazy_scan_new_or_empty(env, folds, buf, 0, page, false, &vmb)
+            })
+        }))
     };
-    assert_eq!(err.message, "simulated log_newpage failure");
+    assert!(result
+        .expect_err("the failing log_newpage_buffer must PANIC inside the critical section")
+        .is::<::types_error::PanicExitThread>());
+    assert_eq!(init_small::globals::CritSectionCount(), 0, "the guard unwound cleanly");
     bufmgr_seams::lock_buffer::call(buf, BUFFER_LOCK_UNLOCK).unwrap();
     bufmgr_seams::release_buffer::call(buf).unwrap();
 }

@@ -1,5 +1,6 @@
 use ::adt_tsvector_core::layout::MAXENTRYPOS;
 use ::adt_tsvector_core::parser::{
+    input_message,
     is_ts_operator, ts_isspace, Next, TsvParser, P_TSV_IS_TSQUERY, P_TSV_IS_WEB,
     P_TSV_OPR_IS_DELIM,
 };
@@ -158,7 +159,7 @@ impl<'s, 'e, 'mcx> QueryParser<'s, 'e, 'mcx> {
         let mut l: i64 = 1;
         let input = self.vals.input;
 
-        while ptr < input.len() || state == Ph::Finish {
+        while ptr < input.len() {
             match state {
                 Ph::Open => {
                     if input[ptr] == b'<' {
@@ -304,10 +305,11 @@ impl<'s, 'e, 'mcx> QueryParser<'s, 'e, 'mcx> {
                             ereturn(
                                 self.vals.esc.as_deref_mut(),
                                 (),
-                                PgError::error(format!(
-                                    "no operand in tsquery: \"{}\"",
-                                    String::from_utf8_lossy(self.vals.input)
-                                ))
+                                input_message(
+                                    ::types_error::ERROR,
+                                    "no operand in tsquery: ",
+                                    self.vals.input,
+                                )
                                 .with_sqlstate(ERRCODE_SYNTAX_ERROR),
                             )?;
                             return Ok(Tok::Err);
@@ -444,11 +446,8 @@ impl<'s, 'e, 'mcx> QueryParser<'s, 'e, 'mcx> {
             return ereturn(
                 self.vals.esc.as_deref_mut(),
                 (),
-                PgError::error(format!(
-                    "word is too long in tsquery: \"{}\"",
-                    String::from_utf8_lossy(self.vals.input)
-                ))
-                .with_sqlstate(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+                input_message(::types_error::ERROR, "word is too long in tsquery: ", self.vals.input)
+                    .with_sqlstate(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
             );
         }
         let distance = self.op_pool.len();
@@ -456,11 +455,8 @@ impl<'s, 'e, 'mcx> QueryParser<'s, 'e, 'mcx> {
             return ereturn(
                 self.vals.esc.as_deref_mut(),
                 (),
-                PgError::error(format!(
-                    "value is too big in tsquery: \"{}\"",
-                    String::from_utf8_lossy(self.vals.input)
-                ))
-                .with_sqlstate(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+                input_message(::types_error::ERROR, "value is too big in tsquery: ", self.vals.input)
+                    .with_sqlstate(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
             );
         }
         let valcrc = ::crc32c::legacy_crc32_lexeme(strval) as i32;
@@ -539,10 +535,11 @@ impl<'s, 'e, 'mcx> QueryParser<'s, 'e, 'mcx> {
                         ereturn(
                             self.vals.esc.as_deref_mut(),
                             (),
-                            PgError::error(format!(
-                                "syntax error in tsquery: \"{}\"",
-                                String::from_utf8_lossy(self.vals.input)
-                            ))
+                            input_message(
+                                ::types_error::ERROR,
+                                "syntax error in tsquery: ",
+                                self.vals.input,
+                            )
                             .with_sqlstate(ERRCODE_SYNTAX_ERROR),
                         )?;
                     }
@@ -648,10 +645,11 @@ pub fn parse_tsquery<'mcx>(
 
     if p.polstr.is_empty() {
         if noisy {
-            ::elog::ThrowErrorData(PgError::notice(format!(
-                "text-search query doesn't contain lexemes: \"{}\"",
-                String::from_utf8_lossy(input)
-            )))?;
+            ::elog::ThrowErrorData(input_message(
+                ::types_error::NOTICE,
+                "text-search query doesn't contain lexemes: ",
+                input,
+            ))?;
         }
         let img = build_query_image(mcx, &[], &[])?;
         return Ok(Some(ParsedQuery { img, empty: true }));

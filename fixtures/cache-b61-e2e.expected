@@ -1,6 +1,6 @@
 -- bugs/batch-61-backend-utils-cache: cache fixes, expected captured from C 18.6.
 \set VERBOSITY verbose
--- fp-cache-typcache#2: typcache.c:1325 decr_dcc_refcount deletes a reloaded
+-- regression: typcache.c:1325 decr_dcc_refcount deletes a reloaded
 -- domain's "Domain constraints" context once nothing references it, so a
 -- session holds one such context per domain, not one per reload.
 CREATE DOMAIN b61_dom AS integer CONSTRAINT b61_ck CHECK (VALUE > 0);

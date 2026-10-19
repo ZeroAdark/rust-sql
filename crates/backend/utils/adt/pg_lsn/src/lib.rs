@@ -38,13 +38,14 @@ pub fn pg_lsn_in_internal(s: &[u8]) -> Option<XLogRecPtr> {
 }
 
 #[cold]
-fn invalid_lsn(s: &str) -> PgError {
-    PgError::error(format!("invalid input syntax for type {}: \"{s}\"", "pg_lsn"))
+fn invalid_lsn(s: &[u8]) -> PgError {
+    PgError::error_bytes("invalid input syntax for type pg_lsn: \"", s, "\"")
         .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
 }
 
-pub fn pg_lsn_in(s: &str, escontext: Option<&mut SoftErrorContext>) -> PgResult<XLogRecPtr> {
-    match pg_lsn_in_internal(s.as_bytes()) {
+pub fn pg_lsn_in(s: impl AsRef<[u8]>, escontext: Option<&mut SoftErrorContext>) -> PgResult<XLogRecPtr> {
+    let s = s.as_ref();
+    match pg_lsn_in_internal(s) {
         Some(lsn) => Ok(lsn),
         None => ereturn(escontext, INVALID_XLOG_REC_PTR, invalid_lsn(s)),
     }

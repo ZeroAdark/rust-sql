@@ -216,15 +216,22 @@ pub fn numeric_to_char<'mcx>(
 
         // C numeric_round clamps the scale to NUMERIC_DSCALE_MAX.
         let post = num.post.min(::numeric::NUMERIC_DSCALE_MAX);
-        let special = if let Some(s) = special_orgnum(value) {
-            sc.digits.extend_from_slice(s);
-            sc.digits.push(0);
-            true
-        } else if num.is_multi() {
+        // formatting.c:6598 raises numeric_power's overflow before the
+        // NaN/Infinity fast path.
+        let xpow = if num.is_multi() {
             let ten = int64_to_numeric(10);
             let exp = int64_to_numeric(num.multi as i64);
             let mut xpow = NumericVar::new();
             power_var(ten.num().view(), exp.num().view(), &mut xpow)?;
+            Some(xpow)
+        } else {
+            None
+        };
+        let special = if let Some(s) = special_orgnum(value) {
+            sc.digits.extend_from_slice(s);
+            sc.digits.push(0);
+            true
+        } else if let Some(xpow) = xpow {
             let rscale = value.view().dscale + xpow.dscale;
             let mut prod = NumericVar::new();
             mul_var(value.view(), xpow.view(), &mut prod, rscale);
@@ -443,7 +450,7 @@ pub fn float4_to_char<'mcx>(mcx: Mcx<'mcx>, value: f32, fmt: &[u8]) -> PgResult<
             // Num.multi); val = value * multi;` — pow computed in DOUBLE and
             // rounded once to float. 10f32.powi accumulates f32 roundings and
             // diverges for large V-digit counts (found by the fmt_num_diff
-            // FLEET campaign 2026-07-31).
+            // CI campaign 2026-07-31).
             let multi = 10f64.powf(num.multi as f64) as f32;
             val = value * multi;
             num.pre += num.multi;

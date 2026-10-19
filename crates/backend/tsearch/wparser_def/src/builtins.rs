@@ -3,15 +3,17 @@
 
 use ::datum::Datum;
 use ::ts_locale::LexDescr;
-use ::types_core::catalog::{INT4OID, RECORDOID, TEXTOID};
+use ::types_core::catalog::RECORDOID;
 use ::types_error::{
     PgError, PgResult, SqlState, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_SYNTAX_ERROR,
     ERRCODE_UNDEFINED_OBJECT, ERRCODE_UNDEFINED_SCHEMA,
 };
 use ::types_fmgr::{
-    byref_result, varlena_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo,
+    byref_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo,
     PGFunction,
 };
+
+use ::std::ffi::CString;
 
 use crate::parser::{self, TParser};
 
@@ -151,8 +153,68 @@ pub fn fc_prsd_headline(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
     Ok(Datum::from_usize(prs_ptr as usize))
 }
 
+// prs_setup_firstcall / tt_setup_firstcall collect C strings; the tuples
+// are formed through the caller's result descriptor (get_call_result_type +
+// TupleDescGetAttInMetadata + BuildTupleFromCStrings) once the set is in.
 pub(crate) enum SrfRows {
-    Tuples(Vec<Vec<u8>>),
+    CStrings(Vec<Vec<Vec<u8>>>),
+}
+
+fn cstring_rows_to_tuples(
+    mcx: ::mcx::Mcx<'_>,
+    flinfo: &FmgrInfo,
+    expected: Option<&::types_tuple::TupleDescData<'_>>,
+    rows: &[Vec<Vec<u8>>],
+) -> PgResult<Vec<Vec<u8>>> {
+    let resolved = ::funcapi::get_call_result_type(mcx, flinfo, expected)?;
+    let (::funcapi::TypeFuncClass::Composite, Some(mut desc)) =
+        (resolved.class, resolved.result_tuple_desc)
+    else {
+        return Err(Box::new(PgError::error("return type must be a row type".to_string())));
+    };
+    // BlessTupleDesc (via TupleDescGetAttInMetadata).
+    if desc.tdtypeid == RECORDOID && desc.tdtypmod < 0 {
+        ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
+    }
+    let natts = desc.natts as usize;
+    let mut attinmeta = Vec::with_capacity(natts);
+    for i in 0..natts {
+        let att = desc.attr(i);
+        attinmeta.push(if att.attisdropped {
+            None
+        } else {
+            let (infunc, typioparam) = ::lsyscache::getTypeInputInfo(att.atttypid)?;
+            Some((::fmgr_seams::fmgr_info::call(infunc)?, typioparam, att.atttypmod))
+        });
+    }
+    let mut images = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut datums = vec![Datum::null(); natts];
+        let mut nulls = vec![false; natts];
+        for (i, att) in attinmeta.iter_mut().enumerate() {
+            match (att, row.get(i)) {
+                (Some((infn, typioparam, typmod)), Some(v)) => {
+                    let end = v.iter().position(|&b| b == 0).unwrap_or(v.len());
+                    let cstr = CString::new(&v[..end]).expect("NUL-free");
+                    datums[i] = ::types_fmgr::input_function_call(
+                        infn,
+                        Some(&cstr),
+                        *typioparam,
+                        *typmod,
+                        mcx,
+                    )?;
+                }
+                _ => nulls[i] = true,
+            }
+        }
+        let tuple = ::heaptuple::heap_form_tuple(mcx, &desc, &datums, &nulls)?;
+        let mut img = Vec::new();
+        img.try_reserve_exact(tuple.image().len())
+            .map_err(|_| mcx.oom(tuple.image().len()))?;
+        img.extend_from_slice(tuple.image());
+        images.push(img);
+    }
+    Ok(images)
 }
 
 // wparser.c prs_setup_firstcall/tt_setup materialise the whole set into a
@@ -166,13 +228,10 @@ fn admit_row(cur: usize) -> PgResult<()> {
     ::mcx::check_alloc_size(next_len.saturating_mul(16))
 }
 
-fn push_image(rows: &mut Vec<Vec<u8>>, img: &[u8], mcx: ::mcx::Mcx<'_>) -> PgResult<()> {
+fn push_cstrings(rows: &mut Vec<Vec<Vec<u8>>>, row: Vec<Vec<u8>>, mcx: ::mcx::Mcx<'_>) -> PgResult<()> {
     admit_row(rows.len())?;
     rows.try_reserve(1).map_err(|_| mcx.oom(16))?;
-    let mut v = Vec::new();
-    v.try_reserve_exact(img.len()).map_err(|_| mcx.oom(img.len()))?;
-    v.extend_from_slice(img);
-    rows.push(v);
+    rows.push(row);
     Ok(())
 }
 
@@ -201,7 +260,16 @@ fn srf_drive(
     if !flinfo.has_fn_extra() {
         // SRF_FIRSTCALL_INIT precedes the parser lookup (wparser.c).
         ::funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
-        let rows = match collect(fcinfo) {
+        let built = collect(fcinfo).and_then(|SrfRows::CStrings(rows)| {
+            // SAFETY: expectedDesc contract — the executor armed it with
+            // the scan tupdesc, live for the duration of this call.
+            let expected = fcinfo
+                .rsinfo_mut()
+                .and_then(|rsi| rsi.expectedDesc)
+                .map(|p| unsafe { p.cast::<::types_tuple::TupleDescData<'_>>().as_ref() });
+            cstring_rows_to_tuples(fcinfo.result_mcx(), flinfo, expected, &rows)
+        });
+        let rows = match built {
             Ok(rows) => rows,
             Err(e) => {
                 ::funcapi::end_MultiFuncCall(flinfo);
@@ -212,12 +280,12 @@ fn srf_drive(
     }
     let fctx = ::funcapi::per_MultiFuncCall(flinfo);
     let idx = fctx.call_cntr as usize;
-    let SrfRows::Tuples(rows) = fctx
+    let rows = fctx
         .user_fctx
         .as_ref()
         .expect("SRF rows set at first call")
-        .downcast_ref::<SrfRows>()
-        .expect("user_fctx is SrfRows");
+        .downcast_ref::<Vec<Vec<u8>>>()
+        .expect("user_fctx is the SRF row list");
     match rows.get(idx) {
         Some(img) => {
             let d = byref_result(fcinfo.result_mcx(), img)?;
@@ -268,29 +336,20 @@ fn parser_lex_descrs(mcx: ::mcx::Mcx<'_>, prsid: ::types_core::Oid) -> PgResult<
 
 pub(crate) fn token_type_rows(fcinfo: &Fcinfo, prsid: ::types_core::Oid) -> PgResult<SrfRows> {
     let mcx = fcinfo.result_mcx();
-    let mut desc = ::tupdesc::CreateTemplateTupleDesc(mcx, 3)?;
-    ::tupdesc::TupleDescInitEntry(&mut desc, 1, Some("tokid"), INT4OID, -1, 0)?;
-    ::tupdesc::TupleDescInitEntry(&mut desc, 2, Some("alias"), TEXTOID, -1, 0)?;
-    ::tupdesc::TupleDescInitEntry(&mut desc, 3, Some("description"), TEXTOID, -1, 0)?;
-    desc.tdtypeid = RECORDOID;
-    desc.tdtypmod = -1;
-    // BlessTupleDesc (via TupleDescGetAttInMetadata, wparser.c tt_setup):
-    // FieldSelect over these tuples needs the registered typmod.
-    ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
     let descrs = parser_lex_descrs(mcx, prsid)?;
     let mut rows = Vec::with_capacity(descrs.len());
     for d in descrs {
-        let alias = varlena_result(::varlena::cstring_to_text(mcx, d.alias.as_bytes())?);
-        let descr = varlena_result(::varlena::cstring_to_text(mcx, d.descr.as_bytes())?);
-        let tuple = ::heaptuple::heap_form_tuple(
+        push_cstrings(
+            &mut rows,
+            vec![
+                format!("{}", d.lexid).into_bytes(),
+                d.alias.as_bytes().to_vec(),
+                d.descr.as_bytes().to_vec(),
+            ],
             mcx,
-            &desc,
-            &[Datum::from_i32(d.lexid), alias, descr],
-            &[false, false, false],
         )?;
-        push_image(&mut rows, tuple.image(), mcx)?;
     }
-    Ok(SrfRows::Tuples(rows))
+    Ok(SrfRows::CStrings(rows))
 }
 
 pub fn fc_ts_token_type_byname(
@@ -402,24 +461,13 @@ pub(crate) fn parse_rows(fcinfo: &Fcinfo, prsid: ::types_core::Oid) -> PgResult<
     let txt = unsafe { fcinfo.arg_varlena_packed(1)? };
     let mcx = fcinfo.result_mcx();
     let data = txt.data();
-    let mut desc = ::tupdesc::CreateTemplateTupleDesc(mcx, 2)?;
-    ::tupdesc::TupleDescInitEntry(&mut desc, 1, Some("tokid"), INT4OID, -1, 0)?;
-    ::tupdesc::TupleDescInitEntry(&mut desc, 2, Some("token"), TEXTOID, -1, 0)?;
-    desc.tdtypeid = RECORDOID;
-    desc.tdtypmod = -1;
-    // BlessTupleDesc (wparser.c prs_setup), as tt_setup above.
-    ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
     let mut rows = Vec::new();
     let mut push_row = |type_: i32, token_bytes: &[u8]| -> PgResult<()> {
-        let token = varlena_result(::varlena::cstring_to_text(mcx, token_bytes)?);
-        let tuple = ::heaptuple::heap_form_tuple(
+        push_cstrings(
+            &mut rows,
+            vec![format!("{type_}").into_bytes(), token_bytes.to_vec()],
             mcx,
-            &desc,
-            &[Datum::from_i32(type_), token],
-            &[false, false],
-        )?;
-        push_image(&mut rows, tuple.image(), mcx)?;
-        Ok(())
+        )
     };
     if prsid == DEFAULT_PARSER_OID {
         // Native short-circuit: the same functions fmgr would resolve.
@@ -467,7 +515,7 @@ pub(crate) fn parse_rows(fcinfo: &Fcinfo, prsid: ::types_core::Oid) -> PgResult<
             prsobj,
         )?;
     }
-    Ok(SrfRows::Tuples(rows))
+    Ok(SrfRows::CStrings(rows))
 }
 
 pub fn fc_ts_parse_byname(

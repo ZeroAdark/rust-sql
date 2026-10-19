@@ -264,6 +264,7 @@ pub fn init_seams() {
     ri_triggers_seams::ri_initial_check::set(RI_Initial_Check);
     ri_triggers_seams::ri_fkey_fk_upd_check_required::set(RI_FKey_fk_upd_check_required);
     ri_triggers_seams::ri_fkey_pk_upd_check_required::set(RI_FKey_pk_upd_check_required);
+    ri_triggers_seams::ri_fkey_stmt_check_required::set(RI_FKey_stmt_check_required);
     ri_triggers_seams::ri_partition_remove_check::set(RI_PartitionRemove_Check);
 }
 
@@ -975,13 +976,33 @@ fn ri_Check_Pk_Match<'mcx>(
     Ok(found)
 }
 
-fn ri_initial_check_allowed(pk_rel: &Relation<'_>, fk_rel: &Relation<'_>) -> PgResult<bool> {
-    let userid = miscinit::GetUserId();
+// ExecCheckOneRelPerms over an RTE whose selectedCols are the key columns:
+// table-level SELECT, else SELECT on every key column.
+fn ri_initial_check_select_ok(rel: &Relation<'_>, attnums: &[i16], userid: Oid) -> PgResult<bool> {
     let select = types_nodes::parsenodes::ACL_SELECT;
-    if aclchk_seams::pg_class_aclcheck_ext::call(pk_rel.rd_id, userid, select)?.0 != ACLCHECK_OK {
+    if aclchk_seams::pg_class_aclcheck_ext::call(rel.rd_id, userid, select)?.0 == ACLCHECK_OK {
+        return Ok(true);
+    }
+    for &attnum in attnums {
+        if aclchk_seams::pg_attribute_aclcheck::call(rel.rd_id, attnum, userid, select)?
+            != ACLCHECK_OK
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn ri_initial_check_allowed(
+    pk_rel: &Relation<'_>,
+    fk_rel: &Relation<'_>,
+    riinfo: &RiConstraintInfo,
+) -> PgResult<bool> {
+    let userid = miscinit::GetUserId();
+    if !ri_initial_check_select_ok(pk_rel, &riinfo.pk_attnums[..riinfo.nkeys], userid)? {
         return Ok(false);
     }
-    if aclchk_seams::pg_class_aclcheck_ext::call(fk_rel.rd_id, userid, select)?.0 != ACLCHECK_OK {
+    if !ri_initial_check_select_ok(fk_rel, &riinfo.fk_attnums[..riinfo.nkeys], userid)? {
         return Ok(false);
     }
     if aclchk_seams::has_bypassrls_privilege::call(userid)? {
@@ -1029,7 +1050,7 @@ pub fn RI_Initial_Check<'mcx>(
 ) -> PgResult<bool> {
     let riinfo = ri_FetchConstraintInfo(trigger, fk_rel, false)?;
 
-    if !ri_initial_check_allowed(pk_rel, fk_rel)? {
+    if !ri_initial_check_allowed(pk_rel, fk_rel, &riinfo)? {
         return Ok(false);
     }
 
@@ -1348,6 +1369,14 @@ fn RI_FKey_fk_upd_check_required<'mcx>(
         return Ok(false);
     }
     Ok(true)
+}
+
+fn RI_FKey_stmt_check_required<'mcx>(
+    trigger: &Trigger<'mcx>,
+    rel: &Relation<'mcx>,
+    rel_is_pk: bool,
+) -> PgResult<()> {
+    ri_FetchConstraintInfo(trigger, rel, rel_is_pk).map(|_| ())
 }
 
 fn ri_FetchConstraintInfo<'mcx>(
@@ -2113,25 +2142,28 @@ fn ri_KeysEqual(
             if castfunc != InvalidOid {
                 let cast = |v: Datum| -> PgResult<Datum> {
                     let mut finfo = fmgr_seams::fmgr_info::call(castfunc)?;
-                    let mut fcinfo = types_fmgr::LocalFcinfo::<3>::fresh(InvalidOid);
-                    // SAFETY: scratch outlives this call.
-                    unsafe { fcinfo.set_result_mcx(scratch.mcx()) };
-                    fcinfo.set_arg(0, v);
-                    fcinfo.set_arg(1, Datum::from_i32(-1));
-                    fcinfo.set_arg(2, Datum::from_bool(false));
-                    finfo.invoke(&mut fcinfo)
+                    types_fmgr::function_call3_coll_in(
+                        &mut finfo,
+                        InvalidOid,
+                        scratch.mcx(),
+                        v,
+                        Datum::from_i32(-1),
+                        Datum::from_bool(false),
+                    )
                 };
                 newvalue = cast(newvalue)?;
                 oldvalue = cast(oldvalue)?;
             }
             let mut finfo = fmgr_seams::fmgr_info::call(opcode)?;
-            let mut fcinfo = types_fmgr::LocalFcinfo::<2>::fresh(att.attcollation);
             // range/multirange operators detoast through the result mcx.
-            // SAFETY: scratch outlives this call.
-            unsafe { fcinfo.set_result_mcx(scratch.mcx()) };
-            fcinfo.set_arg(0, newvalue);
-            fcinfo.set_arg(1, oldvalue);
-            if !finfo.invoke(&mut fcinfo)?.as_bool() {
+            let eq = types_fmgr::function_call2_coll_in(
+                &mut finfo,
+                att.attcollation,
+                scratch.mcx(),
+                newvalue,
+                oldvalue,
+            )?;
+            if !eq.as_bool() {
                 return Ok(false);
             }
         }
@@ -2165,7 +2197,7 @@ fn ri_GenerateQual(
     write!(
         buf,
         " OPERATOR({}.{}) {rightop}",
-        quote_one_name(shape.3.as_str()),
+        format_type::quote_identifier(shape.3.as_str()),
         shape.2.as_str()
     )
     .expect("PgString write");
@@ -2181,16 +2213,21 @@ fn add_cast_to(buf: &mut PgString<'_>, typid: Oid) -> PgResult<()> {
     let (typname, typnamespace) = syscache_seams::pg_type_name_namespace::call(typid)?
         .ok_or_else(|| cache_lookup_failed("type", typid))?;
     let scratch = mcx::MemoryContext::new("ri-cast-nsp");
-    // C's add_cast_to uses get_namespace_name_or_temp and quote_identifier,
-    // which would dereference a NULL name; pgrust raises the standard
-    // catchable "cache lookup failed for namespace %u" (ruleutils.c:13559)
-    // rather than aborting the backend.
-    let nsp = lsyscache::get_namespace_name(scratch.mcx(), typnamespace)?
+    // ruleutils.c:13523 get_namespace_name_or_temp (a temp-schema type is
+    // spelled ::pg_temp.typname) + quote_identifier, which would dereference
+    // a NULL name; pgrust raises the standard catchable "cache lookup failed
+    // for namespace %u" (ruleutils.c:13559) rather than aborting the backend.
+    let nsp = lsyscache::get_namespace_name_or_temp(scratch.mcx(), typnamespace)?
         .ok_or_else(|| cache_lookup_failed("namespace", typnamespace))?;
     let tn = String::from_utf8_lossy(typname.name_str()).into_owned();
     use core::fmt::Write;
-    write!(buf, "::{}.{}", quote_one_name(nsp.as_str()), quote_one_name(&tn))
-        .expect("PgString write");
+    write!(
+        buf,
+        "::{}.{}",
+        format_type::quote_identifier(nsp.as_str()),
+        format_type::quote_identifier(&tn)
+    )
+    .expect("PgString write");
     Ok(())
 }
 

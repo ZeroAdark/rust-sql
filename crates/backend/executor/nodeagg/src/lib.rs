@@ -17,8 +17,8 @@ use ::datum::{Datum, NullableDatum};
 use ::types_fmgr::{AggStateNode, FmNodePtr, FmgrInfo, FunctionCallInfoBaseData, LocalFcinfo};
 use ::execexpr::{
     agg_pergroup_null, exec_build_agg_projection_info_subplans, exec_build_agg_qual_subplans,
-    exec_eval_expr, exec_project, exec_qual, AggBind, AggOrderedSpec, AggPerGroup, AggTransSpec,
-    EvalSlots, ExprState,
+    exec_eval_expr, exec_project, exec_qual, AggBind, AggOrderedSpec, AggPerGroup,
+    AggPresortedHook, AggTransSpec, EvalSlots, ExprState,
 };
 use ::tuplesort::{Tuplesort, TUPLESORT_NONE};
 use ::execgrouping::TupleHashTable;
@@ -38,7 +38,7 @@ use ::types_pathnodes::{
     AGGSPLIT_FINAL_DESERIAL, AGGSPLIT_INITIAL_SERIAL, AGGSPLIT_SIMPLE, AGG_HASHED, AGG_MIXED,
     AGG_PLAIN, AGG_SORTED,
 };
-use ::types_slot::{SlotData, TupleSlotKind};
+use ::types_slot::{SlotData, TupleSlotKind, EXEC_FLAG_EXPLAIN_ONLY};
 use ::types_tuple::htup::MinimalTupleData;
 use ::types_tuple::TupleDescData;
 
@@ -409,6 +409,7 @@ fn init_pertrans_sort<'mcx>(
         scratch,
         num_trans_inputs: num_trans_inputs as u16,
         flag,
+        presorted: None,
     };
     debug_assert!(!presorted || num_distinct_cols > 0);
     let (input_byval, input_typlen) = {
@@ -544,7 +545,7 @@ fn distinct_set_kind(
     const F_INT4EQ: Oid = 65;
     const F_TEXTEQ: Oid = 67;
     const F_INT8EQ: Oid = 467;
-    // GL-LOWDIST-3 datetime widening (adt_date/adt_timestamp builtins).
+    // regression datetime widening (adt_date/adt_timestamp builtins).
     const F_DATE_EQ: Oid = 1086;
     const F_TIMESTAMPTZ_EQ: Oid = 1152;
     const F_TIMESTAMP_EQ: Oid = 2052;
@@ -560,7 +561,7 @@ fn distinct_set_kind(
         (F_INT2EQ, INT2OID) => Some(distinctset::DistinctKeyKind::Int16),
         (F_INT4EQ, INT4OID) => Some(distinctset::DistinctKeyKind::Int32),
         (F_INT8EQ, INT8OID) => Some(distinctset::DistinctKeyKind::Int64),
-        // GL-LOWDIST-3 (knob-gated, default OFF): the datetime family's
+        // regression (knob-gated, default OFF): the datetime family's
         // same-type equality is REPRESENTATIONAL word equality on the
         // stored key exactly like the int family — date_eq is `==` on the
         // i32 day count, timestamp_eq/timestamptz_eq are `==` on the i64
@@ -586,8 +587,8 @@ fn distinct_set_kind(
     })
 }
 
-/// GL-LOWDIST-3 datetime-distinct widening — **DEFAULT ON** since the
-/// GL-LOWDIST-3 flip (letter scratchpad/night/GL-LOWDIST-3-letter.md;
+/// regression datetime-distinct widening — **DEFAULT ON** since the
+/// regression flip (letter scratchpad/night/regression-letter.md;
 /// widen A/B @ 96c075c0a, dop {1,4,16} x {2.5M,10M}: serial set-mode
 /// 14-23x over the C sort path, sink/GM 0.015-0.165 at every cell, all
 /// oracle legs byte-equal). Kill spellings exactly
@@ -1054,7 +1055,7 @@ fn get_agg_init_val(mcx: ::mcx::Mcx<'_>, text: &str, transtype: Oid) -> PgResult
 pub fn exec_init_agg<'mcx>(
     node: &'mcx Agg<'mcx>,
     estate: &mut EStateData<'mcx>,
-    _eflags: i32,
+    eflags: i32,
     result_desc: Rc<TupleDescData<'static>>,
     outer_desc: Option<Rc<TupleDescData<'static>>>,
 ) -> PgResult<AggStateData<'mcx>> {
@@ -1399,6 +1400,34 @@ pub fn exec_init_agg<'mcx>(
     );
     let pergroup_base = NonNull::new(pergroup.as_mut_ptr()).unwrap();
 
+    // ExecBuildAggTrans (execExpr.c:3718) runs a presorted DISTINCT entry's
+    // dedup + transition inside the program, in transno order. The entry
+    // addresses are final here (pertrans_sort takes no further pushes).
+    {
+        let per_tuple = NonNull::from(estate.ecxt(tmpcontext).per_tuple_mcx().context());
+        for ps in pertrans_sort.iter_mut() {
+            if !ps.presorted || ps.set_kind.is_some() {
+                continue;
+            }
+            let transno = ps.transno;
+            let ctx = ::mcx::alloc_leak_in(
+                mcx,
+                PresortedCtx {
+                    ps: NonNull::from(ps),
+                    typ: trans_typ[transno],
+                    agg_node,
+                    pergroup_base,
+                    per_tuple,
+                    mcx,
+                },
+            )?;
+            let spec =
+                ordered_specs[transno].as_mut().expect("presorted DISTINCT entry has a spec");
+            spec.presorted =
+                Some(AggPresortedHook { ctx: NonNull::from(ctx).cast(), call: presorted_hook });
+        }
+    }
+
     let (agg_values_base, agg_nulls_base) = {
         let ecxt = estate.ecxt_mut(ps_ExprContext);
         ecxt.ecxt_aggvalues.resize(numaggs, Datum::null());
@@ -1454,6 +1483,7 @@ pub fn exec_init_agg<'mcx>(
             cur_agg,
         });
     }
+    let explain_only = eflags & EXEC_FLAG_EXPLAIN_ONLY != 0;
     let merge_outer_desc = if !has_grouping_sets && node.aggstrategy == AGG_HASHED {
         outer_desc.clone()
     } else {
@@ -1462,11 +1492,19 @@ pub fn exec_init_agg<'mcx>(
     let mut evaltrans_spill = None;
     let (mut evaltrans, perhash, persort, gs) = if has_grouping_sets {
         let gs = gsets::init_grouping_sets(
-            node, estate, outer_desc, &specs, numtrans, fm_agg_node, params, tmpcontext,
+            node,
+            estate,
+            outer_desc,
+            &specs,
+            numtrans,
+            fm_agg_node,
+            params,
+            tmpcontext,
+            explain_only,
         )?;
         (None, None, None, Some(gs))
     } else if node.aggstrategy == AGG_HASHED {
-        let mut ph = init_perhash(node, estate, numtrans)?;
+        let mut ph = init_perhash(node, estate, numtrans, explain_only)?;
         // Hash/match evaluation allocates in tmpcontext per-tuple memory,
         // reset per input row by every drive loop — C BuildTupleHashTable's
         // tempcxt (nodeAgg.c init_hash_table). Above all: probing a
@@ -1891,6 +1929,7 @@ fn init_perhash<'mcx>(
     node: &'mcx Agg<'mcx>,
     estate: &mut EStateData<'mcx>,
     numtrans: usize,
+    explain_only: bool,
 ) -> PgResult<PerHashData<'mcx>> {
     let mcx = estate.es_query_cxt;
     let outer_plan = node
@@ -1902,7 +1941,7 @@ fn init_perhash<'mcx>(
     let outer_natts = outer_tlist.len();
     let num_cols = node.numCols as usize;
     assert!(
-        num_cols > 0 && node.grpColIdx.len() == num_cols,
+        node.grpColIdx.len() == num_cols,
         "init_perhash: numCols {} grpColIdx.len {} strategy {} gsets {}",
         num_cols,
         node.grpColIdx.len(),
@@ -1997,7 +2036,13 @@ fn init_perhash<'mcx>(
             ..Default::default()
         },
     ));
-    let nbuckets = hash_choose_num_buckets(hashentrysize, node.numGroups, mem_limit);
+    // ExecInitAgg (nodeAgg.c:3721): EXPLAIN never fills the table, so skip
+    // its (numGroups-sized) allocation.
+    let nbuckets = if explain_only {
+        1
+    } else {
+        hash_choose_num_buckets(hashentrysize, node.numGroups, mem_limit)
+    };
 
     let mut key_col_idx: PgVec<'mcx, i16> = vec_with_capacity_in(mcx, num_cols)?;
     for i in 0..num_cols {
@@ -2812,6 +2857,7 @@ pub(crate) fn collect_ordered_input<'mcx>(
 ) -> PgResult<()> {
     let mcx = estate.es_query_cxt;
     let tmp = node.tmpcontext;
+    let per_tuple = NonNull::from(estate.ecxt(tmp).per_tuple_mcx().context());
     let AggStateData {
         pertrans_sort, trans_typ, agg_node, pergroup_base, force_distinct_set, ..
     } = node;
@@ -2842,8 +2888,9 @@ pub(crate) fn collect_ordered_input<'mcx>(
                 trans_typ[ps.transno],
                 *agg_node,
                 *pergroup_base,
-                estate,
-                tmp,
+                // SAFETY: the tmpcontext ExprContext outlives the node
+                // (resets recycle the same context object).
+                unsafe { per_tuple.as_ref() }.mcx(),
                 mcx,
             )?;
             continue;
@@ -3174,6 +3221,28 @@ where
     Ok(())
 }
 
+// What the AggPresortedTrans step's hook needs to run one entry's dedup +
+// transition (query-lifetime cell; the entry lives in the node's
+// pertrans_sort, which is never pushed to after ExecInitAgg).
+struct PresortedCtx<'mcx> {
+    ps: NonNull<PerTransSortData<'mcx>>,
+    typ: TransTyp,
+    agg_node: NonNull<AggStateNode>,
+    pergroup_base: NonNull<AggPerGroup>,
+    // tmpcontext's per-tuple context (outlives the node; resets recycle it).
+    per_tuple: NonNull<MemoryContext>,
+    mcx: ::mcx::Mcx<'mcx>,
+}
+
+unsafe fn presorted_hook(ctx: NonNull<()>) -> PgResult<()> {
+    // SAFETY: a PresortedCtx installed by exec_init_agg; the transition
+    // program is the entry's sole accessor while it runs.
+    let c = unsafe { ctx.cast::<PresortedCtx<'_>>().as_ref() };
+    let ps = unsafe { &mut *c.ps.as_ptr() };
+    let per_tuple = unsafe { c.per_tuple.as_ref() }.mcx();
+    advance_presorted_distinct(ps, c.typ, c.agg_node, c.pergroup_base, per_tuple, c.mcx)
+}
+
 // ExecEvalPreOrderedDistinctSingle/Multi (execExprInterp.c) + the transfn
 // call: presorted DISTINCT rows skip the transfn when equal to the last-seen
 // value; distinct rows become the new comparand and advance the transition.
@@ -3182,8 +3251,7 @@ fn advance_presorted_distinct<'mcx>(
     typ: TransTyp,
     agg_node: NonNull<AggStateNode>,
     pergroup_base: NonNull<AggPerGroup>,
-    estate: &mut EStateData<'mcx>,
-    tmp: EcxtId,
+    per_tuple: ::mcx::Mcx<'mcx>,
     mcx: ::mcx::Mcx<'mcx>,
 ) -> PgResult<()> {
     if ps.num_inputs == 1 {
@@ -3198,7 +3266,7 @@ fn advance_presorted_distinct<'mcx>(
             let mut fc2 = LocalFcinfo::<2>::fresh(ps.agg_collation);
             // SAFETY: the per-tuple context outlives the call (resets recycle
             // the same context object).
-            unsafe { fc2.set_result_mcx(estate.ecxt(tmp).per_tuple_mcx()) };
+            unsafe { fc2.set_result_mcx(per_tuple) };
             fc2.args[0] = NullableDatum { value: ps.last_single.value, isnull: false };
             fc2.args[1] = NullableDatum { value: nd.value, isnull: false };
             !eq.invoke(&mut fc2)?.as_bool()
@@ -3261,7 +3329,7 @@ fn advance_presorted_distinct<'mcx>(
     let fcinfo = ps.arm_transfn_fcinfo(&mut small);
     fcinfo.context = Some(agg_node.cast());
     // SAFETY: as the equalfn arming above.
-    unsafe { fcinfo.set_result_mcx(estate.ecxt(tmp).per_tuple_mcx()) };
+    unsafe { fcinfo.set_result_mcx(per_tuple) };
     for i in 0..ps.num_trans_inputs {
         // SAFETY: i < num_inputs scratch slots (num_trans_inputs <= num_inputs).
         fcinfo.args[i + 1] = unsafe { ps.scratch.as_ptr().add(i).read() };

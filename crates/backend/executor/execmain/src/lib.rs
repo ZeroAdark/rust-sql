@@ -57,7 +57,7 @@ pub use execmain::{
     tap_executor_finish_leave, tap_executor_run, tap_executor_run_leave, tap_executor_start,
 };
 pub use execparallel::{parallel_query_main, register_parallel_query_main};
-// Serial-lease v2 boot surface (GL-SLEASE-2): seams_init installs the armed
+// Serial-lease v2 boot surface (regression): seams_init installs the armed
 // wait-seam wrappers + the ProcessInterrupts admission tap through these.
 pub use sqeshell::stat::{PGRUST_FOID_RANGE, SQE_BUILTINS};
 pub use slease::{
@@ -107,6 +107,7 @@ pub fn init_seams() {
     execmain_seams::query_desc_foreign_explain::set(querydesc::query_desc_foreign_explain_seam);
     execmain_seams::query_desc_prune_result::set(querydesc::query_desc_prune_result_seam);
     execmain_seams::query_desc_rti_unpruned::set(querydesc::query_desc_rti_unpruned_seam);
+    execmain_seams::query_desc_fdw_batch_size::set(querydesc::query_desc_fdw_batch_size_seam);
     execmain_seams::query_desc_agg_instrument::set(querydesc::query_desc_agg_instrument_seam);
     execmain_seams::query_desc_sort_instrument::set(querydesc::query_desc_sort_instrument_seam);
     execmain_seams::query_desc_incsort_instrument::set(
@@ -136,6 +137,9 @@ pub fn init_seams() {
     );
     execmain_seams::query_desc_worker_incsort_instrument::set(
         querydesc::query_desc_worker_incsort_instrument_seam,
+    );
+    execmain_seams::query_desc_worker_agg_instrument::set(
+        querydesc::query_desc_worker_agg_instrument_seam,
     );
     execmain_seams::query_desc_worker_memoize_instrument::set(
         querydesc::query_desc_worker_memoize_instrument_seam,

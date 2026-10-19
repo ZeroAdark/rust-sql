@@ -962,7 +962,7 @@ fn convert_to_scalar(
             if boundstypid != BYTEAOID {
                 return Ok(None);
             }
-            Ok(Some(convert_bytea_to_scalar(value, lobound, hibound)))
+            Ok(Some(convert_bytea_to_scalar(mcx, value, lobound, hibound)?))
         }
         // Built-in network types (selfuncs.c:4713-4716): inet, cidr,
         // macaddr and macaddr8 all interpolate through
@@ -992,6 +992,9 @@ fn convert_to_scalar(
             Ok(Some((v, lo, hi)))
         }
         _ => {
+            let value = flat_numeric_datum(mcx, value, valuetypid)?;
+            let lobound = flat_numeric_datum(mcx, lobound, boundstypid)?;
+            let hibound = flat_numeric_datum(mcx, hibound, boundstypid)?;
             let Some(v) = convert_numeric_to_scalar(value, valuetypid) else {
                 return Ok(None);
             };
@@ -1116,7 +1119,7 @@ fn convert_string_datum<'mcx>(
             let b = [value.as_u8()];
             mcx::slice_in(mcx, &b)?.leak()
         }
-        BPCHAROID | VARCHAROID | TEXTOID => varlena_datum_payload(value),
+        BPCHAROID | VARCHAROID | TEXTOID => varlena_datum_payload_any(mcx, value)?,
         NAMEOID => {
             let p = value.as_usize() as *const u8;
             let mut n = 0usize;
@@ -1213,10 +1216,15 @@ fn convert_one_string_to_scalar(value: &[u8], rangelo: i32, rangehi: i32) -> f64
 }
 
 // convert_bytea_to_scalar (selfuncs.c); range is always 0..255.
-fn convert_bytea_to_scalar(value: Datum, lobound: Datum, hibound: Datum) -> (f64, f64, f64) {
-    let mut valstr = varlena_datum_payload(value);
-    let mut lostr = varlena_datum_payload(lobound);
-    let mut histr = varlena_datum_payload(hibound);
+fn convert_bytea_to_scalar(
+    mcx: mcx::Mcx<'_>,
+    value: Datum,
+    lobound: Datum,
+    hibound: Datum,
+) -> PgResult<(f64, f64, f64)> {
+    let mut valstr = varlena_datum_payload_any(mcx, value)?;
+    let mut lostr = varlena_datum_payload_any(mcx, lobound)?;
+    let mut histr = varlena_datum_payload_any(mcx, hibound)?;
 
     let minlen = valstr.len().min(lostr.len()).min(histr.len());
     let mut i = 0;
@@ -1230,11 +1238,11 @@ fn convert_bytea_to_scalar(value: Datum, lobound: Datum, hibound: Datum) -> (f64
     lostr = &lostr[i..];
     histr = &histr[i..];
 
-    (
+    Ok((
         convert_one_bytea_to_scalar(valstr),
         convert_one_bytea_to_scalar(lostr),
         convert_one_bytea_to_scalar(histr),
-    )
+    ))
 }
 
 fn convert_one_bytea_to_scalar(value: &[u8]) -> f64 {
@@ -2941,7 +2949,7 @@ fn btcostestimate(
                 // correlation value — a degenerate/torn stats slot with an
                 // empty numbers array is tolerated, not asserted (the
                 // unguarded [0] panicked backends under high auto-analyze
-                // churn; found by the GL-ELR-XIDWAIT win-table rig, where
+                // churn; found by the regression win-table rig, where
                 // the armed arm's ~10x update throughput made analyze
                 // rewrites of the stats row constant).
                 if let Some(&corr0) = slot.numbers()?.first() {
@@ -4027,6 +4035,38 @@ pub(crate) fn varlena_datum_payload<'a>(value: Datum) -> &'a [u8] {
     }
 }
 
+// TextDatumGetCString / DatumGetByteaPP / DatumGetNumeric (selfuncs.c
+// convert_*_datum): a histogram endpoint probed from a btree index can be a
+// compressed image (index_form_tuple compresses past TOAST_INDEX_TARGET), so
+// toast forms are unpacked into `mcx` before the payload is read.
+pub(crate) fn varlena_datum_payload_any<'a>(mcx: mcx::Mcx<'a>, value: Datum) -> PgResult<&'a [u8]> {
+    let p = value.as_usize() as *const u8;
+    debug_assert!(!p.is_null());
+    // SAFETY: by-ref varlena datum, readable for its first header byte.
+    let b0 = unsafe { *p };
+    if b0 == 0x01 || b0 & 0x03 == 0x02 {
+        let img = varlena_image_any(mcx, value)?;
+        // SAFETY: detoast_attr returns a plain 4B-header image.
+        return Ok(unsafe { datum::VarlenaRef::from_ptr(img.as_ptr()).data() });
+    }
+    Ok(varlena_datum_payload(value))
+}
+
+// DatumGetNumeric for convert_numeric_to_scalar: a toast-form numeric datum
+// is unpacked into `mcx`; every other datum passes through unchanged.
+fn flat_numeric_datum<'a>(mcx: mcx::Mcx<'a>, value: Datum, typid: Oid) -> PgResult<Datum> {
+    const NUMERICOID: Oid = 1700;
+    if typid != NUMERICOID {
+        return Ok(value);
+    }
+    // SAFETY: by-ref varlena datum, readable for its first header byte.
+    let b0 = unsafe { *(value.as_usize() as *const u8) };
+    if b0 == 0x01 || b0 & 0x03 == 0x02 {
+        return Ok(Datum::from_usize(varlena_image_any(mcx, value)?.as_ptr() as usize));
+    }
+    Ok(value)
+}
+
 // PG_DETOAST_DATUM (selfuncs.c:1945 DatumGetArrayTypeP): layout-sensitive
 // readers (array/range deserializers) need a plain 4B-header image, so a
 // short-header, compressed or external (TOAST pointer) datum is unpacked,
@@ -4129,7 +4169,19 @@ pub fn scalararraysel<'mcx>(
     let is_inequality = oprsel == F_NEQSEL || oprsel == F_NEQJOINSEL;
 
     let left_id = run.intern_expr(leftop);
-    let elem_sel = |run: &mut PlannerRun<'mcx>,
+    // One arena slot serves every element: the estimators only read it, and
+    // a slot per element of a multi-million-element array overflows the arena.
+    let mut elem_slot: Option<NodeId> = None;
+    let mut slot_for = |run: &mut PlannerRun<'mcx>, elem: Node<'mcx>| -> NodeId {
+        match elem_slot {
+            Some(id) => {
+                *run.root.expr_node_mut(id) = elem;
+                id
+            }
+            None => *elem_slot.insert(run.intern_expr(elem)),
+        }
+    };
+    let mut elem_sel = |run: &mut PlannerRun<'mcx>,
                         value: Datum,
                         isnull: bool,
                         elmlen: i16,
@@ -4148,7 +4200,7 @@ pub fn scalararraysel<'mcx>(
                 location: -1,
             },
         )?;
-        let elem_id = run.intern_expr(elem);
+        let elem_id = slot_for(run, elem);
         let args = [left_id, elem_id];
         if is_join_clause {
             crate::plancat::join_selectivity(
@@ -4210,7 +4262,7 @@ pub fn scalararraysel<'mcx>(
         s1 = if use_or { 0.0 } else { 1.0 };
         s1disjoint = s1;
         for elem in arrayexpr.elements.iter() {
-            let elem_id = run.intern_expr(elem);
+            let elem_id = slot_for(run, elem);
             let args = [left_id, elem_id];
             let s2 = if is_join_clause {
                 crate::plancat::join_selectivity(
@@ -4460,13 +4512,15 @@ pub(crate) fn generic_restriction_selectivity<'mcx>(
             Ok(!fcinfo.isnull && result.as_bool())
         };
 
-        let stats_usable =
-            vardata.stats.is_some() && statistic_proc_security_check(&vardata, opcode)?;
         // mcv_selectivity (selfuncs.c:780-795): mcvsel sums the matching
         // MCV frequencies, mcvsum every MCV frequency -- the histogram
         // covers only the 1 - nullfrac - mcvsum remainder below.
         let (mut mcvsel, mut mcvsum) = (0.0f64, 0.0f64);
-        if let Some(sslot) = vardata.slot(STATISTIC_KIND_MCV, 0).filter(|_| stats_usable) {
+        // mcv_selectivity and histogram_selectivity each run the leakproof
+        // check (selfuncs.c:754, 846): its DEBUG2 line is emitted twice.
+        let mcv_usable =
+            vardata.stats.is_some() && statistic_proc_security_check(&vardata, opcode)?;
+        if let Some(sslot) = vardata.slot(STATISTIC_KIND_MCV, 0).filter(|_| mcv_usable) {
             // Torn-slot pairing rule (see mcv_selectivity): only values
             // paired with a frequency count.
             for (&v, &n) in sslot.values()?.iter().zip(sslot.numbers()?.iter()) {
@@ -4480,7 +4534,9 @@ pub(crate) fn generic_restriction_selectivity<'mcx>(
         let (hist_selec, hist_size) = {
             let mut hs = -1.0f64;
             let mut n = 0usize;
-            if let Some(sslot) = vardata.slot(STATISTIC_KIND_HISTOGRAM, 0).filter(|_| stats_usable)
+            let hist_usable =
+                vardata.stats.is_some() && statistic_proc_security_check(&vardata, opcode)?;
+            if let Some(sslot) = vardata.slot(STATISTIC_KIND_HISTOGRAM, 0).filter(|_| hist_usable)
             {
                 let values = sslot.values()?;
                 n = values.len();

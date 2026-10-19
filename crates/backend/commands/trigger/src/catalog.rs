@@ -113,12 +113,17 @@ pub fn CreateTriggerInternal<'mcx>(
     )
 }
 
-// get_relkind_objtype (objectaddress.c), the kinds reachable from trigger DDL.
+// get_relkind_objtype (objectaddress.c:6196): the FROM relation of a
+// constraint trigger is ACL-checked before any relkind check, so every kind
+// can reach aclcheck_error.
 fn get_relkind_objtype(relkind: u8) -> types_nodes::parsenodes::ObjectType {
     use types_nodes::parsenodes::ObjectType;
     match relkind {
         RELKIND_RELATION | RELKIND_PARTITIONED_TABLE => ObjectType::OBJECT_TABLE,
+        types_rel::RELKIND_INDEX | types_rel::RELKIND_PARTITIONED_INDEX => ObjectType::OBJECT_INDEX,
+        types_rel::RELKIND_SEQUENCE => ObjectType::OBJECT_SEQUENCE,
         types_rel::RELKIND_VIEW => ObjectType::OBJECT_VIEW,
+        types_rel::RELKIND_MATVIEW => ObjectType::OBJECT_MATVIEW,
         RELKIND_FOREIGN_TABLE => ObjectType::OBJECT_FOREIGN_TABLE,
         _ => ObjectType::OBJECT_TABLE,
     }
@@ -451,7 +456,7 @@ pub fn CreateTriggerFiringOn<'mcx>(
     if stmt.isconstraint && constraint_oid == InvalidOid {
         debug_assert!(!is_internal);
         let mut entry = pg_constraint::ConstraintEntry::base(
-            trigname_given,
+            trigname_given.as_bytes(),
             rel.rd_rel.relnamespace,
             CONSTRAINT_TRIGGER,
             rel.rd_id,

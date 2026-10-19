@@ -61,6 +61,9 @@ pub struct AggOrderedSpec {
     pub scratch: NonNull<::datum::NullableDatum>,
     pub num_trans_inputs: u16,
     pub flag: NonNull<bool>,
+    // aggpresorted DISTINCT: the row's dedup + transition run in program
+    // order through this hook instead of the deferred mark.
+    pub presorted: Option<crate::steps::AggPresortedHook>,
 }
 
 // WindowAgg projection binding: same result arrays, indexed by wfuncno,
@@ -136,6 +139,9 @@ pub struct SubplanCompileEnv {
     /// The SubqueryScan/CteScan parent's subplan targetlist (C
     /// ExecInitWholeRowVar's junk-filter source); None under other parents.
     pub parent_subplan_tlist: Option<NonNull<NodeList<'static>>>,
+    /// C `executor_errposition(state->parent->state, location)` over the
+    /// erased `estate`; None where C's ExprState has no parent.
+    pub errpos: Option<fn(NonNull<()>, i32) -> i32>,
 }
 
 /// C `ExecInitExpr` (parent-less form; PlanState vocab is the execProcnode
@@ -1223,7 +1229,11 @@ fn build_agg_trans_ordered<'mcx>(
         bailout = Some(state.steps.len());
         push_step(state, mcx, step)?;
     }
-    push_step(state, mcx, Step::AggOrderedMark { flag: ord.flag })?;
+    let mark = match ord.presorted {
+        Some(hook) => Step::AggPresortedTrans { hook },
+        None => Step::AggOrderedMark { flag: ord.flag },
+    };
+    push_step(state, mcx, mark)?;
     let target = state.steps.len() as u32;
     if let Some(ix) = bailout {
         match &mut state.steps[ix] {
@@ -2836,25 +2846,7 @@ pub(crate) fn init_expr_rec<'mcx>(
                     sub,
                 )?;
                 let step = if nt.argisrow {
-                    use crate::steps::RowNullState;
-                    let rn_layout = core::alloc::Layout::new::<RowNullState>();
-                    let rn: NonNull<RowNullState> = mcx
-                        .allocate(rn_layout)
-                        .map_err(|_| mcx.oom(rn_layout.size()))?
-                        .cast();
-                    // SAFETY: fresh exact-layout allocation; the compile mcx
-                    // outlives every eval of this step, so the 'static restamp
-                    // never escapes it.
-                    unsafe {
-                        rn.as_ptr().write(RowNullState {
-                            tup_type: ::types_core::InvalidOid,
-                            tup_typmod: -1,
-                            desc: None,
-                            mcx: core::mem::transmute::<Mcx<'mcx>, Mcx<'static>>(mcx),
-                            named: None,
-                            tupdesc_id: 0,
-                        })
-                    };
+                    let rn = alloc_row_cache(mcx)?;
                     let frame_ix = state.frames.len() as u32;
                     let frame = FuncFrame::new_in(mcx, FmgrInfo::unresolved(), 0, 0)?;
                     state
@@ -2907,6 +2899,7 @@ pub(crate) fn init_expr_rec<'mcx>(
                     .try_reserve(1)
                     .map_err(|_| mcx.oom(core::mem::size_of::<FuncFrame<'_>>()))?;
                 state.frames.push(frame);
+                let rn = alloc_row_cache(mcx)?;
                 push_step(
                     state,
                     mcx,
@@ -2914,6 +2907,7 @@ pub(crate) fn init_expr_rec<'mcx>(
                         fieldnum: f.fieldnum,
                         resulttype: f.resulttype,
                         frame: frame_ix,
+                        rn,
                         out,
                     },
                 )
@@ -3587,8 +3581,11 @@ fn init_subscripting_ref<'mcx>(
         upperidx: [0; MAXDIM],
         loweridx: [0; MAXDIM],
         resmcx: None,
-        container_is_param: is_assignment
-            && sbsref.refexpr.is_some_and(|n| n.node_tag() == NodeTag::T_Param),
+        container_param: sbsref
+            .refexpr
+            .filter(|_| is_assignment)
+            .and_then(|n| n.as_param())
+            .and_then(|p| params.param_expanded.map(|f| (f, p.paramid))),
     };
     let stp = alloc_state(mcx, st)?;
     register_alloc_state(state, mcx, stp)?;
@@ -3959,19 +3956,6 @@ fn init_field_store<'mcx>(
     let fstore = node.as_field_store().unwrap();
     let desc = ::typcache::lookup_rowtype_tupdesc_copy(mcx, fstore.resulttype, -1)?;
     let ncolumns = desc.natts;
-    let desc_layout = core::alloc::Layout::new::<TupleDescData<'static>>();
-    let desc_ptr: NonNull<TupleDescData<'static>> = mcx
-        .allocate(desc_layout)
-        .map_err(|_| mcx.oom(desc_layout.size()))?
-        .cast();
-    // SAFETY: fresh allocation of the exact layout; the plan mcx outlives
-    // every eval of this step, so the 'static restamp never escapes it.
-    unsafe {
-        desc_ptr.as_ptr().write(core::mem::transmute::<
-            TupleDescData<'mcx>,
-            TupleDescData<'static>,
-        >(desc));
-    }
     let columns: NonNull<::datum::NullableDatum> = alloc_array(mcx, ncolumns as usize)?;
 
     let frame_ix = state.frames.len() as u32;
@@ -3983,9 +3967,11 @@ fn init_field_store<'mcx>(
     state.frames.push(frame);
 
     let fs = crate::steps::FieldStoreState {
+        resulttype: fstore.resulttype,
         ncolumns: ncolumns as u16,
-        desc: desc_ptr,
         columns,
+        cached: None,
+        tupdesc_id: 0,
     };
     let fsp = alloc_state(mcx, fs)?;
 
@@ -4062,10 +4048,13 @@ fn init_row_compare<'mcx>(
             ::lsyscache::get_op_opfamily_properties(opno, opfamily, false)?;
         let proc = ::lsyscache::get_opfamily_proc(opfamily, lefttype, righttype, BTORDER_PROC)?;
         if !::types_core::OidIsValid(proc) {
-            panic!(
-                "missing support function {BTORDER_PROC}({lefttype},{righttype}) \
-                 in opfamily {opfamily}"
-            );
+            return Err(Box::new(
+                PgError::error(format!(
+                    "missing support function {BTORDER_PROC}({lefttype},{righttype}) \
+                     in opfamily {opfamily}"
+                ))
+                .with_sqlstate(::types_error::ERRCODE_INTERNAL_ERROR),
+            ));
         }
         let mut flinfo = fmgr_core::fmgr_info(proc)?;
         flinfo.fn_expr = Some(erase_fn_expr(mcx, node)?);
@@ -4167,6 +4156,11 @@ fn init_row_expr<'mcx>(
                 expr_typmod_closed(e),
                 0,
             )?;
+            ::tupdesc::TupleDescInitEntryCollation(
+                &mut desc,
+                (i + 1) as i16,
+                ::nodes_core::expr_collation(e),
+            );
         }
         desc.tdtypeid = ::types_core::catalog::RECORDOID;
         desc.tdtypmod = -1;
@@ -4462,7 +4456,7 @@ fn init_json_expr<'mcx>(
             pathspec: ::datum::NullableDatum::null(),
             error: ::datum::NullableDatum::null(),
             empty: ::datum::NullableDatum::null(),
-            nvars: nvars as u16,
+            nvars: nvars as u32,
             vars,
             var_cells,
             jump_error: -1,
@@ -5275,9 +5269,17 @@ fn too_many_args(nargs: usize) -> Box<PgError> {
 #[cold]
 #[inline(never)]
 fn retset_error() -> Box<PgError> {
+    retset_error_at(0)
+}
+
+#[track_caller]
+#[cold]
+#[inline(never)]
+fn retset_error_at(position: i32) -> Box<PgError> {
     Box::new(
         PgError::error("set-valued function called in context that cannot accept a set")
-            .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
+            .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED)
+            .with_cursor_position(position),
     )
 }
 
@@ -5622,7 +5624,10 @@ fn init_func<'mcx>(
     let mut flinfo = fmgr_core::fmgr_info(funcid)?;
     flinfo.fn_expr = Some(erase_fn_expr(mcx, node)?);
     if flinfo.fn_retset {
-        return Err(retset_error());
+        let pos = sub
+            .and_then(|env| env.errpos.map(|f| f(env.estate, nodes_core::expr_location(node))))
+            .unwrap_or(0);
+        return Err(retset_error_at(pos));
     }
 
     let fn_strict = flinfo.fn_strict;
@@ -7691,4 +7696,26 @@ mod assgn_needs_old_tests {
         assert!(assgn_needs_old(rl));
         assert!(!assgn_needs_old(casetest(mcx)));
     }
+}
+
+fn alloc_row_cache<'mcx>(mcx: Mcx<'mcx>) -> PgResult<NonNull<crate::steps::RowNullState>> {
+    use crate::steps::RowNullState;
+    let rn_layout = core::alloc::Layout::new::<RowNullState>();
+    let rn: NonNull<RowNullState> =
+        mcx.allocate(rn_layout).map_err(|_| mcx.oom(rn_layout.size()))?.cast();
+    // SAFETY: fresh exact-layout allocation; the compile mcx outlives every
+    // eval of the owning step, so the 'static restamp never escapes it.
+    unsafe {
+        let smcx = core::mem::transmute::<Mcx<'mcx>, Mcx<'static>>(mcx);
+        rn.as_ptr().write(RowNullState {
+            tup_type: ::types_core::InvalidOid,
+            tup_typmod: -1,
+            desc: None,
+            seen: PgVec::new_in(smcx),
+            mcx: smcx,
+            named: None,
+            tupdesc_id: 0,
+        })
+    };
+    Ok(rn)
 }

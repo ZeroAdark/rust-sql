@@ -1,6 +1,6 @@
 # pgrust wasm webapp
 
-Runs the pgrust-fast single-user `postgres.wasm` module **in the browser**
+Runs the pgrust single-user `postgres.wasm` module **in the browser**
 (and in Node), over an in-memory VFS holding an `initdb`'d datadir. Type SQL
 into an interactive `pgrust=#` terminal, get a psql-style table back —
 PostgreSQL, reimplemented in Rust, compiled to WebAssembly, executing
@@ -11,7 +11,7 @@ Lineage: this site is the pgrust.com demo ported from the original pgrust
 UI/REPL/format layers are carried over intact; the **host layer is new**: the
 old build targeted `wasm32/64-unknown-unknown` and spoke a custom
 `pgvfs::host_*` ABI (27 imports + 161 `env::*` trap stubs, `pgrust-harness.js`),
-while pgrust-fast builds `postgres.wasm` for **wasm32-wasip1** with
+while pgrust builds `postgres.wasm` for **wasm32-wasip1** with
 panic=unwind lowered through standard Wasm exception handling — so the module
 imports exactly the **33 `wasi_snapshot_preview1` functions** and nothing
 else, implemented here in `pgrust-wasi.js`.
@@ -83,7 +83,7 @@ audit in the wasm boot lane), so float8 examples run everywhere.
     WebKit/Safari incl. iOS here — no JSPI in WebKit as of mid-2026): each
     statement runs `postgres --single` to completion in a fresh module
     instance over the SHARED long-lived VFS, exactly the original model —
-    datadir writes persist REPL-style, session state does not. pgrust-fast's
+    datadir writes persist REPL-style, session state does not. pgrust's
     `--single` exits through a completed shutdown checkpoint, so every next
     boot is a normal clean restart.
 - **Persistence across page reloads** (the `persist` toggle): the worker

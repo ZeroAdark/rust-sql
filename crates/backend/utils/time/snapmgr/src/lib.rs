@@ -10,7 +10,7 @@ use elog::{elog, ereport};
 use mcx::{Mcx, MemoryContext, PgVec};
 use types_core::{
     CommandId, GlobalVisStateHandle, InvalidTransactionId, Oid, ProcNumber, TransactionId,
-    TransactionIdIsNormal, TransactionIdPrecedes,
+    TransactionIdIsNormal, TransactionIdPrecedes, MAXPGPATH,
 };
 use types_error::{ErrorLocation, PgResult, ERROR, WARNING};
 use types_resowner::ResourceOwner;
@@ -138,6 +138,23 @@ fn new_static_snapshot(mcx: Mcx<'static>) -> Snapshot {
 fn init_state(slot: &mut Option<ManuallyDrop<SnapMgrState>>) {
     let cx: &'static MemoryContext = ::mcx::session_root("SnapMgr");
     let mcx = cx.mcx();
+    // Session teardown (State phase, before the SnapMgr root is retired):
+    // drop the state — the three static snapshot Rc's and the
+    // active/registered/exported bookkeeping are global-heap objects a dead
+    // backend thread's ManuallyDrop TLS would otherwise keep forever
+    // (measured ~0.7 KiB/session). C frees them with the process. A
+    // with_state after this rebuilds a fresh state, as on a reused thread.
+    ::mcx::register_session_cleanup(Box::new(|| {
+        STATE.with(|cell| {
+            // SAFETY: same single-thread access discipline as with_state;
+            // the cleanup runs on the owning thread outside any with_state
+            // borrow (teardown is not re-entered from snapmgr).
+            let slot = unsafe { &mut *cell.get() };
+            if let Some(st) = slot.take() {
+                drop(ManuallyDrop::into_inner(st));
+            }
+        });
+    }));
     *slot = Some(ManuallyDrop::new(SnapMgrState {
         mcx,
         current_data: new_static_snapshot(mcx),
@@ -1124,7 +1141,9 @@ pub fn ImportSnapshot(idstr: &str) -> PgResult<()> {
     // --cfg pgrust_sim), not the ambient process cwd. C parity: snapmgr.c
     // ImportSnapshot's AllocateFile probe — errno != ENOENT complains about
     // the open, ENOENT means the snapshot identifier names nothing.
-    let path = format!("{SNAPSHOT_EXPORT_DIR}/{idstr}");
+    // snprintf(path, MAXPGPATH, ...): the pathname is cut at MAXPGPATH-1 bytes.
+    let mut path = format!("{SNAPSHOT_EXPORT_DIR}/{idstr}");
+    path.truncate(MAXPGPATH - 1);
     let snapfd = fd::OpenTransientFile(&path, libc::O_RDONLY)?;
     if snapfd < 0 {
         let errno = fd::get_errno();

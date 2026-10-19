@@ -177,9 +177,12 @@ pub fn apply_config_variables(
     }
     let removed: Vec<Removed> = with_store_mut(|reg| {
         let mut out = Vec::new();
-        for idx in 0..reg.len() {
+        for idx in crate::name::hash_seq_order(reg) {
             let gen = reg[idx].gen();
-            if gen.reset_source != PGC_S_FILE || (gen.status & GUC_IS_IN_FILE != 0) {
+            if gen.status & crate::model::GUC_REMOVED != 0
+                || gen.reset_source != PGC_S_FILE
+                || (gen.status & GUC_IS_IN_FILE != 0)
+            {
                 continue;
             }
             let name = gen.name.to_string();

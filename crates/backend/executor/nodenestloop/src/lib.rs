@@ -54,6 +54,9 @@ pub struct NestLoopState<'mcx> {
     // Outer-tlist source per nestParam, resolved once at init.
     nest_params: ::mcx::PgVec<'mcx, NestParamSlot>,
     nest_param_set: ::types_nodes::bitmapset::Bitmapset<'mcx>,
+    // The inner's pending chgParam (ExecReScanNestLoop leaves the inner to
+    // the next outer row; nodeNestloop.c:389).
+    inner_chg: ::types_nodes::bitmapset::Bitmapset<'mcx>,
     // InstrCountFiltered1/2 slot for this join node (nodeNestloop.c).
     js_instr: Option<u32>,
 }
@@ -148,6 +151,7 @@ pub fn exec_init_nest_loop<'mcx>(
         nl_MatchedOuter: false,
         nest_params,
         nest_param_set,
+        inner_chg: ::types_nodes::bitmapset::Bitmapset::empty(),
         js_instr: if estate.es_instrument != 0 {
             Some(u32::try_from(node.join.plan.plan_node_id).expect("plan_node_id is non-negative"))
         } else {
@@ -178,26 +182,7 @@ where
             estate.ecxt_mut(ecxt).ecxt_outertuple = Some(outer_slot);
             node.nl_NeedNewOuter = false;
             node.nl_MatchedOuter = false;
-            if node.nest_params.is_empty() {
-                inner.rescan(estate)?;
-            } else {
-                // Bind the outer Vars into their PARAM_EXEC slots, then
-                // rescan the inner with the changed-param set.
-                for &NestParamSlot { paramno, attno } in node.nest_params.iter() {
-                    let mut isnull = false;
-                    let value = exectuples::slot_getattr(
-                        &mut estate.es_tupleTable[outer_slot.0 as usize],
-                        attno as i32,
-                        &mut isnull,
-                    );
-                    let prm = &mut estate.es_param_exec_vals[paramno as usize];
-                    prm.value = value;
-                    prm.isnull = isnull;
-                }
-                let inner_plan =
-                    node.plan.join.plan.righttree.expect("nestloop inner plan");
-                inner.rescan_with_chg(inner_plan, estate, &node.nest_param_set)?;
-            }
+            bind_and_rescan_inner(node, inner, estate, outer_slot)?;
         }
 
         let inner_slot = inner.exec_proc(estate)?;
@@ -336,24 +321,68 @@ pub fn lane_accept_outer<'mcx, I: NestLoopChild<'mcx>>(
     estate.ecxt_mut(ecxt).ecxt_outertuple = Some(outer_slot);
     node.nl_NeedNewOuter = false;
     node.nl_MatchedOuter = false;
-    if node.nest_params.is_empty() {
-        inner.rescan(estate)
-    } else {
-        // Bind the outer Vars into their PARAM_EXEC slots, then rescan the
-        // inner with the changed-param set (exec_nest_loop's arm, verbatim).
-        for &NestParamSlot { paramno, attno } in node.nest_params.iter() {
-            let mut isnull = false;
-            let value = exectuples::slot_getattr(
-                &mut estate.es_tupleTable[outer_slot.0 as usize],
-                attno as i32,
-                &mut isnull,
-            );
-            let prm = &mut estate.es_param_exec_vals[paramno as usize];
-            prm.value = value;
-            prm.isnull = isnull;
+    bind_and_rescan_inner(node, inner, estate, outer_slot)
+}
+
+/// Bind the outer Vars into their PARAM_EXEC slots, then rescan the inner
+/// with the changed-param set: the nestParams plus any chgParam the join's
+/// own rescan left pending for the inner (ExecNestLoop, nodeNestloop.c:139-151).
+fn bind_and_rescan_inner<'mcx, I: NestLoopChild<'mcx>>(
+    node: &mut NestLoopState<'mcx>,
+    inner: &mut I,
+    estate: &mut EStateData<'mcx>,
+    outer_slot: ExecSlotId,
+) -> PgResult<()> {
+    for &NestParamSlot { paramno, attno } in node.nest_params.iter() {
+        let mut isnull = false;
+        let value = exectuples::slot_getattr(
+            &mut estate.es_tupleTable[outer_slot.0 as usize],
+            attno as i32,
+            &mut isnull,
+        );
+        let prm = &mut estate.es_param_exec_vals[paramno as usize];
+        prm.value = value;
+        prm.isnull = isnull;
+    }
+    if node.inner_chg.is_empty() {
+        if node.nest_params.is_empty() {
+            return inner.rescan(estate);
         }
         let inner_plan = node.plan.join.plan.righttree.expect("nestloop inner plan");
-        inner.rescan_with_chg(inner_plan, estate, &node.nest_param_set)
+        return inner.rescan_with_chg(inner_plan, estate, &node.nest_param_set);
+    }
+    let mut chg = core::mem::replace(
+        &mut node.inner_chg,
+        ::types_nodes::bitmapset::Bitmapset::empty(),
+    );
+    chg.add_members(estate.es_query_cxt, &node.nest_param_set)?;
+    let inner_plan = node.plan.join.plan.righttree.expect("nestloop inner plan");
+    inner.rescan_with_chg(inner_plan, estate, &chg)
+}
+
+impl<'mcx> NestLoopState<'mcx> {
+    /// UpdateChangedParamSet on the inner at ExecReScanNestLoop: the inner is
+    /// NOT rescanned there (its runtime keys read outer Vars); the set waits
+    /// for the next outer row's rescan.
+    pub fn defer_inner_chg(
+        &mut self,
+        mcx: ::mcx::Mcx<'mcx>,
+        chg: &::types_nodes::bitmapset::Bitmapset<'mcx>,
+    ) -> PgResult<()> {
+        let inner = self
+            .plan
+            .join
+            .plan
+            .righttree
+            .expect("nestloop inner plan")
+            .as_plan()
+            .expect("plan-tree node");
+        for pid in chg.iter() {
+            if inner.allParam.is_member(pid) {
+                self.inner_chg.add_member(mcx, pid)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -519,6 +548,6 @@ mcx::forget_safe_struct!(
     NestParamSlot { paramno, attno },
     NestLoopState<'_> { plan, ps_ExprContext, ps_ResultTupleSlot,
         js_single_match, nl_fill_outer, nl_NullInnerTupleSlot,
-        nl_NeedNewOuter, nl_MatchedOuter, nest_params, nest_param_set, js_instr;
+        nl_NeedNewOuter, nl_MatchedOuter, nest_params, nest_param_set, inner_chg, js_instr;
         ps_ResultTupleDesc, proj, joinqual, otherqual },
 );

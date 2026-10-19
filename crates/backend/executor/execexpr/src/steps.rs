@@ -28,6 +28,15 @@ pub struct OutRef(pub(crate) NonNull<NullableDatum>);
 // dense #[repr(u8)] enum; only the SELECT-1/point-select families are ported
 // (deferred families in notes at lib.rs). Discriminants are internal — C's
 // EEOP_* numbering is not a compat surface.
+/// nodeagg's presorted-DISTINCT row hook (`Step::AggPresortedTrans`): a
+/// query-lifetime context cell and the function that runs the entry's
+/// dedup + transition over it.
+#[derive(Clone, Copy, Debug)]
+pub struct AggPresortedHook {
+    pub ctx: NonNull<()>,
+    pub call: unsafe fn(NonNull<()>) -> PgResult<()>,
+}
+
 #[derive(Clone, Copy, Debug)]
 #[repr(u8)]
 pub enum Step {
@@ -353,6 +362,14 @@ pub enum Step {
     // nodeagg's tuplesort feed (scratch already holds the evaluated args).
     AggOrderedMark {
         flag: NonNull<bool>,
+    },
+    // C EEOP_AGG_PRESORTED_DISTINCT_SINGLE/MULTI + the transition of an
+    // aggpresorted DISTINCT aggregate, in program order: ExecBuildAggTrans
+    // emits every aggregate's steps in transno sequence, so a later
+    // aggregate's FILTER already sees this transition's effects. nodeagg's
+    // hook dedups the parked scratch args and advances the transfn.
+    AggPresortedTrans {
+        hook: AggPresortedHook,
     },
     // C "set up aggstate->curpertrans for AggGetAggref()" (execExprInterp.c);
     // pushed only for ordered-set aggs.
@@ -708,13 +725,13 @@ pub enum Step {
         transno: u16,
     },
     // C EEOP_FIELDSELECT; reads the record datum from `out`, writes the
-    // field back to `out`. Per-eval registry tupdesc copy stands in for C's
-    // rowcache (cold path; see interp). Kept last: appending preserves the
-    // hot variants' discriminants.
+    // field back to `out`; `rn` is C's rowcache. Kept last: appending
+    // preserves the hot variants' discriminants.
     FieldSelect {
         fieldnum: i16,
         resulttype: Oid,
         frame: u32,
+        rn: NonNull<RowNullState>,
         out: OutRef,
     },
     // C EEOP_ROWCOMPARE_STEP: per-column btree ORDER proc; strict-NULL input
@@ -838,7 +855,7 @@ pub struct JsonExprState {
     pub pathspec: NullableDatum,
     pub error: NullableDatum,
     pub empty: NullableDatum,
-    pub nvars: u16,
+    pub nvars: u32,
     // Parallel arrays: name/typid/typmod fixed at compile, value/isnull
     // refreshed per eval from var_cells.
     pub vars: NonNull<::adt_jsonpath_exec::JsonPathVariable<'static>>,
@@ -871,9 +888,13 @@ pub struct JsonCoercionState {
 // the values/nulls workspace shared by DEFORM, the per-field subexpressions,
 // and FORM.
 pub struct FieldStoreState {
+    pub resulttype: Oid,
     pub ncolumns: u16,
-    pub desc: NonNull<::types_tuple::TupleDescData<'static>>,
     pub columns: NonNull<NullableDatum>,
+    // C rowcache: the typcache descriptor pin, refreshed when its
+    // tupDesc_identifier changes (get_cached_rowtype on every eval).
+    pub cached: Option<core::mem::ManuallyDrop<std::rc::Rc<::types_tuple::TupleDescData<'static>>>>,
+    pub tupdesc_id: u64,
 }
 
 // Tupdescs + by-name map compile-resolved (C: first eval; plan invalidation
@@ -908,6 +929,9 @@ pub struct RowNullState {
     pub tup_type: Oid,
     pub tup_typmod: i32,
     pub desc: Option<NonNull<::types_tuple::TupleDescData<'static>>>,
+    // Every RECORD typmod seen so far (C reuses the typcache's registered
+    // descriptors; the copies here are bounded by the registry, not by rows).
+    pub seen: PgVec<'static, (i32, NonNull<::types_tuple::TupleDescData<'static>>)>,
     pub mcx: Mcx<'static>,
     // Named-composite leg (C rowcache.cacheptr/tupdesc_id): the typcache
     // descriptor pin, refreshed when its tupDesc_identifier changes.

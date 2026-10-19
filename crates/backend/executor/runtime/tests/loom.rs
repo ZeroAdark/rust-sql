@@ -38,7 +38,7 @@
 //!      stream, publish/close wakes are lost-wakeup-free through the
 //!      epoch-guarded park, exhaustion requires the close.
 //!  11. slease_acquire_timeout_no_leak / slease_donate_reacquire_reconciles
-//!      (GL-SLEASE-2) — the serial-lease v2 bounded-admission + donation
+//!      (regression) — the serial-lease v2 bounded-admission + donation
 //!      permit protocol over pgsync::Semaphore: no interleaving leaks a
 //!      permit; `true` from acquire_timeout always confers exactly one
 //!      release obligation.
@@ -440,7 +440,7 @@ fn standby_absorption() {
 
     let mut b = loom::model::Builder::new();
     b.preemption_bound = Some(3);
-    // GL-SPINPARK-1 gate-run finding: the GL-STMTTASK-2 ParkLot rework
+    // regression gate-run finding: the regression ParkLot rework
     // (legacy-parked count + unparks bookkeeping on every park/wake_all)
     // grew these permit-churn-heavy executions past loom's default
     // 1,000-branch cap (green at t43 main, instant overflow at the stack
@@ -541,7 +541,7 @@ fn facade_standby_absorption() {
 
     let mut b = loom::model::Builder::new();
     b.preemption_bound = Some(3);
-    // GL-SPINPARK-1 gate-run finding: the GL-STMTTASK-2 ParkLot rework
+    // regression gate-run finding: the regression ParkLot rework
     // (legacy-parked count + unparks bookkeeping on every park/wake_all)
     // grew these permit-churn-heavy executions past loom's default
     // 1,000-branch cap (green at t43 main, instant overflow at the stack
@@ -1213,7 +1213,7 @@ fn standing_gang_detach_count_join_no_lost_wake() {
 // The fix is a claim-word extension: the arm driver's catch reports each
 // death on the board (`predrive_deaths`, count-then-wake), try_claim
 // QUARANTINES the entry once a ticket-width has died (value-gated exactly
-// like `closed` — GL-SPINPARK-1: the claim word's transitions are mirrored
+// like `closed` — regression: the claim word's transitions are mirrored
 // faithfully, fetch_add + settle, never a bare store-vs-swap), and the
 // leader's nobody-will-participate reap counts deaths like refusals.
 // Mirror-dialect: standing.rs is not loom-buildable (latch/lmgr/PGPROC
@@ -1395,7 +1395,7 @@ fn wpool_repool_fence_no_stale_entry() {
 }
 
 // ===========================================================================
-// POOL-DB CRASH-DRAIN FENCE — GL-POOLDB-HELPERDEATH-1: a dying pool-db
+// POOL-DB CRASH-DRAIN FENCE — regression: a dying pool-db
 // thread's exit-callback drain must never run against RESET shared memory.
 // Production shape (launch_backend::rtpool): the postmaster's crash arm
 // bumps POOL_FENCE (flush_for_crash) BEFORE its PM_WAIT_BACKENDS quiescence
@@ -3655,7 +3655,7 @@ fn pool_needle_read_order_no_false_death() {
     });
 }
 
-/// POOL-QOS (GL-POOLDB-1 mitigation) — the serve-yield protocol,
+/// POOL-QOS (regression mitigation) — the serve-yield protocol,
 /// transcribed 1:1 from parallel::standing::StandingEngagement
 /// {try_grant_yield, yield_detach} + the leader needle's yield-kind split
 /// (standing_channel wait_engaged). Two participants on a 2-ticket board;
@@ -4316,7 +4316,7 @@ fn lockgroup_pool_park_reattach_group_clean() {
 }
 
 // ---------------------------------------------------------------------------
-// GL-SLEASE-2 — the serial-lease v2 permit protocol over pgsync::Semaphore.
+// regression — the serial-lease v2 permit protocol over pgsync::Semaphore.
 // The session-side state machine (execmain/src/slease.rs) is thread-local;
 // the loom-explorable surface is its SEMAPHORE OP SEQUENCE racing other
 // holders, including the new bounded acquire. Invariant of the class:
@@ -4327,8 +4327,9 @@ fn lockgroup_pool_park_reattach_group_clean() {
 // ---------------------------------------------------------------------------
 
 /// `acquire_timeout` vs a racing holder: whichever outcome loom explores
-/// (grant, wake-then-grant, or timeout — loom's wait_timeout branches all
-/// three), the final count balances and `true` always confers exactly one
+/// (grant or wake-then-grant — loom 0.7.2's `wait_timeout` never reports a
+/// timeout, pgsync papering row L7, so the timeout escape is NOT modeled
+/// here), the final count balances and `true` always confers exactly one
 /// release obligation.
 #[test]
 fn slease_acquire_timeout_no_leak() {

@@ -112,8 +112,14 @@ fn hot_standby_feedback() -> bool {
     guc_tables::vars::hot_standby_feedback.read()
 }
 
+// No PG_exception_stack in WalReceiverMain (walreceiver.c): errstart
+// promotes every ERROR to FATAL (elog.c:375-380).
+fn fatal_exit_report(e: &PgError) {
+    elog::emit_unhandled_error_report(e);
+}
+
 fn fatal_exit(e: &PgError) -> ! {
-    elog::emit_error_report_for(e);
+    fatal_exit_report(e);
     ipc::proc_exit(1, g::MyProcPid())
 }
 
@@ -232,8 +238,10 @@ fn wal_receiver_main_inner() -> PgResult<()> {
     let tmp_conninfo = with_conn(|c| c.display_conninfo());
     let (sender_host, sender_port) = with_conn(|c| c.senderinfo());
     with_walrcv(|d| {
-        d.conninfo = tmp_conninfo;
-        d.sender_host = sender_host;
+        // walreceiver.c:293/297: strlcpy into conninfo[MAXCONNINFO] and
+        // sender_host[NI_MAXHOST].
+        d.conninfo = walreceiverfuncs::strlcpy_trunc(&tmp_conninfo, walreceiverfuncs::MAXCONNINFO);
+        d.sender_host = walreceiverfuncs::strlcpy_trunc(&sender_host, walreceiverfuncs::NI_MAXHOST);
         d.sender_port = sender_port;
         d.ready_to_display = true;
     });
@@ -1223,6 +1231,25 @@ mod tests {
         close_recv_file();
         // SAFETY: probing a descriptor number; EBADF is the expected outcome.
         assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, -1, "WAL segment still open after WalRcvDie");
+    }
+
+    // walreceiver.c: the process has no sigsetjmp handler, so an escaping
+    // ereport(ERROR) -- 'terminating walreceiver due to timeout' and the
+    // rest -- is logged as FATAL, and a rendered conninfo longer than
+    // MAXCONNINFO is cut like strlcpy did (walreceiver.c:293).
+    #[test]
+    fn escaping_error_is_reported_fatal_and_conninfo_is_bounded() {
+        setup();
+        let e = PgError::error("terminating walreceiver due to timeout");
+        let (_, captured) = with_captured(|| fatal_exit_report(&e));
+        let (level, _, message) = captured.last().cloned().expect("report emitted");
+        assert_eq!(level, types_error::FATAL);
+        assert_eq!(message, "terminating walreceiver due to timeout");
+        let long = "x".repeat(walreceiverfuncs::MAXCONNINFO + 5);
+        assert_eq!(
+            walreceiverfuncs::strlcpy_trunc(&long, walreceiverfuncs::MAXCONNINFO).len(),
+            walreceiverfuncs::MAXCONNINFO - 1
+        );
     }
 
     fn arm_segment(recv_file: i32, segno: XLogSegNo) {

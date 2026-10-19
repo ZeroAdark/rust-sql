@@ -260,12 +260,14 @@ fn tid_is_dead(dead_items: &[ItemPointerData], tid: &ItemPointerData) -> bool {
         .is_ok()
 }
 
+// hash.c:722 calls vacuum_delay_point unconditionally, so an autovacuum
+// worker's pending config reload can arm cost delays mid-scan; unit rigs
+// without seams_init keep the bare interrupt check.
 fn vacuum_delay_point() -> PgResult<()> {
-    check_for_interrupts()?;
-    if init_small::globals::VacuumCostActive() {
-        vacuum_seams::vacuum_delay_point::call(false)?;
+    if vacuum_seams::vacuum_delay_point::is_installed() {
+        return vacuum_seams::vacuum_delay_point::call(false);
     }
-    Ok(())
+    check_for_interrupts()
 }
 
 /// hashbulkdelete.

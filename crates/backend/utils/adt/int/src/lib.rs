@@ -8,10 +8,9 @@ pub mod series;
 mod tests;
 
 use alloc::boxed::Box;
-use alloc::format;
 
 use ::mcx::{Mcx, PgVec};
-use ::numutils::{pg_itoa, pg_ltoa, pg_strtoint16_safe, pg_strtoint32_safe};
+use ::numutils::{pg_itoa, pg_ltoa, pg_strtoint16_safe_bytes, pg_strtoint32_safe_bytes};
 use ::types_core::{Oid, INT2OID};
 use ::types_error::{
     ereturn, PgError, PgResult, SoftErrorContext, ERRCODE_DATATYPE_MISMATCH,
@@ -121,8 +120,8 @@ fn invalid_preceding_following() -> Box<PgError> {
     )
 }
 
-pub fn int2in(num: &str, escontext: Option<&mut SoftErrorContext>) -> PgResult<i16> {
-    pg_strtoint16_safe(num, escontext)
+pub fn int2in(num: impl AsRef<[u8]>, escontext: Option<&mut SoftErrorContext>) -> PgResult<i16> {
+    pg_strtoint16_safe_bytes(num.as_ref(), escontext)
 }
 
 // Out cores encode into the caller's buffer (AGENTS rule 8: no intermediate
@@ -260,11 +259,11 @@ fn soft_or_hard<T>(escontext: Option<&mut SoftErrorContext>, err: PgError) -> Pg
 
 pub fn int2vectorin<'mcx>(
     mcx: Mcx<'mcx>,
-    input: &str,
+    input: impl AsRef<[u8]>,
     mut escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<Option<PgVec<'mcx, u8>>> {
     let mut ints: PgVec<'mcx, i16> = PgVec::new_in(mcx);
-    let mut rest = input.as_bytes();
+    let mut rest = input.as_ref();
     loop {
         // C isspace() in the C locale, not Rust is_ascii_whitespace(): the C
         // set includes VT (0x0b), which Rust's omits (int_diff divergence,
@@ -279,40 +278,27 @@ pub fn int2vectorin<'mcx>(
             break;
         }
 
-        let shown = || alloc::string::String::from_utf8_lossy(rest).into_owned();
         let (l, consumed) = strtol_base10(rest);
         if consumed == 0 {
             return soft_or_hard(
                 escontext.take(),
-                PgError::error(format!(
-                    "invalid input syntax for type {}: \"{}\"",
-                    "smallint",
-                    shown()
-                ))
-                .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION),
+                PgError::error_bytes("invalid input syntax for type smallint: \"", rest, "\"")
+                    .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION),
             );
         }
         if l < SHRT_MIN as i64 || l > SHRT_MAX as i64 {
             return soft_or_hard(
                 escontext.take(),
-                PgError::error(format!(
-                    "value \"{}\" is out of range for type {}",
-                    shown(),
-                    "smallint"
-                ))
-                .with_sqlstate(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                PgError::error_bytes("value \"", rest, "\" is out of range for type smallint")
+                    .with_sqlstate(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
             );
         }
         if let Some(&c) = rest.get(consumed) {
             if c != b' ' {
                 return soft_or_hard(
                     escontext.take(),
-                    PgError::error(format!(
-                        "invalid input syntax for type {}: \"{}\"",
-                        "smallint",
-                        shown()
-                    ))
-                    .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION),
+                    PgError::error_bytes("invalid input syntax for type smallint: \"", rest, "\"")
+                        .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION),
                 );
             }
         }
@@ -362,8 +348,8 @@ pub fn int2vectorout<'mcx>(
     Ok(out)
 }
 
-pub fn int4in(num: &str, escontext: Option<&mut SoftErrorContext>) -> PgResult<i32> {
-    pg_strtoint32_safe(num, escontext)
+pub fn int4in(num: impl AsRef<[u8]>, escontext: Option<&mut SoftErrorContext>) -> PgResult<i32> {
+    pg_strtoint32_safe_bytes(num.as_ref(), escontext)
 }
 
 #[inline]

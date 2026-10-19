@@ -1,21 +1,21 @@
--- Differential fixture for the 2026-09-13 workers-io bug batch 05
+-- Differential fixture for the 2026-09-13 regression audit bug batch 05
 -- (DDL error ordering, DROP CAST / DROP TABLE pg_temp messages, output
 -- column names, object identities, message clipping, macaddr input, error
 -- message client-encoding conversion, plpgsql record flattening, support
 -- functions over FuncExpr, opclass support functions returning NULL,
 -- hash_array arity, case-insensitive regex ranges, hstore versions). Run via
 -- scripts/bugs-batch05-e2e.sh against the frozen expected captured from C
--- PostgreSQL 18.6. This file is UTF-8 (P088 uses U+01C4..U+01C6).
+-- PostgreSQL 18.6. This file is UTF-8 (XADK uses U+01C4..U+01C6).
 \set VERBOSITY verbose
 \pset pager off
 
--- P024: DROP TABLE pg_temp.<missing>
+-- XAAY: DROP TABLE pg_temp.<missing>
 CREATE TEMP TABLE b05_warm (k int);
 DROP TABLE pg_temp.b05_absent;
 DROP TABLE IF EXISTS pg_temp.b05_absent;
 DROP TABLE b05_warm;
 
--- P025: partition key check order
+-- XAAZ: partition key check order
 CREATE TABLE b05_many (k bigint PRIMARY KEY, v bigint,
   x1 integer, x2 integer, x3 integer, x4 integer, x5 integer, x6 integer, x7 integer, x8 integer,
   x9 integer, x10 integer, x11 integer, x12 integer, x13 integer, x14 integer, x15 integer, x16 integer,
@@ -28,18 +28,18 @@ CREATE TABLE b05_c1 (k bigint PRIMARY KEY, v bigint) PARTITION BY LIST (k, v);
 CREATE TABLE b05_c2 (k bigint PRIMARY KEY, v bigint) PARTITION BY RANGE (nosuch, (bogus + 1));
 CREATE TABLE b05_c3 (k bigint PRIMARY KEY, v bigint) PARTITION BY RANGE (ctid);
 
--- P031: CREATE FUNCTION SET before COST / ROWS
+-- XABF: CREATE FUNCTION SET before COST / ROWS
 CREATE FUNCTION b05_f(a bigint) RETURNS bigint SET nosuch = 1 COST 0 LANGUAGE sql AS 'SELECT a * 2';
 CREATE FUNCTION b05_g(a bigint) RETURNS SETOF bigint SET nosuch = 1 ROWS 0 LANGUAGE sql AS 'SELECT a';
 CREATE FUNCTION b05_h2(a bigint) RETURNS bigint COST 0 LANGUAGE sql AS 'SELECT a';
 
--- P039: DROP CAST on a shell type
+-- XABN: DROP CAST on a shell type
 CREATE TYPE b05_sh;
 DROP CAST IF EXISTS (b05_sh AS int4);
 DROP CAST (b05_sh AS int4);
 DROP TYPE b05_sh;
 
--- P042: column name of a cast scalar sub-select of alias.*
+-- XABQ: column name of a cast scalar sub-select of alias.*
 CREATE TABLE b05_t (k bigint PRIMARY KEY, v bigint);
 INSERT INTO b05_t VALUES (1, 2), (2, 4);
 SELECT (SELECT s.* FROM (SELECT k FROM b05_t) s LIMIT 1)::text FROM b05_t;
@@ -47,7 +47,7 @@ SELECT ((SELECT s.* FROM (SELECT k::text AS kt FROM b05_t) s LIMIT 1) COLLATE "C
 SELECT (SELECT s.* FROM (SELECT k FROM b05_t) s LIMIT 1) FROM b05_t;
 DROP TABLE b05_t;
 
--- P047: identity of a pg_temp function / operator
+-- XABV: identity of a pg_temp function / operator
 CREATE FUNCTION pg_temp.b05_tf(a bigint) RETURNS text LANGUAGE sql AS 'SELECT a::text';
 SELECT regexp_replace(identity, '^pg_temp_\d+', 'pg_temp_N') FROM pg_identify_object('pg_proc'::regclass, 'pg_temp.b05_tf(bigint)'::regprocedure, 0);
 SELECT object_names FROM pg_identify_object_as_address('pg_proc'::regclass, 'pg_temp.b05_tf(bigint)'::regprocedure, 0);
@@ -55,21 +55,21 @@ CREATE OPERATOR pg_temp.~#~ (FUNCTION = pg_temp.b05_tf, RIGHTARG = bigint);
 SELECT regexp_replace(identity, '^pg_temp_\d+', 'pg_temp_N') FROM pg_operator o, pg_identify_object('pg_operator'::regclass, o.oid, 0) WHERE o.oprname = '~#~';
 DROP OPERATOR pg_temp.~#~ (NONE, bigint); DROP FUNCTION pg_temp.b05_tf(bigint);
 
--- P052: over-long unit / zone names clip at a character boundary
+-- XACA: over-long unit / zone names clip at a character boundary
 SELECT date_part(repeat('a', 62) || 'é', '2024-01-01'::timestamp);
 SELECT '2024-01-01'::timestamp AT TIME ZONE (repeat('a', 254) || 'é');
 
--- P054: TypeName-shaped dictionary option keeps its []
+-- XACC: TypeName-shaped dictionary option keeps its []
 CREATE TEXT SEARCH DICTIONARY b05_d (TEMPLATE = simple, stopwords = int4[]);
 
--- P055: macaddr octet overflow follows sscanf %x
+-- XACD: macaddr octet overflow follows sscanf %x
 SELECT '10000000000000000:00:00:00:00:00'::macaddr;
 SELECT '1ffffffff:00:00:00:00:00'::macaddr;
 SELECT '100000000:00:00:00:00:00'::macaddr;
 SELECT '-fffffffe:00:00:00:00:00'::macaddr;
 SELECT '08:00:2b:01:02:03'::macaddr;
 
--- P061: error and notice texts convert to the client encoding
+-- XACJ: error and notice texts convert to the client encoding
 SET client_encoding = 'LATIN1';
 SELECT chr(937)::int;
 DO $$ BEGIN RAISE EXCEPTION '%', chr(937); END $$;
@@ -79,7 +79,7 @@ SELECT chr(937);
 RESET client_encoding;
 SELECT chr(937)::int;
 
--- P070: a rowtype variable flattens its external fields
+-- XACS: a rowtype variable flattens its external fields
 CREATE TABLE b05_rt (id int, big text);
 ALTER TABLE b05_rt ALTER COLUMN big SET STORAGE EXTERNAL;
 INSERT INTO b05_rt SELECT 1, repeat('x', 10000);
@@ -93,7 +93,7 @@ SELECT b05_keep_fn(); DELETE FROM b05_rt; VACUUM b05_rt;
 SELECT length((r).big) FROM b05_keep;
 DROP TABLE b05_keep, b05_rt; DROP FUNCTION b05_size(), b05_keep_fn();
 
--- P076: network_sub()/network_sup() over an indexed inet column
+-- XACY: network_sub()/network_sup() over an indexed inet column
 CREATE TABLE b05_net (k bigint PRIMARY KEY, c1 inet);
 INSERT INTO b05_net VALUES (1, '10.1.2.3'), (2, '10.1.0.0/16'), (3, '192.168.0.1');
 CREATE INDEX b05_net_c1 ON b05_net (c1);
@@ -102,7 +102,7 @@ SELECT * FROM b05_net WHERE network_sup(inet '10.0.0.0/8', c1) ORDER BY k;
 SELECT * FROM b05_net WHERE c1 << inet '10.0.0.0/8' ORDER BY k;
 DROP TABLE b05_net;
 
--- P083 / P084: opclass support functions returning NULL; hash_array arity
+-- XADF / XADG: opclass support functions returning NULL; hash_array arity
 CREATE TYPE b05_en AS ENUM ('a', 'b', 'c');
 CREATE FUNCTION b05_nulleq(b05_en, b05_en) RETURNS boolean LANGUAGE sql AS 'SELECT NULL::boolean';
 CREATE FUNCTION b05_nullcmp(b05_en, b05_en) RETURNS integer LANGUAGE sql AS 'SELECT NULL::integer';
@@ -131,13 +131,13 @@ SELECT hash_array(ARRAY['a'::b05_en]);
 SELECT hash_array_extended(ARRAY['a'::b05_en], 0);
 DROP TYPE b05_cn; DROP TYPE b05_en CASCADE;
 
--- P088: case-insensitive bracket range over a titlecase digraph
+-- XADK: case-insensitive bracket range over a titlecase digraph
 SELECT ('ǅ' COLLATE pg_c_utf8 ~* '[ǅ-ǅ]')::text;
 SELECT ('Ǆ' COLLATE pg_c_utf8 ~* '[ǅ-ǅ]')::text;
 SELECT regexp_replace('ǅ' COLLATE pg_c_utf8, '[ǅ-ǅ]', 'x', 'i');
 SELECT ('ǅ' ~* '[ǅ-ǅ]')::text;
 
--- P053: older hstore versions and update paths
+-- XACB: older hstore versions and update paths
 SELECT count(*) FROM pg_available_extension_versions WHERE name = 'hstore';
 SELECT count(*) FROM pg_extension_update_paths('hstore');
 SELECT count(*) FROM pg_extension_update_paths('citext');

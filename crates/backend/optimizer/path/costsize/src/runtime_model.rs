@@ -12,16 +12,16 @@
 //! bootstrap_matrix_matches_tsv precedent). No naked numbers: every value
 //! here carries measurement sha + date + jobs in the TSV.
 //!
-//! CALIBRATION STATUS — WITNESSED v2 GRID (GL-COST-3, 2026-07-21): fit
+//! CALIBRATION STATUS — WITNESSED v2 GRID (regression, 2026-07-21): fit
 //! from the M5ROWFLIP2 rows of scripts/m5-rowflip-measure-v2.sh (per-leg
 //! engine pins, serial/legacy NEGATIVE witnesses, legacy Workers-Launched
 //! witness, runtime dop-pinned engagement, fast-profile server) — jobs
-//! pgrust-fast-tests-c517fec04e-…{-66c9,-0f09,-3ad6,-2686,-47ad,-58be,
+//! pgrust-tests-c517fec04e-…{-66c9,-0f09,-3ad6,-2686,-47ad,-58be,
 //! -17f3,-11d5,-683a} @ night/cost-step1 c517fec04, replacing the
 //! contaminated v1 record (hj-ladder-v2-and-seat-letter.md) wholesale.
 //! The v2 record contradicts three shipped rectangles at witnessed cells
 //! (see the disagreement pin below): those cells are the flip-gate
-//! candidates, each needing its GL-COST-<class> letter before any
+//! candidates, each needing its regression-<class> letter before any
 //! PGRUST_M5_COST_ROUTE flip. Heap-scan classes engaged at dop<DOP in
 //! some cells (runtime witness dopN-MISMATCH — a scan-program item);
 //! their ratios are honest "what suppression delivers" wall ratios.
@@ -56,15 +56,15 @@
 //!   unset             DEFAULT since t36 flips2 = the THREE WITNESSED rot
 //!                     cells decide by curve:
 //!                     `CbPlainAggFold,CbGroupedAggTextKey,CbHashJoinPlainAgg`
-//!                     (GL-COST-SCANFOLD-1 / -TEXTKEY-1 / -HASHJOIN-1, all
-//!                     FLIP-RECOMMENDED — notes/gl-cost-class-flip-letters.md,
+//!                     (regression / -TEXTKEY-1 / -HASHJOIN-1, all
+//!                     FLIP-RECOMMENDED by measured acceptance results,
 //!                     2026-07-21: flip A/B jobs -4ff1/-296e/-0325 @
 //!                     3f50bea20, every cell in the letters' expected
 //!                     direction, hashjoin 1M@dop4 57->43ms loss avoided +
 //!                     2.5M@dop16 forgone win recovered, agree-controls
 //!                     flat; economics = the witnessed v2 ladder). The
 //!                     multibuild/groupsink hashjoin riders were UNWIRED
-//!                     from the PlainAgg curve at GL-COST-2: their own
+//!                     from the PlainAgg curve at regression: their own
 //!                     witnessed grids refuted the reuse (3.0-6.4x
 //!                     rt/legacy) — guarded off at every size until an own
 //!                     witnessed curve (m5_suppress::class_guard, TSV
@@ -94,7 +94,7 @@ pub enum RuntimeClass {
     CbDistinctIntKeys,
     CbTopnBoundedIntKeys,
     CbHashJoinPlainAgg,
-    /// GL-MBSEAT-1: the grouped-join rider's OWN curve, fitted on the
+    /// regression: the grouped-join rider's OWN curve, fitted on the
     /// SEATED arm (MBSHARED + MBSEAT default-ON world) — the planner
     /// wiring mirrors both kills and falls back to the guarded-off
     /// rectangle when either is dark.
@@ -187,7 +187,7 @@ pub fn class_model(class: RuntimeClass) -> ClassModel {
 /// wave (30k..600k cells) extends this floor downward when it lands.
 pub const N_MIN_SERIAL: f64 = 100_000.0;
 
-/// GL-TOPNHEAP-1: the bounded top-N car's routed-admission k band (the
+/// regression: the bounded top-N car's routed-admission k band (the
 /// LIMIT bound axis the (N, dop) vocabulary never carried — the fit
 /// vehicle's K_BAND block, scripts/runtime-cost-fit.py). The class's curve
 /// is fit on the k=1000 SKIP-DEAD plane, which upper-bounds the car for
@@ -217,7 +217,7 @@ pub fn topn_car_k_band(k: f64) -> bool {
 /// verdict ABSTAINS (fails toward the incumbent) — the F1 floor keeps
 /// owning grouped-topn's small-N routing. Neither class is in the decide
 /// list, so this exclusion changes no live route.
-/// CbHashJoinGroupedAgg boarded with GL-MBSEAT-1 AFTER the R1 serial wave
+/// CbHashJoinGroupedAgg boarded with regression AFTER the R1 serial wave
 /// (no witnessed serial cell — its ClassModel carries ser placeholders);
 /// the regime verdict abstains (fails toward the incumbent) pending its
 /// R1B refit row.
@@ -265,7 +265,7 @@ pub fn cost_route_verdict_regime(
     }
 }
 
-/// `PGRUST_M5_THREEWAY` — the GL-ELECTION-22 finding-2 gating fix's kill
+/// `PGRUST_M5_THREEWAY` — the regression finding-2 gating fix's kill
 /// (t35 flipped-kill idiom): DEFAULT ON = the decide-list consults the
 /// THREE-WAY argmin (`cost_route_verdict_threeway`); `0|off` restores
 /// the regime-gated two-way (`cost_route_verdict_regime`) for one train.
@@ -279,7 +279,7 @@ pub fn threeway_enabled() -> bool {
     })
 }
 
-/// THE GL-ELECTION-22 FINDING-2 FIX: the three-way verdict. The regime
+/// THE regression FINDING-2 FIX: the three-way verdict. The regime
 /// split only consulted the serial curve when the arm did NOT admit — so
 /// at the unqualed plain-fold census cells (1e8 x dop16) the two-way
 /// priced Gather at rt/legacy ~1.004 while the SAME model's serial fit
@@ -409,17 +409,17 @@ pub enum CostRouteMode {
 }
 
 /// The default decide-list: the t36 flips2 witnessed rot cells
-/// (notes/gl-cost-class-flip-letters.md — all FLIP-RECOMMENDED) plus the
-/// GL-MBSEAT-1 seated grouped-join lift (notes/gl-mbseat-1-letter.md:
+/// (all FLIP-RECOMMENDED by measured acceptance results) plus the
+/// regression seated grouped-join lift (
 /// its own witnessed curve on the MBSHARED+MBSEAT arm; the planner
 /// wiring un-curves the class when either knob is killed, so the decide
 /// entry is inert in any kill posture). Kept as a named constant so the
 /// default and the letters stay reviewably tied.
-/// GL-TOPNHEAP-1 (2026-07-21): CbTopnBoundedIntKeys joins on the car's
+/// regression (2026-07-21): CbTopnBoundedIntKeys joins on the car's
 /// five-posture record — the planner wiring gates its decide entry on the
 /// PGRUST_RUNTIME_TOPN_HEAP spelling AND the TOPN_CAR_K_* band, so the
 /// entry is inert when the car is killed or the shape is out of band
-/// (keep Gather = the GL-COST-TOPN-1 guard-off posture, byte-exactly).
+/// (keep Gather = the regression guard-off posture, byte-exactly).
 const DEFAULT_DECIDE_CLASSES: [&str; 5] = [
     "CbPlainAggFold",
     "CbGroupedAggTextKey",
@@ -431,7 +431,7 @@ const DEFAULT_DECIDE_CLASSES: [&str; 5] = [
 pub fn cost_route_mode() -> &'static CostRouteMode {
     static MODE: std::sync::OnceLock<CostRouteMode> = std::sync::OnceLock::new();
     MODE.get_or_init(|| match std::env::var("PGRUST_M5_COST_ROUTE").as_deref() {
-        // DEFAULT since t36 flips2 (GL-COST class flip letters): the three
+        // DEFAULT since t36 flips2 (regression class flip letters): the three
         // witnessed rot cells decide by curve; "shadow" is the kill.
         Err(_) | Ok("") => CostRouteMode::DecideClasses(DEFAULT_DECIDE_CLASSES.to_vec()),
         Ok("shadow") => CostRouteMode::Shadow,
@@ -516,7 +516,7 @@ mod tests {
         (RuntimeClass::CbDistinctIntKeys, 5e6, 8, 1.056),
         (RuntimeClass::CbDistinctIntKeys, 5e6, 16, 0.805),
         (RuntimeClass::CbDistinctIntKeys, 2.5e6, 16, 0.769),
-        // GL-TOPNHEAP-1 re-refit (supersedes the L6/GL-SORTECON-3 cells):
+        // regression re-refit (supersedes the L6/regression cells):
         // under the flipped PGRUST_RUNTIME_TOPN_HEAP the routed arm is the
         // direct morsel-native CAR — five-posture vehicle
         // scripts/sortecon-topn-ladder.sh (SORTECON5 heap legs) @
@@ -545,7 +545,7 @@ mod tests {
         (RuntimeClass::CbTopnBoundedIntKeys, 1e7, 4, 0.857),
         (RuntimeClass::CbTopnBoundedIntKeys, 1e7, 8, 0.884),
         (RuntimeClass::CbTopnBoundedIntKeys, 1e7, 16, 0.922),
-        // GL-MBSEAT-1 seated grid (jobs pgrust-fast-tests-39d74f1439-*,
+        // regression seated grid (jobs pgrust-tests-39d74f1439-*,
         // @ night/mbseat 39d74f143; every leg dop-pinned CLEAN; the arm
         // of record is MBSHARED+MBSEAT — see the class's enum doc).
         (RuntimeClass::CbHashJoinGroupedAgg, 1e6, 4, 1.200),
@@ -579,7 +579,7 @@ mod tests {
             // arm refuses (suppress-then-refuse).
             RuntimeClass::CbGroupedAggTopN => rows >= 500_000.0,
             RuntimeClass::CbDistinctIntKeys => dop >= 12,
-            // GL-COST-TOPN-1 guard-off (the GL-SORTECON-3 min_dop=4
+            // regression guard-off (the regression min_dop=4
             // re-flip retired): zero best-of-four wins on the four-posture
             // grid — the rectangle never suppresses.
             RuntimeClass::CbTopnBoundedIntKeys => false,
@@ -591,7 +591,7 @@ mod tests {
                     && rows <= 4_000_000.0
                     && (dop >= 12 || rows <= 2_000_000.0)
             }
-            // GL-MBSEAT-1: the shipped FloorGuard for the rider is
+            // regression: the shipped FloorGuard for the rider is
             // max_rows=0 (never suppress) — the lift lives ONLY in the
             // decide-listed curve; shadow/kill postures keep Gather.
             RuntimeClass::CbHashJoinGroupedAgg => false,
@@ -603,7 +603,7 @@ mod tests {
     /// Classes whose WITNESSED v2 cells were measured on an arm that has
     /// since CHANGED ECONOMICS (the design §3 arm-change trigger, fired but
     /// not yet honored with a refit ladder). EMPTY since the L6 refit
-    /// (GL-SORTECON-3 follow-through, 2026-07-21): CbTopnBoundedIntKeys was
+    /// (regression follow-through, 2026-07-21): CbTopnBoundedIntKeys was
     /// the only member — its post-COLSTAGE four-posture grid landed
     /// (scripts/sortecon-topn-ladder.sh @ 27db94812) and the curve refit
     /// from the k=1000 rt/GM cells. The mechanism stays: an arm rework that
@@ -652,7 +652,7 @@ mod tests {
     /// 0.923) — was RETIRED by the S1 band collapse (soak adjudication
     /// round 1, 2026-07-21: re-confirmed in vivo 2.06x, whereupon the
     /// rectangle was re-derived to mirror the witnessed curve verdicts).
-    /// These are the flip-gate candidates (GL-COST-<class> letters). Any
+    /// These are the flip-gate candidates (regression-<class> letters). Any
     /// new disagreement is a red test — it must arrive with a witnessed
     /// cell, not by drift. (Parity-band cells exempt.)
     #[test]
@@ -674,10 +674,10 @@ mod tests {
                 (RuntimeClass::CbPlainAggFold, 1_000_000, 4),
                 (RuntimeClass::CbGroupedAggTextKey, 1_000_000, 4),
                 (RuntimeClass::CbGroupedAggTextKey, 2_500_000, 4),
-                // GL-TOPNHEAP-1: the CAR's witnessed win cells (the
+                // regression: the CAR's witnessed win cells (the
                 // re-refit curve suppresses at every out-of-parity k=1000
                 // cell; the 2.5M@8 cell at 0.971 is band-exempt) vs the
-                // GL-COST-TOPN-1 guard-off rectangle (never suppresses).
+                // regression guard-off rectangle (never suppresses).
                 // RESOLVED BY THE DECIDE LIST: the class decides by curve
                 // at default, gated in the planner on the
                 // PGRUST_RUNTIME_TOPN_HEAP spelling + TOPN_CAR_K_* band —
@@ -698,7 +698,7 @@ mod tests {
                 (RuntimeClass::CbTopnBoundedIntKeys, 10_000_000, 4),
                 (RuntimeClass::CbTopnBoundedIntKeys, 10_000_000, 8),
                 (RuntimeClass::CbTopnBoundedIntKeys, 10_000_000, 16),
-                // GL-MBSEAT-1: the lift's clear-win cells (outside the
+                // regression: the lift's clear-win cells (outside the
                 // ±5% parity band; the 2.5M@16 win at 0.972 is band-exempt)
                 // — the rider's shipped floor is max_rows=0 (never
                 // suppress), so every curve-suppressed win cell disagrees
@@ -737,7 +737,7 @@ mod tests {
         // dop-axis crossover in the witnessed bracket; the 5M@16 cell —
         // measured 1.024, inside the ±5% parity band — moved to
         // SUPPRESSED-AT-PARITY (the M5-5 acceptance bar's allowed
-        // outcome; GL-SERIALTERM-R2-HJ-1 letter).
+        // outcome; regression letter).
         let d = root_d(RuntimeClass::CbHashJoinPlainAgg, 2.5e6).unwrap();
         assert!((9..=16).contains(&d), "CbHashJoinPlainAgg D*(2.5M)={d}");
         let v = cost_route_verdict(RuntimeClass::CbHashJoinPlainAgg, 5e6, 16);
@@ -757,7 +757,7 @@ mod tests {
                 );
             }
         }
-        // topn (GL-TOPNHEAP-1): the CAR's re-refit curve SUPPRESSES at
+        // topn (regression): the CAR's re-refit curve SUPPRESSES at
         // every witnessed k=1000 cell (measured car/GM 0.854-0.971, all
         // 16 cells; predicted 0.876-0.937) — suppression IS the witnessed
         // direction under the flipped arm. The k band and the kill are the
@@ -849,7 +849,7 @@ mod tests {
     /// witnessed-v2 — an unwitnessed constant can never enter the fitted
     /// block by drift; (3) the unwitnessed-reuse set is EXACTLY the three
     /// named reuse rows (their own ladder cells are owed — specs in
-    /// notes/runtime-cost-ladder-specs.md, owners GL-COST-2/GL-AGGPOLY-1);
+    /// notes/runtime-cost-ladder-specs.md, owners regression/regression);
     /// (4) no unwitnessed-reuse class name is in the default decide list
     /// (the riders decide only THROUGH their host curve's flip letters,
     /// matching the shipped guard reuse — an own-curve flip needs its own
@@ -885,7 +885,7 @@ mod tests {
             if let Some(&rc) = RuntimeClass::ALL.iter().find(|c| c.name() == class) {
                 if matches!(term, "c_engage" | "w_row" | "l_setup" | "l_cap" | "n_min_fit") {
                     let want = if superseded(rc) {
-                        // The arm changed under the fit (GL-SORTECON-3);
+                        // The arm changed under the fit (regression);
                         // cells still witnessed, no longer current — L6
                         // owns the refit.
                         "witnessed-v2-superseded"
@@ -900,7 +900,7 @@ mod tests {
                 // The R1 serial-regime terms are witnessed-v2 for EVERY
                 // class the R1 wave fitted — the L6 supersession reworked
                 // the ARM, not the serial lane the ser legs measured.
-                // CARVE (GL-MBSEAT-1 boarding): CbHashJoinGroupedAgg
+                // CARVE (regression boarding): CbHashJoinGroupedAgg
                 // boarded AFTER the R1 wave with no witnessed serial cell;
                 // its ser rows are abstain placeholders (SERIAL_FIT_UNUSABLE
                 // fails toward the incumbent) carried as unwitnessed-debt
@@ -931,7 +931,7 @@ mod tests {
         );
         // witnessed-refutes-reuse is ACTED-ON state, not a resting place:
         // the L1/L2 refutation (3.0-6.4x rt/legacy grids @ d10db8ef5e) was
-        // resolved by the GL-COST-2 unwire (the riders' rectangle_max_rows=0
+        // resolved by the regression unwire (the riders' rectangle_max_rows=0
         // rows) — so the refuted census must be EMPTY. A new refuted row is
         // legitimate only while its unwire letter is in flight.
         assert_eq!(
@@ -954,7 +954,7 @@ mod tests {
             debt,
             vec![
                 ("CbHashJoinPlainAgg".to_string(), "seat_overlap_cell".to_string()),
-                // GL-MBSEAT-1 boarding: the seated class's ser placeholders
+                // regression boarding: the seated class's ser placeholders
                 // (abstain via SERIAL_FIT_UNUSABLE) — retired by the R1B
                 // refit row, flipping WITH the TSV rows, never by drift.
                 ("CbHashJoinGroupedAgg".to_string(), "ser_setup".to_string()),
@@ -974,7 +974,7 @@ mod tests {
     /// Witnessed: the L6 four-posture grid @ 27db94812 (rt/GM rising
     /// 6.80->9.77 at 1M across dop 4->16).
     const LEGACY_OUTSCALES_ARM: &[RuntimeClass] = &[RuntimeClass::CbTopnBoundedIntKeys];
-    // GL-MBSEAT-1: the seated grouped-join class's legacy reference
+    // regression: the seated grouped-join class's legacy reference
     // genuinely scaled to w16 in its witnessed grid (gather+w16 at 5M),
     // so its fit sits AT the l_cap bound like the topn class — but its
     // RATIO shape is the normal one (improves dop4 -> dop16), so it is
@@ -1149,7 +1149,7 @@ mod tests {
         }
     }
 
-    /// GL-ELECTION-22 FINDING-2 PINS: the three-way argmin consults the
+    /// regression FINDING-2 PINS: the three-way argmin consults the
     /// serial curve even when the arm admits.
     /// (1) THE MOTIVATING CENSUS CELL — the unqualed plain-fold family at
     ///     1e8 x dop16 (six census queries, one mechanism): the two-way
@@ -1213,7 +1213,7 @@ mod tests {
                 // class rides THAT vocabulary, never this curve.
                 // (Set re-derived TWICE: at the ser-term RE-EMIT the
                 // 2.5M@2 cell left — sr 1.059 > 1 keeps Gather; at the
-                // GL-TOPNHEAP-1 k-banded refit (t43 composition) the six
+                // regression k-banded refit (t43 composition) the six
                 // remaining low-dop topn cells left — the refit engaged
                 // curve (c_engage 305844.2, w_row 0.8711) already
                 // suppresses them TWO-WAY, so the serial term no longer
@@ -1253,7 +1253,7 @@ mod tests {
     }
 
     /// Mode knob posture of record at t36 flips2: unset = the THREE
-    /// witnessed rot cells decide by curve (the GL-COST class flip
+    /// witnessed rot cells decide by curve (the regression class flip
     /// letters' exact list — pinned name-for-name against RuntimeClass so
     /// a rename can never silently un-flip a cell); every other
     /// curve-modeled class stays shadow; `shadow` is the kill.

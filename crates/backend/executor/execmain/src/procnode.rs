@@ -31,6 +31,9 @@ pub struct PlanStateBase<'mcx> {
 pub struct InstrumentedNode<'mcx> {
     pub inner: PlanStateNode<'mcx>,
     pub instr_idx: u32,
+    /// plan_ids of the node's initPlan SubPlans (the cells C's
+    /// planstate_tree_walker reaches through `initPlan`).
+    pub init_plan_ids: ::mcx::PgVec<'mcx, u32>,
 }
 
 pub enum PlanStateNode<'mcx> {
@@ -152,6 +155,11 @@ pub struct SetOpNode<'mcx> {
     pub state: ::nodesetop::SetOpState<'mcx>,
     pub outer: PlanStateNode<'mcx>,
     pub inner: PlanStateNode<'mcx>,
+    // C outerPlan/innerPlan->chgParam: a child whose params changed is
+    // rescanned lazily at its next pull (nodeSetOp.c:742-745), so an inner
+    // arm SetOp never pulls stays untouched.
+    pub outer_chg: ::types_nodes::bitmapset::Bitmapset<'mcx>,
+    pub inner_chg: ::types_nodes::bitmapset::Bitmapset<'mcx>,
 }
 
 // The subplan lives here (nodesort/nodeagg precedent; fetch closure).
@@ -811,13 +819,14 @@ pub fn exec_init_node<'mcx>(
                 Ok({
                     let mcx = estate.es_query_cxt;
                     let bhs_plan = node.as_bitmap_heap_scan().unwrap();
-                    let scan = ::nodebitmapheapscan::exec_init_bitmap_heap_scan(
-                        mcx, bhs_plan, estate, eflags,
-                    )?;
+                    let rel = estate.exec_open_scan_relation(bhs_plan.scan.scanrelid, eflags)?;
                     let bitmapqual = exec_init_node(bhs_plan.scan.plan.lefttree, estate, eflags)?
                 .unwrap_or_else(|| {
                     panic!("ExecInitBitmapHeapScan: BitmapHeapScan without a bitmapqual subplan")
                 });
+                    let scan = ::nodebitmapheapscan::exec_init_bitmap_heap_scan_rel(
+                        mcx, bhs_plan, estate, rel,
+                    )?;
                     PlanStateNode::BitmapHeapScan(::mcx::alloc_in(
                         mcx,
                         BitmapHeapPlanState { scan, bitmapqual },
@@ -1028,16 +1037,16 @@ pub fn exec_init_node<'mcx>(
                     let params = estate.param_bind();
                     let (qual, proj) =
                         ::executils::with_subplan_compile_env(estate, |env| -> PgResult<_> {
-                            let qual = ::execexpr::exec_init_qual_subplans(
-                                mcx,
-                                &g_plan.plan.qual,
-                                params,
-                                env,
-                            )?;
                             let proj = ::execexpr::exec_build_projection_info_subplans(
                                 mcx,
                                 &g_plan.plan.targetlist,
                                 None,
+                                params,
+                                env,
+                            )?;
+                            let qual = ::execexpr::exec_init_qual_subplans(
+                                mcx,
+                                &g_plan.plan.qual,
                                 params,
                                 env,
                             )?;
@@ -1107,6 +1116,9 @@ pub fn exec_init_node<'mcx>(
                         recheck: None,
                         result_rti: state.lr_arowMarks.first().map_or(0, |a| a.rti),
                         epq_param: lr_plan.epqParam,
+                        subplanstates: ::mcx::PgVec::new_in(estate.es_query_cxt),
+                        subplan_chg: ::mcx::PgVec::new_in(estate.es_query_cxt),
+                        fresh_subplanstates: ::mcx::PgVec::new_in(estate.es_query_cxt),
                     };
                     PlanStateNode::LockRows(::mcx::alloc_in(
                         estate.es_query_cxt,
@@ -1574,6 +1586,8 @@ pub fn exec_init_node<'mcx>(
                             state,
                             outer,
                             inner,
+                            outer_chg: ::types_nodes::bitmapset::Bitmapset::empty(),
+                            inner_chg: ::types_nodes::bitmapset::Bitmapset::empty(),
                         },
                     )?)
                 })
@@ -1680,6 +1694,9 @@ pub fn exec_init_node<'mcx>(
                         // Set per-row by the dispatch closure (multi-resultrel).
                         result_rti: 0,
                         epq_param: mt_plan.epqParam,
+                        subplanstates: ::mcx::PgVec::new_in(estate.es_query_cxt),
+                        subplan_chg: ::mcx::PgVec::new_in(estate.es_query_cxt),
+                        fresh_subplanstates: ::mcx::PgVec::new_in(estate.es_query_cxt),
                     };
                     PlanStateNode::ModifyTable(::mcx::alloc_in(
                         mcx,
@@ -1798,11 +1815,17 @@ fn instrument_node<'mcx>(
     if let PlanStateNode::ModifyTable(mps) = &mut inner {
         mps.mt.instr_idx = Some(idx as u32);
     }
+    let mut init_plan_ids = ::mcx::PgVec::new_in(estate.es_query_cxt);
+    for sp_node in &node.as_plan().expect("plan-tree node").initPlan {
+        let sp = sp_node.as_sub_plan().expect("initPlan cell is a SubPlan");
+        init_plan_ids.push(sp.plan_id as u32);
+    }
     Ok(PlanStateNode::Instrumented(::mcx::alloc_in(
         estate.es_query_cxt,
         InstrumentedNode {
             inner,
             instr_idx: idx as u32,
+            init_plan_ids,
         },
     )?))
 }
@@ -2693,7 +2716,9 @@ fn bitmap_heap_scan_arm<'mcx>(
     estate: &mut EStateData<'mcx>,
 ) -> ProcResult {
     let b = &mut **b;
-    if !b.scan.initialized {
+    // C builds the bitmap inside BitmapHeapNext, which ExecScan never calls
+    // while the EPQ recheck substitutes the test tuple (nodeBitmapHeapscan.c:216).
+    if !b.scan.initialized && !::execscan::epq_substitutes(estate, b.scan.ss.scanrelid) {
         bitmap_table_scan_setup_dispatch(b, estate)?;
     }
     ::nodebitmapheapscan::exec_bitmap_heap_scan(&mut b.scan, estate)
@@ -2875,12 +2900,28 @@ fn set_op_arm<'mcx>(
         state,
         outer,
         inner,
+        outer_chg,
+        inner_chg,
     } = &mut **s;
+    let outer_plan = state.plan.plan.lefttree.expect("SetOp outer plan");
+    let inner_plan = state.plan.plan.righttree.expect("SetOp inner plan");
     ::nodesetop::exec_set_op(
         state,
         estate,
-        |e| exec_proc_node(outer, e),
-        |e| exec_proc_node(inner, e),
+        |e| {
+            if !outer_chg.is_empty() {
+                let chg = core::mem::replace(outer_chg, ::types_nodes::bitmapset::Bitmapset::empty());
+                crate::execami::exec_re_scan_with_chg(outer, outer_plan, e, &chg)?;
+            }
+            exec_proc_node(outer, e)
+        },
+        |e| {
+            if !inner_chg.is_empty() {
+                let chg = core::mem::replace(inner_chg, ::types_nodes::bitmapset::Bitmapset::empty());
+                crate::execami::exec_re_scan_with_chg(inner, inner_plan, e, &chg)?;
+            }
+            exec_proc_node(inner, e)
+        },
     )
 }
 
@@ -3848,8 +3889,8 @@ fn exec_end_node_inner<'mcx>(
         PlanStateNode::MergeJoin(mj) => {
             let mj = &mut **mj;
             ::nodemergejoin::exec_end_merge_join(&mut mj.state);
-            exec_end_node(&mut mj.outer, estate)?;
-            exec_end_node(&mut mj.inner, estate)
+            exec_end_node(&mut mj.inner, estate)?;
+            exec_end_node(&mut mj.outer, estate)
         }
     }
 }
@@ -3877,7 +3918,30 @@ pub fn exec_shutdown_node<'mcx>(
             if running {
                 ::instrument::instr_start_node(&mut estate.es_instrumentation[idx]);
             }
-            let r = exec_shutdown_node(&mut w.inner, estate);
+            // planstate_tree_walker visits the node's initPlan SubPlanStates
+            // first (execProcnode.c:798), inside this window.
+            let mut r = Ok(());
+            for i in 0..w.init_plan_ids.len() {
+                let Some(cell) = estate
+                    .es_subplanstates
+                    .get((w.init_plan_ids[i] - 1) as usize)
+                    .copied()
+                else {
+                    continue;
+                };
+                // SAFETY: init_plan created this arena cell; an initplan is
+                // never mid-run when its owner shuts down (take-out protocol
+                // leaves None otherwise).
+                let slot = unsafe { &mut *cell.0.cast::<Option<PlanStateNode<'mcx>>>().as_ptr() };
+                if let Some(mut ps) = slot.take() {
+                    r = exec_shutdown_node(&mut ps, estate);
+                    *slot = Some(ps);
+                    if r.is_err() {
+                        break;
+                    }
+                }
+            }
+            let r = r.and_then(|()| exec_shutdown_node(&mut w.inner, estate));
             if running {
                 ::instrument::instr_stop_node(&mut estate.es_instrumentation[idx], 0.0);
             }
@@ -4265,7 +4329,7 @@ pub(crate) fn with_eval_slots_outer<'mcx, R>(
 ::mcx::forget_safe_struct!(
     PlanStateBase<'_> { plan, ps_ExprContext, ps_ResultTupleSlot;
         ps_ResultTupleDesc, ps_ProjInfo, qual },
-    InstrumentedNode<'_> { inner, instr_idx },
+    InstrumentedNode<'_> { inner, instr_idx, init_plan_ids },
     ModifyTablePlanState<'_> { mt, subplan, epq },
     BitmapHeapPlanState<'_> { scan, bitmapqual },
     BitmapCombineState<'_> { substates },
@@ -4279,7 +4343,7 @@ pub(crate) fn with_eval_slots_outer<'mcx, R>(
     AppendNode<'_> { state, substates, subplan_origin, pending_chg, lane_fusible },
     MergeAppendNode<'_> { state, substates, subplan_origin },
     SubqueryScanNode<'_> { ss, subplan },
-    SetOpNode<'_> { state, outer, inner },
+    SetOpNode<'_> { state, outer, inner, outer_chg, inner_chg },
     RecursiveUnionNode<'_> { state, outer, inner },
     LockRowsNode<'_> { state, outer, epq },
     LimitNode<'_> { state, outer },

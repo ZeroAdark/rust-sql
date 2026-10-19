@@ -36,6 +36,19 @@ fn default_sigquit_handler() {
     interrupt::SignalHandlerForCrashExit()
 }
 
+// SIGABRT's default action for a child with no handler (HandleFatalError's
+// send_abort_for_crash arm and ServerLoop's send_abort_for_kill arm,
+// postmaster.c:2695/3170): no client message, no exit callbacks, the child
+// dies and the postmaster reaps "terminated by signal 6".
+fn default_sigabrt_handler() {
+    init_small::globals::HoldInterrupts();
+    if elog::config::where_to_send_output() == types_dest::CommandDest::Remote {
+        elog::config::set_where_to_send_output(types_dest::CommandDest::None);
+    }
+    elog::clear_emit_context_callbacks();
+    ipc::exit_thread_killed(procsignal::signums::SIGABRT)
+}
+
 type ChildMainFn = fn(&StartupData) -> !;
 
 enum Main {
@@ -104,7 +117,7 @@ static CHILD_PROCESS_KINDS: [ChildProcessKind; BACKEND_NUM_TYPES] = [
         main_fn: Main::Ported(checkpointer::CheckpointerMain),
         shmem_attach: true,
     },
-    // Thread-population liveness (GL-POOLDB-HELPERDEATH-1 class law): io
+    // Thread-population liveness (regression class law): io
     // workers are pmchild-tracked announced children; the postmaster carries
     // their term as pm.io_worker_count (reaper arm) + PM_WAIT_IO_WORKERS
     // (statemachine), sequenced AFTER the pool/gang quiescence gates.
@@ -147,6 +160,23 @@ fn sys_logger_main(startup_data: &StartupData) -> ! {
 }
 
 /// PostmasterChildName (launch_backend.c).
+/// pm_signame (postmaster.c:3390): the symbolic name of every signal the
+/// postmaster sends.
+pub fn pm_signame(signal: i32) -> &'static str {
+    match signal {
+        procsignal::signums::SIGABRT => "SIGABRT",
+        procsignal::signums::SIGCHLD => "SIGCHLD",
+        procsignal::signums::SIGHUP => "SIGHUP",
+        procsignal::signums::SIGINT => "SIGINT",
+        procsignal::signums::SIGKILL => "SIGKILL",
+        procsignal::signums::SIGQUIT => "SIGQUIT",
+        procsignal::signums::SIGTERM => "SIGTERM",
+        procsignal::signums::SIGUSR1 => "SIGUSR1",
+        procsignal::signums::SIGUSR2 => "SIGUSR2",
+        _ => "(unknown)",
+    }
+}
+
 pub fn postmaster_child_name(child_type: BackendType) -> &'static str {
     CHILD_PROCESS_KINDS[child_type as usize].name
 }
@@ -356,6 +386,10 @@ macro_rules! inherited {
             file_list: dfmgr::FileList,
             reserved_class_prefixes: Vec<String>,
             custom_string_definitions: Vec<guc::CustomStringDefinition>,
+            // objectaccess.c:22-23 process globals: a shared_preload_libraries
+            // _PG_init installs them in the postmaster and every child inherits.
+            object_access_hook: Option<objectaccess::ObjectAccessHook>,
+            object_access_hook_str: Option<objectaccess::ObjectAccessHookStr>,
             $($field: $ty,)+
         }
         impl Inherited {
@@ -366,17 +400,21 @@ macro_rules! inherited {
                     file_list: dfmgr::file_list_snapshot(),
                     reserved_class_prefixes: guc::reserved_class_prefixes(),
                     custom_string_definitions: guc::custom_string_definitions(),
+                    object_access_hook: objectaccess::object_access_hook(),
+                    object_access_hook_str: objectaccess::object_access_hook_str(),
                     $($field: init_small::globals::$get(),)+
                 }
             }
             fn apply(&self) {
                 if let Some(dd) = self.data_dir {
-                    init_small::globals::SetDataDir(dd);
+                    init_small::globals::InheritDataDir(dd);
                 }
                 fd::vfd::set_max_safe_fds_value(self.max_safe_fds);
                 dfmgr::file_list_inherit(&self.file_list);
                 guc::inherit_reserved_class_prefixes(&self.reserved_class_prefixes);
                 guc::inherit_custom_string_definitions(&self.custom_string_definitions);
+                objectaccess::set_object_access_hook(self.object_access_hook);
+                objectaccess::set_object_access_hook_str(self.object_access_hook_str);
                 $(init_small::globals::$set(self.$field);)+
             }
         }
@@ -457,7 +495,7 @@ fn fault_or_init_postmaster_child(
 
 /// A child that could not finish its own bring-up: report to the client,
 /// close the socket, hand the slot back. Never panics and never leaves the
-/// peer waiting — the two halves of the GL-FDLIMIT-1 defect.
+/// peer waiting — the two halves of the regression defect.
 fn fail_child_startup(
     child_type: BackendType,
     child_pid: pid_t,
@@ -630,7 +668,7 @@ fn run_child_task(
         // descriptor table. Running out must fail THIS connection, not the
         // server: a panic here left the accepted socket open with nobody
         // owning it and no exit announce, so the client waited forever and
-        // the child slot never came back (GL-FDLIMIT-1).
+        // the child slot never came back (regression).
         if let Err(e) = fault_or_init_postmaster_child(child_type, child_pid) {
             fail_child_startup(child_type, child_pid, client_sock, &e);
             return;
@@ -640,6 +678,10 @@ fn run_child_task(
             procsignal::signums::SIGQUIT,
             procsignal::ThreadSignalHandler::Simple(default_sigquit_handler),
         );
+        procsignal::pqsignal_thread(
+            procsignal::signums::SIGABRT,
+            procsignal::ThreadSignalHandler::Simple(default_sigabrt_handler),
+        );
         // Pre-identity signal window (fresh spawn): this pid is already in
         // its pmchild slot (a TerminateChildren broadcast targets it) but
         // its ProcSignal slot exists only from ProcSignalInit, deep into
@@ -647,7 +689,7 @@ fn run_child_task(
         // window pends + wakes instead of vanishing — the fast-shutdown
         // startup-packet wedge (a backend parked in secure_read waiting for
         // a startup packet never saw SIGTERM; PM_WAIT_BACKENDS never
-        // drained; the GL-GANGWEDGE-1 watchdog escalated to immediate
+        // drained; the regression watchdog escalated to immediate
         // shutdown and the next start ran crash recovery).
         procsignal::PreIdentitySignalAdopt(child_pid);
     }
@@ -902,7 +944,7 @@ pub fn postmaster_child_launch(
             };
             // Same rule as the child-init failure below: a connection whose
             // bring-up fails is refused, not panicked (a panic here left the
-            // accepted socket open forever — GL-FDLIMIT-1).
+            // accepted socket open forever — regression).
             if let Err(e) = guc_result {
                 fail_child_startup(child_type, child_pid, client_sock, &e);
                 return;
@@ -991,7 +1033,7 @@ pub fn init_seams() {
     });
 }
 
-/// GL-GANGWEDGE-1 shutdown-backstop fault injector, re-exported for the
+/// regression shutdown-backstop fault injector, re-exported for the
 /// postmaster (which cannot name `parallel` — the seam package-cycle rule).
 /// Inert unless `PGRUST_TEST_WEDGE_SHM_BUSY_MS` is set; see
 /// `parallel::standing::install_wedge_shm_busy_injection`.
@@ -1290,6 +1332,16 @@ pub mod wpool {
         }
     }
 
+    /// A standby exiting on a path whose announce (if any) the reaper
+    /// skips as a park: drop its own reaper entry and pid reservation.
+    pub(super) fn retire_child_thread(thread_key: pid_t) {
+        let mut t = super::CHILD_THREADS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = t.iter().position(|(p, _)| *p == thread_key) {
+            t.swap_remove(i);
+            super::release_reserved_pid(thread_key);
+        }
+    }
+
     fn standby_loop(spawn_pid: pid_t, mut rx: Receiver<StandbyTask>, mut ack_tx: SyncSender<()>) {
         // CHILD_THREADS key for our JoinHandle; re-keyed to each task's pid
         // so a rotation exit's announce joins this thread, while a park's
@@ -1330,6 +1382,7 @@ pub mod wpool {
                         // The pool was flushed while we ran: do not re-park a
                         // pre-flush prelude into the drained pool.
                         release_retained_identity(pre_crash);
+                        retire_child_thread(thread_key);
                         break;
                     }
                     if parked {
@@ -1372,6 +1425,7 @@ pub mod wpool {
                         };
                         if !repooled {
                             release_retained_identity(pre_crash);
+                            retire_child_thread(thread_key);
                             break;
                         }
                         rx = rx2;
@@ -1409,12 +1463,7 @@ pub mod wpool {
                     // freelist.
                     release_retained_identity(parked_crash_epoch);
                     let _ = ack_tx.try_send(());
-                    let mut t =
-                        super::CHILD_THREADS.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Some(i) = t.iter().position(|(p, _)| *p == thread_key) {
-                        t.swap_remove(i);
-                        super::release_reserved_pid(thread_key);
-                    }
+                    retire_child_thread(thread_key);
                     break;
                 }
             }
@@ -1428,7 +1477,7 @@ pub mod wpool {
     // MyProcNumber, which KillRetainedProc clears, so it runs first.
     fn release_retained_identity(park_epoch: u64) {
         if CRASH_EPOCH.load(Relaxed) == park_epoch && lmgr_proc::MyProc().is_some() {
-            // GL-CONNSLOT-1: a sinval-cleanup failure must not skip
+            // regression: a sinval-cleanup failure must not skip
             // KillRetainedProc — unwinding here left the retained PGPROC
             // (and, via the deferred-return arbitration, possibly a dead
             // leader's Regular slot) off the freelists forever. Contain
@@ -1894,6 +1943,10 @@ pub mod rtpool {
         procsignal::pqsignal_thread(
             procsignal::signums::SIGQUIT,
             procsignal::ThreadSignalHandler::Simple(super::default_sigquit_handler),
+        );
+        procsignal::pqsignal_thread(
+            procsignal::signums::SIGABRT,
+            procsignal::ThreadSignalHandler::Simple(super::default_sigabrt_handler),
         );
         miscinit::SetMyBackendType(types_core::init::BackendType::BgWorker);
         bgworker::adopt_worker_entry(bgworker::BackgroundWorker {
@@ -2568,6 +2621,10 @@ pub mod rtgang {
         procsignal::pqsignal_thread(
             procsignal::signums::SIGQUIT,
             procsignal::ThreadSignalHandler::Simple(super::default_sigquit_handler),
+        );
+        procsignal::pqsignal_thread(
+            procsignal::signums::SIGABRT,
+            procsignal::ThreadSignalHandler::Simple(super::default_sigabrt_handler),
         );
         miscinit::SetMyBackendType(types_core::init::BackendType::BgWorker);
         bgworker::adopt_worker_entry(bgworker::BackgroundWorker {

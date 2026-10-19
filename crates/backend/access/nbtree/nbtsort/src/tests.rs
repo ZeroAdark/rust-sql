@@ -101,7 +101,7 @@ struct Oversized([u8; 2712]);
 
 #[test]
 fn buildadd_oversized_detail_names_heap_not_index() {
-    let cx = MemoryContext::new("d233");
+    let cx = MemoryContext::new("yaiz");
     let mcx = cx.mcx();
     let heap = named_rel(mcx, "heap_tbl", 4999);
     let index = named_rel(mcx, "idx", 5000);

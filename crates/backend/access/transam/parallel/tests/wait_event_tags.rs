@@ -1,4 +1,4 @@
-//! GL-SYNCWEDGE-1: the parallel leader's park quantum must publish itself
+//! regression: the parallel leader's park quantum must publish itself
 //! under its OWN name.
 //!
 //! `WAIT_EVENT_PARALLEL_FINISH` was `PG_WAIT_IPC + 32`, and 32 is

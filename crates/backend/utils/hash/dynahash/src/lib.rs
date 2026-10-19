@@ -428,16 +428,7 @@ unsafe fn hash_create_in(
 
     if (flags & HASH_SHARED_MEM != 0) || nelem < (*hctl).nelem_alloc as i64 {
         let freelist_partitions = if IS_PARTITIONED(hctl) { NUM_FREELISTS as i32 } else { 1 };
-        let nelem_i = nelem as i32;
-        let mut nelem_alloc = nelem_i / freelist_partitions;
-        if nelem_alloc <= 0 {
-            nelem_alloc = 1;
-        }
-        let nelem_alloc_first = if nelem_alloc * freelist_partitions < nelem_i {
-            nelem_i - nelem_alloc * (freelist_partitions - 1)
-        } else {
-            nelem_alloc
-        };
+        let (nelem_alloc_first, nelem_alloc) = freelist_shares(nelem, freelist_partitions);
 
         for i in 0..freelist_partitions {
             let temp = if i == 0 { nelem_alloc_first } else { nelem_alloc };
@@ -452,6 +443,21 @@ unsafe fn hash_create_in(
     }
 
     Ok(hashp)
+}
+
+// dynahash.c:596-608: `int nelem_alloc = nelem / freelist_partitions` divides
+// the long before narrowing; freeList[0] takes the remainder.
+fn freelist_shares(nelem: i64, freelist_partitions: i32) -> (i32, i32) {
+    let mut nelem_alloc = (nelem / freelist_partitions as i64) as i32;
+    if nelem_alloc <= 0 {
+        nelem_alloc = 1;
+    }
+    let nelem_alloc_first = if (nelem_alloc as i64) * (freelist_partitions as i64) < nelem {
+        (nelem - (nelem_alloc as i64) * (freelist_partitions as i64 - 1)) as i32
+    } else {
+        nelem_alloc
+    };
+    (nelem_alloc_first, nelem_alloc)
 }
 
 fn htab_zeroed() -> HTAB {
@@ -602,15 +608,15 @@ pub fn hash_destroy(hashp: *mut HTAB) {
 
 /// Crash-cycle reset in place (notes/crash-restart-design.md): unlinks every
 /// live entry back onto the freelists and re-arms freelist counts/spinlocks,
-/// restoring the post-create boot image without reallocating. Only for fully
-/// preallocated shared tables — bucket geometry never changed since create.
+/// restoring an empty table without reallocating. Shared tables only; a
+/// table that grew keeps its (still mapped) segments and bucket geometry.
 ///
 /// # Safety
 /// Caller must have exclusive access to the table (crash choreography: every
 /// child is dead, only the postmaster thread runs).
 pub unsafe fn hash_reset_after_crash(hashp: *mut HTAB) {
     let hctl = (*hashp).hctl;
-    assert!((*hashp).isshared && (*hashp).isfixed);
+    assert!((*hashp).isshared);
     for bucket in 0..=(*hctl).max_bucket as i64 {
         let segp = *(*hashp).dir.offset((bucket >> (*hashp).sshift) as isize);
         let slot = segp.offset(MOD(bucket, (*hashp).ssize) as isize);

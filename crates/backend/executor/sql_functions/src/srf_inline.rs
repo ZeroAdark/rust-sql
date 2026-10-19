@@ -27,6 +27,7 @@ fn inline_set_returning_sql_body<'mcx>(
 
     let row = crate::inline_fn::read_inline_proc_row(mcx, fexpr.funcid)?;
     // C installs sql_inline_error_callback across the parse/validate region.
+    let _errctx = crate::inline_fn::inline_error_frame(&row);
     inline_srf_body(mcx, &row, prokind, fexpr, fexpr_node, rtfunc).map_err(|e| {
         crate::inline_fn::sql_inline_error_callback(e, row.proname.as_str(), row.prosrc.as_str())
     })
@@ -78,6 +79,7 @@ fn inline_srf_body<'a, 'mcx>(
             &name_refs,
             fexpr.inputcollid,
             QueryEnvHandle::NULL,
+            true,
         )?;
         crate::cache::usage_show("PARSE ANALYSIS STATISTICS")?;
         query_list = crate::cache::pg_rewrite_query(mcx, query)?;

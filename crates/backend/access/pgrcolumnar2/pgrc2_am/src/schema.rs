@@ -229,13 +229,15 @@ fn derive_one(att: &FormData_pg_attribute) -> Result<ColSchema, UnsupportedColum
         attname_hint: String::from_utf8_lossy(att.attname.name_str()).into_owned(),
         atttypid: att.atttypid,
     };
-    if att.attisdropped {
-        // ALTER DROP COLUMN is gated off for pgrcolumnar2 tables; a dropped
-        // column can only mean the gate was bypassed — refuse.
-        return Err(refuse());
-    }
+    // A dropped attribute (inherited by SET ACCESS METHOD from a heap
+    // table) keeps its physical attlen/attbyval/attalign and is always
+    // NULL: an opaque all-NULL lane of that shape.
     let class = if att.attbyval {
-        let hint = byval_hint(att.atttypid).ok_or_else(refuse)?;
+        let hint = if att.attisdropped {
+            ClassHint::None
+        } else {
+            byval_hint(att.atttypid).ok_or_else(refuse)?
+        };
         StorageClass::derive(att.attlen, true, att.attalign as u8, hint).map_err(|_| refuse())?
     } else {
         match att.attlen {

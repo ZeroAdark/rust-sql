@@ -9,7 +9,7 @@ use pgstat::io::{
     pgstat_count_io_op_time, pgstat_prepare_io_time, IOObject, IOOp,
 };
 use types_storage::buf::{
-    buftag, IOContext, BM_CHECKPOINT_NEEDED, BM_DIRTY, BM_IO_ERROR, BM_JUST_DIRTIED, BM_PERMANENT,
+    buftag, IOContext, BM_CHECKPOINT_NEEDED, BM_DIRTY, BM_JUST_DIRTIED, BM_PERMANENT,
     BM_VALID,
 };
 use types_storage::{RelFileLocator, RelFileLocatorBackend, IO_DIRECT_DATA};
@@ -64,7 +64,7 @@ pub(crate) fn schedule_backend_writeback(io_context: IOContext, tag: &buftag) ->
     })
 }
 
-fn tag_locator(tag: &buftag) -> RelFileLocatorBackend {
+pub(crate) fn tag_locator(tag: &buftag) -> RelFileLocatorBackend {
     RelFileLocatorBackend {
         locator: RelFileLocator {
             spcOid: tag.spcOid,
@@ -324,9 +324,11 @@ pub(crate) fn FlushBuffer(
     UnlockBufHdr(desc, buf_state & !BM_JUST_DIRTIED);
 
     // WAL-before-data; unlogged pages can carry fake LSNs past insert.
+    // A failure leaves the IO in progress: C's longjmp lands in the resowner
+    // release (AbortBufferIO, read.rs), which reports a repeated failure and
+    // terminates the IO after the error itself has been reported.
     if buf_state & BM_PERMANENT != 0 {
         if let Err(e) = transam_xlog_seams::xlog_flush::call(recptr) {
-            TerminateBufferIO(desc, false, BM_IO_ERROR, true, false);
             return Err(shared_buffer_write_error_context(e, &tag));
         }
     }
@@ -336,7 +338,6 @@ pub(crate) fn FlushBuffer(
         smgr_seams::smgr_write::call(tag_locator(&tag), tag.forkNum, tag.blockNum, page, false)
     });
     if let Err(e) = write_result {
-        TerminateBufferIO(desc, false, BM_IO_ERROR, true, false);
         return Err(shared_buffer_write_error_context(e, &tag));
     }
 

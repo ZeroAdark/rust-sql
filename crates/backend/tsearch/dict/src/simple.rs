@@ -1,5 +1,5 @@
 use ::mcx::{Mcx, PgVec};
-use ::ts_locale::dict_api::{def_get_boolean, DictInitData, LexizeResult};
+use ::ts_locale::dict_api::{def_get_boolean, def_get_string, DictInitData, LexizeResult};
 use ::ts_locale::{lowerstr, readstoplist, searchstoplist, StopList, TsLexeme};
 use ::types_error::{PgError, PgResult, ERRCODE_INVALID_PARAMETER_VALUE};
 
@@ -21,12 +21,16 @@ pub fn dsimple_init(init: &DictInitData<'static>) -> PgResult<DictSimple> {
             if stoplist.is_some() {
                 return Err(invalid_param("multiple StopWords parameters".into()));
             }
-            stoplist = Some(readstoplist(init.mcx, Some(value.as_slice()), true)?);
+            stoplist = Some(readstoplist(init.mcx, Some(def_get_string(name, value)?), true)?);
         } else if name.as_slice() == b"accept" {
             if accept.is_some() {
                 return Err(invalid_param("multiple Accept parameters".into()));
             }
-            accept = Some(def_get_boolean(name, value, init.int_options[i])?);
+            accept = Some(def_get_boolean(
+                name,
+                value.as_ref().map(|v| v.as_slice()),
+                init.int_options[i],
+            )?);
         } else {
             return Err(invalid_param(format!(
                 "unrecognized simple dictionary parameter: \"{}\"",

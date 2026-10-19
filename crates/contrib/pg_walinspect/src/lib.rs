@@ -11,6 +11,7 @@
 use ::mcx::{Mcx, MemoryContext};
 use ::stringinfo::StringInfo;
 use ::types_core::{XLogRecPtr, TEXTOID};
+use ::types_tuple::tupdesc::TupleDescData;
 use ::types_error::{PgError, PgResult, ERRCODE_INVALID_PARAMETER_VALUE, ERRCODE_OUT_OF_MEMORY};
 use ::types_fmgr::{
     varlena_result, FmgrInfo, FunctionCallInfoBaseData as Fcinfo, PGFunction,
@@ -210,7 +211,13 @@ fn fc_pg_get_wal_record_info(
     // SAFETY: the arming context outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
 
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
+    // get_call_result_type(fcinfo, ...) (pg_walinspect.c:486): a RECORD
+    // result resolves from the caller's column definition list.
+    let expected_desc = fcinfo.rsinfo_mut().and_then(|rsi| rsi.expectedDesc);
+    // SAFETY: expectedDesc contract — the executor armed it with the scan
+    // tupdesc, live for the duration of this call.
+    let expected = expected_desc.map(|p| unsafe { p.cast::<TupleDescData<'_>>().as_ref() });
+    let resolved = funcapi::get_call_result_type(mcx, flinfo, expected)?;
     if resolved.class != funcapi::TypeFuncClass::Composite {
         return Err(Box::new(PgError::error("return type must be a row type")));
     }

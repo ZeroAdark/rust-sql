@@ -146,17 +146,27 @@ pub(crate) fn cache_mcx() -> Mcx<'static> {
     with_state(|st| st.mcx)
 }
 
-// Record a replaced entry allocation that still has holders; weak so pruning
-// is automatic once the last holder drops.
+// Record a replaced entry allocation that still has holders. A Weak keeps
+// the RcBox allocated after the last holder drops, so dead ones must be
+// pruned (here per relid, and wholesale at end of transaction).
 pub(crate) fn note_stale(st: &mut RelcacheState, old: &Rc<RelationData<'static>>) {
     if Rc::strong_count(old) <= 1 {
         return;
     }
     let mcx = st.mcx;
-    st.stale_refs
-        .entry(old.rd_id)
-        .or_insert_with(|| PgVec::new_in(mcx))
-        .push(Rc::downgrade(old));
+    let v = st.stale_refs.entry(old.rd_id).or_insert_with(|| PgVec::new_in(mcx));
+    v.retain(|w| w.strong_count() > 0);
+    v.push(Rc::downgrade(old));
+}
+
+pub(crate) fn prune_stale_refs(st: &mut RelcacheState) {
+    if st.stale_refs.is_empty() {
+        return;
+    }
+    st.stale_refs.retain(|_, v| {
+        v.retain(|w| w.strong_count() > 0);
+        !v.is_empty()
+    });
 }
 
 // C rd_refcnt vs (rd_isnailed ? 2 : 1): user refs across the current entry and
@@ -228,11 +238,7 @@ pub fn PassivateRelationCache() -> types_error::PgResult<usize> {
         st.statext_cache.clear();
         st.fkey_cache.clear();
         st.deform_jit_cache.clear();
-        // Weak refs to dropped lineages: prune now rather than lazily.
-        st.stale_refs.retain(|_, v| {
-            v.retain(|w| w.strong_count() > 0);
-            !v.is_empty()
-        });
+        prune_stale_refs(st);
     });
     l2core::prune_mirrors();
     Ok(cleared)

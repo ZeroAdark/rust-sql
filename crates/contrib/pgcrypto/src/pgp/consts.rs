@@ -170,9 +170,15 @@ pub struct Digest {
 
 impl Digest {
     pub fn new(code: i32) -> Option<Digest> {
-        let name = digest_name(code)?;
-        let md = crate::hashing::OsslDigest::find(name).ok()?;
-        Some(Digest { md })
+        Digest::load(code).ok()
+    }
+
+    /// pgp.c:180: a code outside the digest table is PXE_PGP_CORRUPT_DATA;
+    /// a known digest the provider lacks is PXE_PGP_UNSUPPORTED_HASH.
+    pub fn load(code: i32) -> Result<Digest, &'static str> {
+        let name = digest_name(code).ok_or(CORRUPT_DATA)?;
+        let md = crate::hashing::OsslDigest::find(name).map_err(|_| UNSUPPORTED_HASH)?;
+        Ok(Digest { md })
     }
 
     pub fn result_size(&self) -> usize {

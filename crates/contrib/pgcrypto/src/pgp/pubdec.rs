@@ -2,6 +2,7 @@
 use super::consts::*;
 use super::context::PgpContext;
 use super::mpi::{self, read_mpi, Mpi};
+use super::packet::read_fixed;
 use super::pubkey::{KeyMaterial, PubKey, PGP_PUB_ELG_ENCRYPT, PGP_PUB_RSA_ENCRYPT,
     PGP_PUB_RSA_ENCRYPT_SIGN};
 
@@ -55,20 +56,20 @@ pub fn parse_pubenc_sesskey(
     pk: &PubKey,
     body: &[u8],
 ) -> Result<(i32, Vec<u8>), String> {
-    if body.len() < 10 {
+    // pgp-pubdec.c:172: version, then the 8-byte key id (checked before
+    // the algorithm byte is required).
+    let ver = read_fixed(body, 0, 1, ctx)?[0];
+    if ver != 3 {
+        ctx.dbg(&format!("unknown pubenc_sesskey pkt ver={ver}"));
         return Err(CORRUPT_DATA.to_string());
     }
-    if body[0] != 3 {
-        ctx.dbg(&format!("unknown pubenc_sesskey pkt ver={}", body[0]));
-        return Err(CORRUPT_DATA.to_string());
-    }
-    let key_id = &body[1..9];
+    let key_id = read_fixed(body, 1, 8, ctx)?;
     let any_key = [0u8; 8];
     if key_id != any_key && key_id != pk.key_id {
         ctx.dbg("key_id's does not match");
         return Err(PUB_WRONG_KEY.to_string());
     }
-    let algo = body[9] as i32;
+    let algo = read_fixed(body, 9, 1, ctx)?[0] as i32;
     let mut pos = 10usize;
 
     let m: Mpi = match algo {
@@ -78,9 +79,9 @@ pub fn parse_pubenc_sesskey(
             }
             if let KeyMaterial::Elg { p, x, .. } = &pk.material {
                 let x = x.as_ref().ok_or_else(|| WRONG_KEY.to_string())?;
-                let c1 = read_mpi(body, &mut pos)?;
-                let c2 = read_mpi(body, &mut pos)?;
-                mpi::elgamal_decrypt(p, x, &c1, &c2)?
+                let c1 = read_mpi(body, &mut pos, ctx)?;
+                let c2 = read_mpi(body, &mut pos, ctx)?;
+                mpi::elgamal_decrypt(p, x, &c1, &c2).map_err(|e| e.report(ctx))?
             } else {
                 return Err("Wrong key".to_string());
             }
@@ -91,8 +92,8 @@ pub fn parse_pubenc_sesskey(
             }
             if let KeyMaterial::Rsa { n, d, .. } = &pk.material {
                 let d = d.as_ref().ok_or_else(|| WRONG_KEY.to_string())?;
-                let c = read_mpi(body, &mut pos)?;
-                mpi::rsa_decrypt(n, d, &c)?
+                let c = read_mpi(body, &mut pos, ctx)?;
+                mpi::rsa_decrypt(n, d, &c).map_err(|e| e.report(ctx))?
             } else {
                 return Err("Wrong key".to_string());
             }
@@ -123,5 +124,10 @@ pub fn parse_pubenc_sesskey(
     }
     let cipher_algo = msg[0] as i32;
     let sess_key = msg[1..1 + sess_key_len].to_vec();
+    // pgp-pubdec.c:243 pgp_expect_packet_end: bytes after the MPI(s) are corrupt data.
+    if pos != body.len() {
+        ctx.dbg("pgp_expect_packet_end: got data");
+        return Err(CORRUPT_DATA.to_string());
+    }
     Ok((cipher_algo, sess_key))
 }

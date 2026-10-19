@@ -29,6 +29,7 @@ seam_core::seam!(
         relid: types_core::Oid,
         newname: &str,
         is_index: bool,
+        is_internal: bool,
     ) -> PgResult<()>
 );
 

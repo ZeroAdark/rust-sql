@@ -363,3 +363,17 @@ fn rescan_drains_pending_async_requests_before_reset() {
         libc::close(w1);
     }
 }
+
+// ExecEndAppend drops the node's ParallelAppendState reference: AppendState
+// is forgotten (not dropped) at ExecutorEnd, so a retained Arc would keep
+// the shared state alive for the session.
+#[test]
+fn end_append_releases_parallel_state() {
+    let mcx = leaked_mcx();
+    let mut estate = EStateData::new_in(mcx);
+    let mut node = init_state(mcx, &mut estate, 2, &[]);
+    let shared = exec_append_initialize_dsm(&mut node);
+    assert_eq!(Arc::strong_count(&shared), 2);
+    exec_end_append(&mut node);
+    assert_eq!(Arc::strong_count(&shared), 1);
+}

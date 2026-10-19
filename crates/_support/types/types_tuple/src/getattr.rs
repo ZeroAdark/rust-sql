@@ -427,7 +427,13 @@ fn tuple_data_len(tuple: &HeapTupleData<'_>) -> usize {
 #[cold]
 #[inline(never)]
 fn deform_corrupt() -> ! {
-    panic!("heap tuple data is corrupt: attribute offset exceeds tuple length");
+    std::panic::panic_any(alloc::boxed::Box::new(
+        ::types_error::PgError::new(
+            ::types_error::ERROR,
+            "heap tuple data is corrupt: attribute offset exceeds tuple length",
+        )
+        .with_sqlstate(::types_error::ERRCODE_DATA_CORRUPTED),
+    ))
 }
 
 /// Length of the varlena at `p`, bounded so no header byte is read past
@@ -735,7 +741,7 @@ mod deform_bounds_tests {
     // A wider-than-image descriptor (int8) over a 4-byte data area must raise a
     // deterministic corruption error, never read the 8 bytes past the tuple.
     #[test]
-    #[should_panic(expected = "corrupt")]
+    #[should_panic]
     fn truncated_fixed_attribute_is_bounded() {
         let mut image = Image([0u8; 64]);
         write_header(&mut image, 0);
@@ -749,7 +755,7 @@ mod deform_bounds_tests {
     // A varlena whose 4-byte header declares a length running past the tuple
     // body must be rejected rather than staging an out-of-bounds datum.
     #[test]
-    #[should_panic(expected = "corrupt")]
+    #[should_panic]
     fn lying_varlena_header_is_bounded() {
         let mut image = Image([0u8; 64]);
         write_header(&mut image, crate::htup::HEAP_HASVARWIDTH);
@@ -792,5 +798,16 @@ mod deform_bounds_tests {
         heap_deform_tuple_prefix_atts(&tuple, &atts, &mut values, &mut isnull, 1);
         assert!(!isnull[0]);
         assert_eq!(values[0].as_i32(), 0x1234_5678);
+    }
+}
+
+#[cfg(test)]
+mod corrupt_tests {
+    #[test]
+    fn deform_corruption_is_data_corrupted() {
+        let payload = std::panic::catch_unwind(|| super::deform_corrupt()).expect_err("must unwind");
+        let err = payload.downcast::<alloc::boxed::Box<::types_error::PgError>>().expect("PgError payload");
+        assert_eq!(err.sqlstate(), ::types_error::ERRCODE_DATA_CORRUPTED);
+        assert!(err.message.contains("heap tuple data is corrupt"));
     }
 }

@@ -1,7 +1,7 @@
-//! GL-MEMWATCH-1: the process memory watchdog.
+//! regression: the process memory watchdog.
 //!
 //! pgrust-only (no C counterpart). The motivating incident class
-//! (GL-HASHAGG-SPILL-1, GL-TSACCT-1): a query grows process memory by
+//! (regression, regression): a query grows process memory by
 //! gigabytes — accounted-but-huge or invisible to the per-context ledgers —
 //! and the FIRST diagnostic is the cgroup OOM kill, which arrives with no
 //! server-side output at all: under Linux overcommit, allocation never

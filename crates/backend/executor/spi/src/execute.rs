@@ -291,7 +291,16 @@ pub(crate) fn command_tag_of(stmt: &PlannedStmt<'_>) -> types_core::CommandTag {
     match stmt.utilityStmt {
         Some(u) => utility_seams::create_command_tag::call(u),
         None => match stmt.commandType {
-            CmdType::CMD_SELECT => CMDTAG_SELECT,
+            CmdType::CMD_SELECT => {
+                use types_nodes::nodes_enums::LockClauseStrength::*;
+                match stmt.rowMarks.iter().next().and_then(|n| n.as_plan_row_mark()).map(|r| r.strength) {
+                    Some(LCS_FORKEYSHARE) => utility::consts::CMDTAG_SELECT_FOR_KEY_SHARE,
+                    Some(LCS_FORSHARE) => utility::consts::CMDTAG_SELECT_FOR_SHARE,
+                    Some(LCS_FORNOKEYUPDATE) => utility::consts::CMDTAG_SELECT_FOR_NO_KEY_UPDATE,
+                    Some(LCS_FORUPDATE) => utility::consts::CMDTAG_SELECT_FOR_UPDATE,
+                    _ => CMDTAG_SELECT,
+                }
+            }
             CmdType::CMD_INSERT => types_portal::CMDTAG_INSERT,
             CmdType::CMD_UPDATE => types_portal::CMDTAG_UPDATE,
             CmdType::CMD_DELETE => types_portal::CMDTAG_DELETE,

@@ -451,7 +451,9 @@ pub fn picksplit(
             hemdistcache(cache[seed_2].as_ref().unwrap(), cache[j].as_ref().unwrap(), siglen);
         costvector.push((j, (size_alpha - size_beta).abs()));
     }
-    costvector.sort_by(|a, b| a.1.cmp(&b.1));
+    // qsort(costvector, maxoff, sizeof(SPLITCOST), comparecost): pg_qsort's
+    // equal-cost order decides page membership.
+    ::pg_qsort::pg_qsort(&mut costvector, |a, b| a.1.cmp(&b.1) as i32);
 
     for (j, _) in costvector {
         if j == seed_1 {

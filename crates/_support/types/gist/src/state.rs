@@ -6,11 +6,18 @@ use std::rc::Rc;
 use ::datum::Datum;
 use ::mcx::Mcx;
 use ::types_core::Oid;
-use ::types_error::PgResult;
+use ::types_error::{PgError, PgResult};
 use ::types_fmgr::{FmgrInfo, LocalFcinfo};
 use ::types_tuple::TupleDescData;
 
 use crate::{GistEntryVector, GistSplitVec, GISTENTRY};
+
+// fmgr.c FunctionCallNColl: elog(ERROR, "function %u returned NULL").
+#[cold]
+#[inline(never)]
+fn returned_null(fn_oid: Oid) -> Box<PgError> {
+    Box::new(PgError::error(format!("function {fn_oid} returned NULL")))
+}
 
 const InvalidOid: Oid = 0;
 
@@ -66,6 +73,9 @@ impl<'mcx> GistState<'mcx> {
         self.frame1
             .set_arg(0, Datum::from_usize(entry as *const GISTENTRY as usize));
         let r = self.compressFn[attno].invoke(&mut self.frame1)?;
+        if self.frame1.isnull {
+            return Err(returned_null(self.compressFn[attno].fn_oid));
+        }
         // SAFETY: opclass contract — returns a GISTENTRY* (input or palloc'd
         // in the armed temp context, live until reset_temp).
         Ok(unsafe { *(r.as_usize() as *const GISTENTRY) })
@@ -78,6 +88,9 @@ impl<'mcx> GistState<'mcx> {
         self.frame1
             .set_arg(0, Datum::from_usize(entry as *const GISTENTRY as usize));
         let r = self.decompressFn[attno].invoke(&mut self.frame1)?;
+        if self.frame1.isnull {
+            return Err(returned_null(self.decompressFn[attno].fn_oid));
+        }
         // SAFETY: as call_compress.
         Ok(unsafe { *(r.as_usize() as *const GISTENTRY) })
     }
@@ -89,6 +102,9 @@ impl<'mcx> GistState<'mcx> {
         self.frame1
             .set_arg(0, Datum::from_usize(entry as *const GISTENTRY as usize));
         let r = self.fetchFn[attno].invoke(&mut self.frame1)?;
+        if self.frame1.isnull {
+            return Err(returned_null(self.fetchFn[attno].fn_oid));
+        }
         // SAFETY: as call_compress.
         Ok(unsafe { *(r.as_usize() as *const GISTENTRY) })
     }
@@ -103,7 +119,11 @@ impl<'mcx> GistState<'mcx> {
             .set_arg(0, Datum::from_usize(evec as *const GistEntryVector as usize));
         self.frame2
             .set_arg(1, Datum::from_usize(&mut size as *mut i32 as usize));
-        self.unionFn[attno].invoke(&mut self.frame2)
+        let r = self.unionFn[attno].invoke(&mut self.frame2)?;
+        if self.frame2.isnull {
+            return Err(returned_null(self.unionFn[attno].fn_oid));
+        }
+        Ok(r)
     }
 
     // FunctionCall3Coll(&penaltyFn[attno], …, orig, add, &penalty).
@@ -130,6 +150,9 @@ impl<'mcx> GistState<'mcx> {
         self.frame3
             .set_arg(2, Datum::from_usize(&mut penalty as *mut f32 as usize));
         self.penaltyFn[attno].invoke(&mut self.frame3)?;
+        if self.frame3.isnull {
+            return Err(returned_null(self.penaltyFn[attno].fn_oid));
+        }
         Ok(penalty)
     }
 
@@ -148,6 +171,9 @@ impl<'mcx> GistState<'mcx> {
         self.frame2
             .set_arg(1, Datum::from_usize(sv as *mut GistSplitVec as usize));
         self.picksplitFn[attno].invoke(&mut self.frame2)?;
+        if self.frame2.isnull {
+            return Err(returned_null(self.picksplitFn[attno].fn_oid));
+        }
         Ok(())
     }
 
@@ -162,6 +188,9 @@ impl<'mcx> GistState<'mcx> {
         self.frame3
             .set_arg(2, Datum::from_usize(&mut result as *mut bool as usize));
         self.equalFn[attno].invoke(&mut self.frame3)?;
+        if self.frame3.isnull {
+            return Err(returned_null(self.equalFn[attno].fn_oid));
+        }
         Ok(result)
     }
 
@@ -190,6 +219,9 @@ impl<'mcx> GistState<'mcx> {
         self.frame5
             .set_arg(4, Datum::from_usize(recheck as *mut bool as usize));
         let r = finfo.invoke(&mut self.frame5)?;
+        if self.frame5.isnull {
+            return Err(returned_null(finfo.fn_oid));
+        }
         Ok(r.as_bool())
     }
 
@@ -219,6 +251,9 @@ impl<'mcx> GistState<'mcx> {
         self.frame5
             .set_arg(4, Datum::from_usize(recheck as *mut bool as usize));
         let r = finfo.invoke(&mut self.frame5)?;
+        if self.frame5.isnull {
+            return Err(returned_null(finfo.fn_oid));
+        }
         Ok(r.as_f64())
     }
 }

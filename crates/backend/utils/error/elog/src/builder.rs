@@ -28,7 +28,7 @@ impl ErrorBuilder {
     pub fn new(level: ErrorLevel) -> Self {
         Self {
             level,
-            error: Some(PgError::new(level, String::new())),
+            error: Some(PgError::new(level, String::new()).with_saved_errno(errno::current_errno())),
         }
     }
 
@@ -129,6 +129,19 @@ impl ErrorBuilder {
         self
     }
 
+    // errmsg_internal("%s", bytes): the message goes out as C's exact bytes
+    // even when they are not UTF-8 (a SQL_ASCII database's high bytes).
+    #[cold]
+    #[inline(never)]
+    pub fn errmsg_raw(mut self, message: Vec<u8>) -> Self {
+        if let Some(mut error) = self.error.take() {
+            error.message = String::from_utf8_lossy(&message).into_owned();
+            error.message_raw = Some(message);
+            self.error = Some(error);
+        }
+        self
+    }
+
     #[cold]
     #[inline(never)]
     pub fn errmsg_plural(
@@ -164,6 +177,17 @@ impl ErrorBuilder {
     #[inline(never)]
     pub fn errdetail_internal(self, detail: impl Into<String>) -> Self {
         self.errdetail(detail)
+    }
+
+    // errdetail_internal("%s", bytes): the detail goes out as C's exact
+    // bytes even when they are not UTF-8.
+    #[cold]
+    #[inline(never)]
+    pub fn errdetail_raw(mut self, detail: Vec<u8>) -> Self {
+        if let Some(error) = self.error.take() {
+            self.error = Some(error.with_detail_raw(detail));
+        }
+        self
     }
 
     #[cold]

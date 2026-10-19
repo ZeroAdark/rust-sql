@@ -1,6 +1,6 @@
 -- bugs/batch-10-12-14-16-detail: SQL-level regressions, expected captured from C 18.6.
 
--- fp-commands-trigger-p2#2: AFTER row events reuse the relation's FmgrInfo
+-- regression: AFTER row events reuse the relation's FmgrInfo
 -- (ri_TrigFunctions), so a proconfig cached in fn_extra survives the firing cycle.
 CREATE TABLE trg_t(i int);
 CREATE TABLE trg_seen(v text);
@@ -16,12 +16,12 @@ SELECT * FROM trg_seen;
 DROP TABLE trg_t, trg_seen;
 DROP FUNCTION trg_af();
 
--- fp-tsearch-wparser_def#1: hlCover reads phrase endpoints raw; a <16383>
+-- regression: hlCover reads phrase endpoints raw; a <16383>
 -- distance pushes the endpoint past the 14-bit position mask.
 SELECT ts_headline('simple', repeat('filler ', 20) || 'a', 'a <16383> !b'::tsquery, 'MinWords=1, MaxWords=2, ShortWord=0');
 SELECT ts_headline('simple', repeat('filler ', 20) || 'a b', 'a <1> b'::tsquery, 'MinWords=1, MaxWords=3, ShortWord=0');
 
--- fp-fmgr-fmgr#3: fmgr_internal_validator resolves fmgr_builtins names only;
+-- regression: fmgr_internal_validator resolves fmgr_builtins names only;
 -- SQL-language catalog functions are not internal entry points.
 CREATE FUNCTION my_desc(oid, name) RETURNS text AS 'obj_description' LANGUAGE internal;
 CREATE FUNCTION my_desc(oid, name, int) RETURNS text AS 'col_description' LANGUAGE internal;
@@ -30,7 +30,7 @@ CREATE FUNCTION my_int4pl(int, int) RETURNS int AS 'int4pl' LANGUAGE internal;
 SELECT my_int4pl(40, 2);
 DROP FUNCTION my_int4pl(int, int);
 
--- fp-commands-typecmds-p2#1: validateDomainCheckConstraint resets its per-tuple
+-- regression: validateDomainCheckConstraint resets its per-tuple
 -- context per row (functional check; the memory profile is measured by hand).
 CREATE DOMAIN dom_txt AS text;
 CREATE TABLE dom_t(v dom_txt);
@@ -42,7 +42,7 @@ SELECT count(*) FROM dom_t;
 DROP TABLE dom_t;
 DROP DOMAIN dom_txt;
 
--- fp-tsearch-ts_parse#1: a thesaurus attempt abandoned by an unmapped token
+-- regression: a thesaurus attempt abandoned by an unmapped token
 -- type keeps its provisional result across queue compaction (>1024 retired
 -- tokens) instead of underflowing the retired lastRes.
 CREATE TEXT SEARCH DICTIONARY thes_d (TEMPLATE = thesaurus, DictFile = thesaurus_sample, Dictionary = pg_catalog.simple);

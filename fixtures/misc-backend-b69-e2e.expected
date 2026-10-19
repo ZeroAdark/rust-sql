@@ -5,7 +5,7 @@ CREATE FUNCTION b69_b2t(bytea) RETURNS text AS '$libdir/regress', 'test_bytea_to
 CREATE FUNCTION b69_t2b(text) RETURNS bytea AS '$libdir/regress', 'test_text_to_bytea' LANGUAGE C STRICT;
 CREATE FUNCTION b69_valid_enc(text) RETURNS bool AS '$libdir/regress', 'test_valid_server_encoding' LANGUAGE C STRICT;
 CREATE FUNCTION b69_bad_enc(bytea, name, name, boolean) RETURNS integer AS '$libdir/regress', 'test_enc_conversion' LANGUAGE C STRICT;
--- fp-regress-regress#6: test_canonicalize_path works on the raw C string
+-- regression: test_canonicalize_path works on the raw C string
 -- (bytes kept, embedded NUL terminates).
 SELECT encode(b69_t2b(b69_canon(b69_b2t(decode('ff2f2f78', 'hex')))), 'hex');
  encode 
@@ -25,7 +25,7 @@ SELECT b69_canon('/a//b/./c/../d/');
  /a/b/d
 (1 row)
 
--- fp-regress-regress#7: test_valid_server_encoding stops at an embedded NUL.
+-- regression: test_valid_server_encoding stops at an embedded NUL.
 SELECT b69_valid_enc(b69_b2t(decode('555446380078', 'hex')));
  b69_valid_enc 
 ---------------
@@ -44,7 +44,7 @@ SELECT b69_valid_enc('UTF8');
  t
 (1 row)
 
--- fp-regress-regress#8: the result-type check precedes input validation.
+-- regression: the result-type check precedes input validation.
 SELECT b69_bad_enc(decode('ff', 'hex'), 'UTF8', 'UTF8', false);
 ERROR:  XX000: return type must be a row type
 SELECT b69_bad_enc(decode('ff', 'hex'), 'UTF8', 'LATIN1', false);
@@ -58,7 +58,7 @@ DROP FUNCTION b69_valid_enc(text);
 DROP FUNCTION b69_t2b(text);
 DROP FUNCTION b69_b2t(bytea);
 DROP FUNCTION b69_canon(text);
--- fp-rewrite-b1#1: get_rewrite_oid goes through the RULERELNAME syscache
+-- regression: get_rewrite_oid goes through the RULERELNAME syscache
 -- (positive, negative, overlong-name, rename-collision and post-drop lookups).
 CREATE TABLE b69r(i int);
 CREATE RULE b69rule AS ON INSERT TO b69r DO INSTEAD NOTHING;

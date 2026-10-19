@@ -302,3 +302,23 @@ fn ts_compare_string_returns_memcmp_difference() {
     assert_eq!(ts_compare_string(b"ab", b"a", true), 1);
     assert_eq!(ts_compare_string(b"a", b"ab", true), 0);
 }
+
+// tsvector_parser.c:220 / :334 "%s": the input bytes verbatim.
+#[test]
+fn parser_messages_keep_non_utf8_input_bytes() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let e = tsvector_in_core(mcx, b"\xff:0", None).unwrap_err();
+    assert_eq!(
+        e.message_raw.as_deref(),
+        Some(&b"wrong position info in tsvector: \"\xff:0\""[..])
+    );
+    let e = tsvector_in_core(mcx, b"\xff \\", None).unwrap_err();
+    assert_eq!(
+        e.message_raw.as_deref(),
+        Some(&b"there is no escaped character: \"\xff \\\""[..])
+    );
+    let e = tsvector_in_core(mcx, b"'\xff", None).unwrap_err();
+    assert_eq!(e.message_raw.as_deref(), Some(&b"syntax error in tsvector: \"'\xff\""[..]));
+    assert_eq!(parse_err("a:0"), "wrong position info in tsvector: \"a:0\"");
+}

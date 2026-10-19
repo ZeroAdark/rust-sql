@@ -91,19 +91,25 @@ impl XLogReaderRoutine for WalDirSource {
 
 // pg_waldump/compat.c timestamptz_to_str: localtime + strftime, frontend
 // flavor (the backend flavor prints ISO +TZ offsets instead).
+const USECS_PER_SEC: i64 = 1_000_000;
+const PG_EPOCH_OFFSET: i64 = 946_684_800; // (POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY
+
+// pg_waldump/compat.c timestamptz_to_time_t: C integer division truncates
+// toward zero, so a pre-2000 timestamp keeps its (negative) fraction.
+fn timestamptz_to_time_t(t: i64) -> i64 {
+    t / USECS_PER_SEC + PG_EPOCH_OFFSET
+}
+
 fn frontend_timestamptz_to_str(t: i64, out: &mut [u8; rmgrdesc::MAXDATELEN + 1]) -> usize {
-    const USECS_PER_SEC: i64 = 1_000_000;
-    const PG_EPOCH_OFFSET: i64 = 946_684_800; // (POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY
-    let secs = t.div_euclid(USECS_PER_SEC) + PG_EPOCH_OFFSET;
-    let time = secs as libc::time_t;
+    let time = timestamptz_to_time_t(t) as libc::time_t;
     // SAFETY: localtime_r with valid out-param; strftime with NUL-terminated fmt.
     unsafe {
         let mut tm: libc::tm = std::mem::zeroed();
         if libc::localtime_r(&time, &mut tm).is_null() {
             return 0;
         }
-        let mut ts = [0u8; 64];
-        let mut zone = [0u8; 64];
+        let mut ts = [0u8; rmgrdesc::MAXDATELEN + 1];
+        let mut zone = [0u8; rmgrdesc::MAXDATELEN + 1];
         let n = libc::strftime(
             ts.as_mut_ptr() as *mut libc::c_char,
             ts.len(),
@@ -266,4 +272,47 @@ fn main() {
         let _ = out.write_all(buf.as_bytes());
     }
     let _ = out.flush();
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    // compat.c:31 divides toward zero: -1 us is second 0 of the epoch, not
+    // second -1 (div_euclid printed one second early for every t < 0).
+    #[test]
+    fn pre_epoch_microseconds_truncate_toward_zero() {
+        assert_eq!(super::timestamptz_to_time_t(-1), super::PG_EPOCH_OFFSET);
+        assert_eq!(super::timestamptz_to_time_t(-999_999), super::PG_EPOCH_OFFSET);
+        assert_eq!(super::timestamptz_to_time_t(-1_000_000), super::PG_EPOCH_OFFSET - 1);
+        assert_eq!(super::timestamptz_to_time_t(1_500_000), super::PG_EPOCH_OFFSET + 1);
+    }
+}
+
+// glibc accepts quoted POSIX TZ abbreviations of any length; tzcode
+// platforms (macOS) clip them at 16, so only glibc can fill the buffer.
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    // The workspace's libc (0.2.189) does not bind tzset; declare it directly.
+    extern "C" {
+        fn tzset();
+    }
+
+    #[test]
+    fn zone_abbreviation_of_maxdatelen_fits_the_strftime_buffer() {
+        let abbr = "A".repeat(64);
+        let tz = std::ffi::CString::new(format!("<{abbr}>0")).unwrap();
+        // SAFETY: NUL-terminated name and value; tzset re-reads TZ.
+        unsafe {
+            libc::setenv(c"TZ".as_ptr(), tz.as_ptr(), 1);
+            tzset();
+        }
+        let mut out = [0u8; rmgrdesc::MAXDATELEN + 1];
+        let n = super::frontend_timestamptz_to_str(0, &mut out);
+        let s = std::str::from_utf8(&out[..n]).unwrap().to_string();
+        // SAFETY: as above.
+        unsafe {
+            libc::unsetenv(c"TZ".as_ptr());
+            tzset();
+        }
+        assert_eq!(s, format!("2000-01-01 00:00:00.000000 {abbr}"));
+    }
 }

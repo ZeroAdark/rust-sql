@@ -534,7 +534,7 @@ fn validate(mech: &OAuthMech, ctx: &OauthCtx, port: &Port, auth: &[u8]) -> PgRes
     let map_status = hba::check_usermap(
         hba.usermap.as_deref(),
         user_name,
-        authn_id.expect("authn_id set above"),
+        authn_id.expect("authn_id set above").as_bytes(),
         false,
     )?;
     Ok(map_status == STATUS_OK)

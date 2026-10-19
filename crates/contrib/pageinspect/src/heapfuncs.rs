@@ -27,21 +27,26 @@ fn bits_to_text(bits: &[u8], len: usize) -> String {
     s
 }
 
-fn text_to_bits(s: &str) -> PgResult<Vec<u8>> {
-    let bytes = s.as_bytes();
+fn text_to_bits(bytes: &[u8]) -> PgResult<Vec<u8>> {
     let mut bits = vec![0u8; bytes.len() / 8 + 1];
     for (off, &c) in bytes.iter().enumerate() {
         match c {
             b'0' => {}
             b'1' => bits[off / 8] |= 1 << (off % 8),
             _ => {
+                // heapfuncs.c:104 "%.*s" with pg_mblen: the raw bytes of one
+                // database-encoding character.
+                let len = if mbutils_seams::pg_mblen_range::is_installed() {
+                    mbutils_seams::pg_mblen_range::call(&bytes[off..])? as usize
+                } else {
+                    1
+                };
+                let mut msg = b"invalid character \"".to_vec();
+                msg.extend_from_slice(&bytes[off..(off + len).min(bytes.len())]);
+                msg.extend_from_slice(b"\" in t_bits string");
                 return Err(Box::new(
-                    PgError::error(format!(
-                        "invalid character \"{}\" in t_bits string",
-                        &s[off..off + s[off..].chars().next().map_or(1, char::len_utf8)]
-                    ))
-                    .with_sqlstate(ERRCODE_DATA_CORRUPTED),
-                ))
+                    PgError::error_raw_message(msg).with_sqlstate(ERRCODE_DATA_CORRUPTED),
+                ));
             }
         }
     }
@@ -59,12 +64,12 @@ pub(crate) fn fc_heap_page_items(
         // SAFETY: the arming context outlives this call.
         let mcx = unsafe { fcinfo.result_mcx_detached() };
         // SAFETY: STRICT bytea arg.
-        let v = unsafe { fcinfo.arg_varlena_packed(0)? };
-        let b = v.data();
+        let page = unsafe { fcinfo.arg_varlena_packed(0)? }.data().to_vec();
+        let b = page.as_slice();
         if b.len() < SizeOfPageHeaderData {
             return Err(param_err(format!("input page too small ({} bytes)", b.len())));
         }
-        let tupdesc = composite_tupdesc(mcx, flinfo)?;
+        let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
         let maxoff = page_max_offset_number(b);
         let mut rows = Vec::with_capacity(maxoff);
         for offnum in 1..=maxoff {
@@ -157,12 +162,14 @@ pub(crate) fn fc_tuple_data_split(
     let raw_data_null = fcinfo.argisnull(1);
     let t_infomask = fcinfo.arg(2).as_i32() as u16;
     let t_infomask2 = fcinfo.arg(3).as_i32() as u16;
-    let t_bits_str: Option<String> = if fcinfo.argisnull(4) {
+    let t_bits_str: Option<Vec<u8>> = if fcinfo.argisnull(4) {
         None
     } else {
         // SAFETY: null-checked above.
         let v = unsafe { fcinfo.arg_varlena_packed(4)? };
-        Some(String::from_utf8_lossy(v.data()).into_owned())
+        // text_to_cstring + strlen (heapfuncs.c:480): bytes up to the first NUL.
+        let b = v.data();
+        Some(b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())].to_vec())
     };
     let do_detoast = if fcinfo.nargs() >= 6 && !fcinfo.argisnull(5) {
         fcinfo.arg(5).as_bool()
@@ -318,7 +325,9 @@ fn tuple_data_split_internal(
             }
 
             let image: Vec<u8> = if attr.attlen == -1 && do_detoast {
-                detoast_seams::detoast_attr::call(mcx, &tupdata[off..off + len])?.to_vec()
+                // C hands detoast the attribute pointer, which reads its
+                // header words from the bytea itself, not a VARSIZE-bounded copy.
+                detoast_seams::detoast_attr::call(mcx, &tupdata[off..])?.to_vec()
             } else {
                 let mut img = Vec::with_capacity(len + 4);
                 img.extend_from_slice(&(((len + 4) as u32) << 2).to_ne_bytes());
@@ -380,7 +389,7 @@ pub(crate) fn fc_heap_tuple_infomask_flags(
 
     // SAFETY: the arming context outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
-    let tupdesc = composite_tupdesc(mcx, flinfo)?;
+    let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
 
     let (raw_names, combined_names) = infomask_flag_names(t_infomask, t_infomask2);
     let mut raw: Vec<Datum> = Vec::with_capacity(raw_names.len());
@@ -477,8 +486,8 @@ mod tests {
     #[test]
     fn t_bits_round_trip() {
         assert_eq!(bits_to_text(&[0b0000_0101], 8), "10100000");
-        let bits = text_to_bits("10100000").unwrap();
+        let bits = text_to_bits(b"10100000").unwrap();
         assert_eq!(bits[0], 0b0000_0101);
-        assert!(text_to_bits("10x").is_err());
+        assert!(text_to_bits(b"10x").is_err());
     }
 }

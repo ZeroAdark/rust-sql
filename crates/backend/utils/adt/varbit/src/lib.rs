@@ -84,7 +84,7 @@ pub fn bits_in<'mcx>(
             if c == b'1' {
                 r[ri] |= x;
             } else if c != b'0' {
-                return ereturn(escontext, None, bad_digit_err(&sp[i..], true));
+                return ereturn(escontext, None, bad_digit_err(&sp[i..], true)?);
             }
             x >>= 1;
             if x == 0 {
@@ -100,7 +100,7 @@ pub fn bits_in<'mcx>(
                 b'0'..=b'9' => c - b'0',
                 b'A'..=b'F' => c - b'A' + 10,
                 b'a'..=b'f' => c - b'a' + 10,
-                _ => return ereturn(escontext, None, bad_digit_err(&sp[i..], false)),
+                _ => return ereturn(escontext, None, bad_digit_err(&sp[i..], false)?),
             };
             if bc {
                 r[ri] |= x;
@@ -157,12 +157,13 @@ fn too_long_for_varying_err(atttypmod: i32) -> PgError {
 // varbit.c:235/260: errmsg("\"%.*s\" is not a valid ... digit",
 // pg_mblen_cstr(sp), sp) -- the whole character at `tail` in the database
 // encoding, sent as raw bytes when it is not valid UTF-8 (single-byte
-// encodings).
+// encodings). pg_mblen_cstr raises the hard invalid-byte-sequence error when
+// the character would run past the terminator (mbutils.c:1052-1054).
 #[cold]
 #[inline(never)]
-fn bad_digit_err(tail: &[u8], binary: bool) -> PgError {
+fn bad_digit_err(tail: &[u8], binary: bool) -> PgResult<PgError> {
     let kind = if binary { "binary" } else { "hexadecimal" };
-    let n = (::mbutils::pg_mblen(tail) as usize).clamp(1, tail.len());
+    let n = ::mbutils::pg_mblen_range(tail)? as usize;
     let ch = &tail[..n];
     let err = match core::str::from_utf8(ch) {
         Ok(ch) => PgError::error(format!("\"{ch}\" is not a valid {kind} digit")),
@@ -174,7 +175,7 @@ fn bad_digit_err(tail: &[u8], binary: bool) -> PgError {
             PgError::error_raw_message(raw)
         }
     };
-    err.with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
+    Ok(err.with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION))
 }
 
 /// C `DirectFunctionCall3(bit_in, string, InvalidOid, -1)` for the parser's

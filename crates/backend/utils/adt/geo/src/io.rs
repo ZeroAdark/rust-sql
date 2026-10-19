@@ -28,11 +28,8 @@ struct Cursor<'a> {
 }
 
 impl<'a> Cursor<'a> {
-    fn new(s: &'a str) -> Self {
-        Cursor {
-            bytes: s.as_bytes(),
-            pos: 0,
-        }
+    fn new(s: &'a [u8]) -> Self {
+        Cursor { bytes: s, pos: 0 }
     }
 
     #[inline]
@@ -86,8 +83,14 @@ impl<'a> Cursor<'a> {
 
     #[inline]
     fn tail(&self) -> &'a str {
-        // ASCII-only consumption keeps pos on a char boundary.
-        core::str::from_utf8(&self.bytes[self.pos.min(self.bytes.len())..]).unwrap_or("")
+        // ASCII-only consumption keeps pos on a char boundary; strtod stops
+        // at the first non-UTF-8 byte just as it stops at any other junk.
+        let rest = &self.bytes[self.pos.min(self.bytes.len())..];
+        match core::str::from_utf8(rest) {
+            Ok(s) => s,
+            // SAFETY: valid_up_to bounds the longest valid UTF-8 prefix.
+            Err(e) => unsafe { core::str::from_utf8_unchecked(&rest[..e.valid_up_to()]) },
+        }
     }
 
     // C `strrchr(str, c) == str`: the last occurrence of c is the current byte.
@@ -106,7 +109,7 @@ impl<'a> Cursor<'a> {
 fn single_decode(
     cur: &mut Cursor,
     type_name: &str,
-    orig_string: &str,
+    orig_string: &[u8],
     escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<f64> {
     let tail = cur.tail();
@@ -125,7 +128,7 @@ fn pair_decode(
     cur: &mut Cursor,
     report_endptr: bool,
     type_name: &str,
-    orig_string: &str,
+    orig_string: &[u8],
     mut escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<(f64, f64)> {
     cur.skip_ws();
@@ -170,7 +173,7 @@ fn path_decode(
     mut put: impl FnMut(usize, Point),
     report_endptr: bool,
     type_name: &str,
-    orig_string: &str,
+    orig_string: &[u8],
     mut escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<bool> {
     let mut depth = 0i32;
@@ -220,8 +223,8 @@ fn path_decode(
     Ok(isopen)
 }
 
-fn pair_count(s: &str, delim: u8) -> i32 {
-    let ndelim = s.bytes().filter(|&b| b == delim).count() as i32;
+fn pair_count(s: &[u8], delim: u8) -> i32 {
+    let ndelim = s.iter().filter(|&&b| b == delim).count() as i32;
     if ndelim % 2 != 0 {
         (ndelim + 1) / 2
     } else {
@@ -306,7 +309,11 @@ pub fn check_points_overflow(
     ::mcx::check_alloc_size(size as usize)
 }
 
-pub fn point_in(str: &str, escontext: Option<&mut SoftErrorContext>) -> PgResult<Point> {
+pub fn point_in(
+    str: impl AsRef<[u8]>,
+    escontext: Option<&mut SoftErrorContext>,
+) -> PgResult<Point> {
+    let str = str.as_ref();
     let mut cur = Cursor::new(str);
     let (x, y) = pair_decode(&mut cur, false, "point", str, escontext)?;
     Ok(Point { x, y })
@@ -319,7 +326,11 @@ pub fn point_out(pt: &Point, out: &mut Vec<u8>) {
     path_encode(PathDelim::None, &one, out).expect("fixed-size geo output is below MaxAllocSize");
 }
 
-pub fn box_in(str: &str, mut escontext: Option<&mut SoftErrorContext>) -> PgResult<BOX> {
+pub fn box_in(
+    str: impl AsRef<[u8]>,
+    mut escontext: Option<&mut SoftErrorContext>,
+) -> PgResult<BOX> {
+    let str = str.as_ref();
     let mut cur = Cursor::new(str);
     let mut corners = [Point::default(); 2];
     path_decode(
@@ -358,7 +369,7 @@ pub fn box_out(b: &BOX, out: &mut Vec<u8>) {
 
 fn line_decode(
     cur: &mut Cursor,
-    str: &str,
+    str: &[u8],
     mut escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<LINE> {
     let a = single_decode(cur, "line", str, escontext.as_deref_mut())?;
@@ -394,7 +405,11 @@ fn invalid_line_spec(msg: &str) -> PgError {
     PgError::error(msg).with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
 }
 
-pub fn line_in(str: &str, mut escontext: Option<&mut SoftErrorContext>) -> PgResult<LINE> {
+pub fn line_in(
+    str: impl AsRef<[u8]>,
+    mut escontext: Option<&mut SoftErrorContext>,
+) -> PgResult<LINE> {
+    let str = str.as_ref();
     let mut cur = Cursor::new(str);
     cur.skip_ws();
     if cur.cur() == LDELIM_L {
@@ -449,7 +464,11 @@ pub fn line_out(line: &LINE, out: &mut Vec<u8>) {
     out.push(RDELIM_L);
 }
 
-pub fn lseg_in(str: &str, mut escontext: Option<&mut SoftErrorContext>) -> PgResult<LSEG> {
+pub fn lseg_in(
+    str: impl AsRef<[u8]>,
+    mut escontext: Option<&mut SoftErrorContext>,
+) -> PgResult<LSEG> {
+    let str = str.as_ref();
     let mut cur = Cursor::new(str);
     let mut pts = [Point::default(); 2];
     path_decode(
@@ -559,9 +578,10 @@ fn poly_image_impl<'m>(
 
 pub fn path_in<'m>(
     mcx: Mcx<'m>,
-    str: &str,
+    str: impl AsRef<[u8]>,
     mut escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<Varlena<'m>> {
+    let str = str.as_ref();
     let npts = pair_count(str, DELIM);
     if npts <= 0 {
         let e = ereturn(escontext, (), invalid_input("path", str));
@@ -630,9 +650,10 @@ pub fn path_out(path: &PathRef<'_>, out: &mut Vec<u8>) -> PgResult<()> {
 
 pub fn poly_in<'m>(
     mcx: Mcx<'m>,
-    str: &str,
+    str: impl AsRef<[u8]>,
     mut escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<Varlena<'m>> {
+    let str = str.as_ref();
     let npts = pair_count(str, DELIM);
     if npts <= 0 {
         let e = ereturn(escontext, (), invalid_input("polygon", str));
@@ -669,7 +690,11 @@ pub fn poly_out(poly: &PolyRef<'_>, out: &mut Vec<u8>) -> PgResult<()> {
     path_encode(PathDelim::Closed, poly, out)
 }
 
-pub fn circle_in(str: &str, mut escontext: Option<&mut SoftErrorContext>) -> PgResult<CIRCLE> {
+pub fn circle_in(
+    str: impl AsRef<[u8]>,
+    mut escontext: Option<&mut SoftErrorContext>,
+) -> PgResult<CIRCLE> {
+    let str = str.as_ref();
     let mut cur = Cursor::new(str);
     let mut depth = 0i32;
 

@@ -178,20 +178,27 @@ pub fn snapshot_image<'mcx>(
 
 #[cold]
 #[inline(never)]
-fn bad_format_err(input: &str) -> PgError {
-    PgError::error(format!(
-        "invalid input syntax for type pg_snapshot: \"{input}\""
-    ))
-    .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
+fn bad_format_err(input: &[u8]) -> PgError {
+    // xid8funcs.c:323 "%s": the input bytes verbatim (SQL_ASCII high bytes).
+    let err = match core::str::from_utf8(input) {
+        Ok(s) => PgError::error(format!("invalid input syntax for type pg_snapshot: \"{s}\"")),
+        Err(_) => {
+            let mut msg = b"invalid input syntax for type pg_snapshot: \"".to_vec();
+            msg.extend_from_slice(input);
+            msg.push(b'"');
+            PgError::error_raw_message(msg)
+        }
+    };
+    err.with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
 }
 
 // parse_snapshot: "xmin:xmax:xip,xip,..."; Ok(None) = soft-reported failure.
 pub fn parse_snapshot<'mcx>(
     mcx: Mcx<'mcx>,
-    input: &str,
+    input: &[u8],
     mut escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<Option<::datum::Varlena<'mcx>>> {
-    let bytes = input.as_bytes();
+    let bytes = input;
 
     let (xmin, end) = strtou64(bytes);
     let mut pos = end;

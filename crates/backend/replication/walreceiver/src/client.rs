@@ -43,17 +43,28 @@ fn lsn_fmt(lsn: XLogRecPtr) -> String {
     format!("{:X}/{:X}", (lsn >> 32) as u32, lsn as u32)
 }
 
-/// libpqrcv_check_conninfo.
+/// libpqrcv_check_conninfo: PQconninfoParse rejects unknown keywords too
+/// (fe-connect.c:306), so primary_conninfo and slotsync — which reach this
+/// without the subscription DDL's separate validating parser — refuse them.
 pub fn check_conninfo(conninfo: &str) -> PgResult<Vec<(String, String)>> {
-    match parse_conninfo(conninfo) {
-        Ok(opts) => Ok(opts),
-        Err(e) => throw(
+    let bad = |e: String| {
+        throw(
             ereport(ERROR)
                 .errcode(ERRCODE_SYNTAX_ERROR)
                 .errmsg(format!("invalid connection string syntax: {e}"))
                 .finish(loc("libpqrcv_check_conninfo")),
-        ),
+        )
+    };
+    let opts = match parse_conninfo(conninfo) {
+        Ok(opts) => opts,
+        Err(e) => return bad(e),
+    };
+    for (k, _) in &opts {
+        if pgclient::lookup_option(k).is_none() {
+            return bad(format!("invalid connection option \"{k}\""));
+        }
     }
+    Ok(opts)
 }
 
 // libpqrcv_connect (replication=true, logical=false): the physical
@@ -71,6 +82,12 @@ pub fn connect(conninfo: &str, appname: &str) -> PgResult<Result<PgConn, String>
 // itself must carry a password) AND, like C, verifies post-connect via
 // PQconnectionUsedPassword that the server actually demanded the credential,
 // so a non-superuser subscription can't ride ambient trust/peer/ident auth.
+// libpq's startup packet carries the conninfo (or PGCLIENTENCODING)
+// client_encoding whenever one is set (fe-protocol3.c:2490-2491).
+fn conninfo_client_encoding(opts: &[(String, String)]) -> Option<&str> {
+    opt(opts, "client_encoding").filter(|e| !e.is_empty())
+}
+
 pub fn connect_extended(
     conninfo: &str,
     replication: bool,
@@ -98,6 +115,7 @@ pub fn connect_extended(
         Err(e) => return Ok(Err(e)),
     };
     let user = opt(&opts, "user").map(|s| s.to_string()).unwrap_or_else(os_user_name);
+    let fallback_appname = appname;
     let appname = opt(&opts, "application_name").unwrap_or(appname).to_string();
     let options = opt(&opts, "options").unwrap_or("").to_string();
     let dbname = opt(&opts, "dbname").unwrap_or("").to_string();
@@ -117,10 +135,13 @@ pub fn connect_extended(
     if replication {
         params.push(("replication", if logical { "database" } else { "true" }));
     }
-    let encoding;
-    if logical {
+    let encoding = if logical {
         // Tell the publisher to translate to our encoding.
-        encoding = mbutils_seams::get_database_encoding_name::call();
+        Some(mbutils_seams::get_database_encoding_name::call().to_string())
+    } else {
+        conninfo_client_encoding(&opts).map(str::to_string)
+    };
+    if let Some(encoding) = encoding.as_deref() {
         params.push(("client_encoding", encoding));
     }
     params.push(("application_name", appname.as_str()));
@@ -128,7 +149,27 @@ pub fn connect_extended(
         params.push(("options", options_val));
     }
 
-    let mut conn = match pgclient::connect(opts, &params, WE)? {
+    // The extra keys libpqrcv_connect passes beside the conninfo
+    // (libpqwalreceiver.c:169-208) become the connection's options, so
+    // PQconninfo() — pg_stat_wal_receiver.conninfo — reports them.
+    let mut conn_opts = opts;
+    let mut set = |k: &str, v: &str| {
+        conn_opts.retain(|(key, _)| key != k);
+        conn_opts.push((k.to_string(), v.to_string()));
+    };
+    if replication {
+        set("replication", if logical { "database" } else { "true" });
+        if logical {
+            if let Some(encoding) = encoding.as_deref() {
+                set("client_encoding", encoding);
+            }
+            set("options", options_val);
+        } else {
+            set("dbname", "replication");
+        }
+    }
+    set("fallback_application_name", fallback_appname);
+    let mut conn = match pgclient::connect(conn_opts, &params, WE)? {
         Ok(c) => c,
         Err(e) => return Ok(Err(e)),
     };
@@ -224,6 +265,11 @@ fn sscanf_lsn(s: &str) -> Option<XLogRecPtr> {
         while i < b.len() && matches!(b[i], b' ' | b'\t' | b'\n' | b'\x0b' | b'\x0c' | b'\r') {
             i += 1;
         }
+        // strtoul: an optional sign precedes the digits ('-' negates).
+        let neg = matches!(b.get(i), Some(b'-'));
+        if neg || matches!(b.get(i), Some(b'+')) {
+            i += 1;
+        }
         if b.len() >= i + 2 && b[i] == b'0' && (b[i + 1] == b'x' || b[i + 1] == b'X') {
             i += 2;
         }
@@ -233,7 +279,7 @@ fn sscanf_lsn(s: &str) -> Option<XLogRecPtr> {
             v = v.wrapping_mul(16).wrapping_add((b[i] as char).to_digit(16)?);
             i += 1;
         }
-        (i > start).then_some((v, i))
+        (i > start).then_some((if neg { v.wrapping_neg() } else { v }, i))
     }
     let b = s.as_bytes();
     let (hi, n) = scan_x(b)?;
@@ -596,6 +642,16 @@ mod tests {
             Err(e) => assert!(e.message().contains("password is required")),
             Ok(_) => panic!("expected password-required ereport"),
         }
+    }
+
+    // libpqrcv_connect forces client_encoding only for logical connections;
+    // libpq still forwards a conninfo/PGCLIENTENCODING value for physical ones.
+    #[test]
+    fn physical_connection_forwards_conninfo_client_encoding() {
+        let opts = |v: &str| vec![("client_encoding".to_string(), v.to_string())];
+        assert_eq!(conninfo_client_encoding(&opts("LATIN1")), Some("LATIN1"));
+        assert_eq!(conninfo_client_encoding(&opts("")), None);
+        assert_eq!(conninfo_client_encoding(&[]), None);
     }
 
     // walrcv_create_slot for wal_receiver_create_temp_slot (walreceiver.c:355):
@@ -1064,10 +1120,66 @@ mod tests {
         assert_eq!(sscanf_lsn("0x1A/0X2b"), Some(0x1A_0000_002B));
         assert_eq!(sscanf_lsn("FFFFFFFF/FFFFFFFF"), Some(u64::MAX));
         assert_eq!(sscanf_lsn("1/2junk"), Some(0x1_0000_0002));
+        // %X takes strtoul's optional sign: "+0/10" is 0/10, "-1" wraps.
+        assert_eq!(sscanf_lsn("+0/10"), Some(0x10));
+        assert_eq!(sscanf_lsn("1/+2"), Some(0x1_0000_0002));
+        assert_eq!(sscanf_lsn("-1/0"), Some(0xFFFF_FFFF_0000_0000));
+        assert_eq!(sscanf_lsn("+/1"), None);
         assert_eq!(sscanf_lsn(""), None);
         assert_eq!(sscanf_lsn("1"), None);
         assert_eq!(sscanf_lsn("1/"), None);
         assert_eq!(sscanf_lsn("/1"), None);
         assert_eq!(sscanf_lsn("g/1"), None);
+    }
+
+    // libpqrcv_get_conninfo (libpqwalreceiver.c:358) walks PQconninfo() of
+    // the established connection, so the dbname=replication, replication=true
+    // and fallback_application_name keys libpqrcv_connect adds beside the
+    // conninfo (libpqwalreceiver.c:169-208) show in pg_stat_wal_receiver.
+    #[test]
+    fn display_conninfo_carries_the_generated_startup_options() {
+        let (port, server) = scripted_server(vec![]);
+        client_env();
+        let conn = match connect(
+            &format!("host=127.0.0.1 port={port} user=walrcv dbname=unused_db sslmode=disable"),
+            "walreceiver",
+        ) {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => panic!("scripted server refused: {e}"),
+            Err(e) => panic!("ereport connecting: {e}"),
+        };
+        let shown = conn.display_conninfo();
+        drop(conn);
+        server.join().unwrap();
+        // The C 18.6 standby's pg_stat_wal_receiver.conninfo for the same
+        // options (the reference build: SSL, no GSSAPI).
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(
+            shown,
+            format!(
+                "user=walrcv passfile={home}/.pgpass channel_binding=prefer dbname=replication \
+                 host=127.0.0.1 port={port} fallback_application_name=walreceiver sslmode=disable \
+                 sslnegotiation=postgres sslcompression=0 sslcertmode=allow sslsni=1 \
+                 ssl_min_protocol_version=TLSv1.2 gssencmode=disable krbsrvname=postgres \
+                 gssdelegation=0 target_session_attrs=any load_balance_hosts=disable"
+            )
+        );
+    }
+
+    // libpqrcv_check_conninfo (libpqwalreceiver.c:299): PQconninfoParse
+    // rejects an unknown keyword — the gate primary_conninfo and slotsync
+    // rely on (they have no separate validating parser).
+    #[test]
+    fn check_conninfo_rejects_an_unknown_keyword() {
+        let e = match check_conninfo("host=127.0.0.1 nonexistent_option=1") {
+            Ok(_) => panic!("unknown keyword accepted"),
+            Err(e) => e,
+        };
+        assert_eq!(
+            e.message(),
+            "invalid connection string syntax: invalid connection option \"nonexistent_option\""
+        );
+        assert_eq!(e.sqlstate(), ERRCODE_SYNTAX_ERROR);
+        assert!(check_conninfo("host=127.0.0.1 port=5432 replication=true user=r").is_ok());
     }
 }

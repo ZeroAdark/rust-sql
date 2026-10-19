@@ -54,6 +54,18 @@ fn text_arg0(fcinfo: &mut Fcinfo) -> PgResult<String> {
 /// byte-equal — pinning the raw argument would return true yet never match
 /// the datname the reap loop compares. ERRORs undefined_database on a miss,
 /// insufficient_privilege on a failed check.
+/// A pin key for a database that no longer resolves: the catalog datname
+/// the pin was filed under is the argument clipped to NAMEDATALEN-1 bytes
+/// on a character boundary (namein).
+fn stale_pin_key(name: &str) -> String {
+    let limit = types_core::NAMEDATALEN - 1;
+    if name.len() < limit as usize {
+        return name.to_owned();
+    }
+    let clipped = mbutils::pg_mbcliplen(name.as_bytes(), name.len() as i32, limit) as usize;
+    name[..clipped].to_owned()
+}
+
 fn owner_or_superuser_check(fcinfo: &Fcinfo, name: &str, func: &'static str) -> PgResult<String> {
     let mcx = fcinfo.result_mcx();
     let Some(db) = pg_database::get_database_tuple_by_name(mcx, name)? else {
@@ -125,9 +137,9 @@ pub fn fc_pgrust_unpin_database(
                         .into());
                 }
                 // Superuser clearing a stale pin (dropped-while-pinned):
-                // pins are stored as catalog datnames, so the raw argument
-                // compares exactly.
-                name
+                // pins are stored as catalog datnames, so the argument is
+                // clipped the way CREATE DATABASE clipped the name.
+                stale_pin_key(&name)
             }
         }
     };
@@ -213,6 +225,14 @@ pub static JANITOR_BUILTINS: &[FmgrBuiltin] = &[
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stale_pin_key_clips_like_the_catalog_datname() {
+        let long = "d".repeat(70);
+        assert_eq!(super::stale_pin_key(&long), "d".repeat(63));
+        assert_eq!(super::stale_pin_key(&"d".repeat(63)), "d".repeat(63));
+        assert_eq!(super::stale_pin_key("short"), "short");
+    }
+
     use super::*;
 
     /// Reserved-oid law (the coverage.rs test, replicated for this table):

@@ -86,7 +86,11 @@ impl Default for ImportOptions {
 /// (relation, column) of the importable relations in `remote_schema`.
 /// search_path is pinned to pg_catalog on the connection, so format_type()
 /// and pg_get_expr() always schema-qualify, as C relies on.
-pub(crate) fn import_columns_query(
+pub(crate) fn effective_import_collate(import_collate: bool, server_version: i32) -> bool {
+    import_collate && server_version >= 90100
+}
+
+fn import_columns_query(
     server_version: i32,
     import_collate: bool,
     list_type: ImportForeignSchemaType,
@@ -280,8 +284,12 @@ pub fn postgresImportForeignSchema<'mcx>(
             table_names.push(rv.relname.expect("RangeVar.relname"));
         }
     }
+    // Don't attempt to import collation if remote server hasn't got it
+    // (postgres_fdw.c:5505).
+    let server_version = connection::server_version(conn_key)?;
+    opts.import_collate = effective_import_collate(opts.import_collate, server_version);
     let buf = import_columns_query(
-        connection::server_version(conn_key)?,
+        server_version,
         opts.import_collate,
         stmt.list_type,
         remote_schema,
@@ -363,8 +371,28 @@ pub fn postgresImportForeignSchema<'mcx>(
 
 #[cfg(test)]
 mod tests {
-    use super::{col, column_def_tail, import_columns_query, ImportOptions};
+    use super::{
+        col, column_def_tail, effective_import_collate, import_columns_query, ImportOptions,
+    };
     use types_nodes::rawnodes::ImportForeignSchemaType;
+
+    // postgres_fdw.c:5505: a remote older than 9.1 has no pg_collation, so
+    // import_collate is forced off regardless of the IMPORT option.
+    #[test]
+    fn import_collate_is_forced_off_below_9_1() {
+        assert!(!effective_import_collate(true, 90024));
+        assert!(effective_import_collate(true, 90100));
+        assert!(effective_import_collate(true, 180006));
+        assert!(!effective_import_collate(false, 180006));
+        let q90 = import_columns_query(
+            90024,
+            effective_import_collate(true, 90024),
+            ImportForeignSchemaType::FDW_IMPORT_SCHEMA_ALL,
+            "s",
+            &[],
+        );
+        assert!(!q90.contains("pg_collation"), "{q90}");
+    }
 
     // postgres_fdw.c:5559-5564 / 5602-5604: attgenerated is only selected from
     // a remote server >= 12 (NULL otherwise) and "AND NOT c.relispartition" is

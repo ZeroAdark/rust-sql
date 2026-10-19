@@ -5,7 +5,7 @@ use condition_variable::ConditionVariable;
 use init_small::globals;
 use lwlock::{LWLock, LWLockPadded};
 use types_core::{Buffer, ForkNumber, InvalidBlockNumber, InvalidOid, BLCKSZ, INVALID_PROC_NUMBER};
-use types_error::{PgResult, ERRCODE_OUT_OF_MEMORY, ERROR};
+use types_error::PgResult;
 use types_storage::buf::{buftag, PgAioWaitRef, BM_LOCKED, FREENEXT_END_OF_LIST};
 use types_storage::LWTRANCHE_BUFFER_CONTENT;
 
@@ -227,6 +227,9 @@ pub fn BufferGetBlockPtr(buffer: Buffer) -> *mut u8 {
 const C_PG_CACHE_LINE_SIZE: usize = 128;
 const C_SIZEOF_CONDITION_VARIABLE_MINIMALLY_PADDED: usize = 16;
 const C_SIZEOF_CKPT_SORT_ITEM: usize = 20;
+const _: () = assert!(
+    core::mem::size_of::<ConditionVariable>() <= C_SIZEOF_CONDITION_VARIABLE_MINIMALLY_PADDED
+);
 
 /// BufferManagerShmemSize (buf_init.c:145): the shared-memory estimate for
 /// the buffer pool — descriptors, blocks, freelist.c's structures, the I/O
@@ -259,23 +262,22 @@ pub fn BufferManagerShmemInit() -> PgResult<()> {
     assert!(n > 0, "NBuffers not set");
     let nu = n as usize;
 
-    let desc_layout =
-        core::alloc::Layout::array::<BufferDescPadded>(nu).expect("buffer descriptor layout");
-    // SAFETY: non-zero layout; initialized element-by-element below before publish.
-    let descs = unsafe { std::alloc::alloc(desc_layout) } as *mut BufferDescPadded;
-    let blk_layout = core::alloc::Layout::from_size_align(nu * BLCKSZ, PG_IO_ALIGN_SIZE)
-        .expect("buffer block layout");
-    // SAFETY: non-zero layout; zeroed like a fresh shmem segment.
-    let blocks = unsafe { std::alloc::alloc_zeroed(blk_layout) };
-    let cv_layout = core::alloc::Layout::array::<ConditionVariable>(nu).expect("buffer IO CV layout");
-    // SAFETY: non-zero layout; initialized element-by-element below before publish.
-    let io_cvs = unsafe { std::alloc::alloc(cv_layout) } as *mut ConditionVariable;
-    if descs.is_null() || blocks.is_null() || io_cvs.is_null() {
-        return Err(Box::new(
-            types_error::PgError::new(ERROR, "out of memory")
-                .with_sqlstate(ERRCODE_OUT_OF_MEMORY),
-        ));
-    }
+    // buf_init.c:77-101: the pool's four ShmemIndex rows, C's names, sizes
+    // and order (pg_shmem_allocations lists them); the arrays live in them.
+    let (descs, _) =
+        shmem::ShmemInitStruct("Buffer Descriptors", mcx::mul_size(nu, BUFFERDESC_PAD_TO_SIZE)?)?;
+    let descs = descs as *mut BufferDescPadded;
+    let (blocks, _) = shmem::ShmemInitStruct(
+        "Buffer Blocks",
+        mcx::add_size(mcx::mul_size(nu, BLCKSZ)?, PG_IO_ALIGN_SIZE)?,
+    )?;
+    let blocks = blocks.wrapping_add(blocks.align_offset(PG_IO_ALIGN_SIZE));
+    let (io_cvs, _) = shmem::ShmemInitStruct(
+        "Buffer IO Condition Variables",
+        mcx::mul_size(nu, C_SIZEOF_CONDITION_VARIABLE_MINIMALLY_PADDED)?,
+    )?;
+    let io_cvs = io_cvs as *mut ConditionVariable;
+    shmem::ShmemInitStruct("Checkpoint BufferIds", mcx::mul_size(nu, C_SIZEOF_CKPT_SORT_ITEM)?)?;
     for i in 0..nu {
         let free_next = if i + 1 < nu {
             (i + 1) as i32

@@ -147,7 +147,7 @@ static WAIT_EVENT_IPC_NAMES: [&str; 59] = [
     // upstream 33101632235a (18.6): Fix cascading standby reconnect failure after archive fallback
     // (wait_event_names.txt ABI_compatibility row: index 57).
     "WalReceiverUpstreamCatchup",
-    // pgrust-specific (GL-FLUSHPIPE-1): the pipelined sync-commit
+    // pgrust-specific (regression): the pipelined sync-commit
     // durability wait (transam_xlog::flushpipe WAIT_EVENT_FLUSH_PIPELINE =
     // PG_WAIT_IPC + 58 — keep the index in sync with this row).
     "FlushPipeline",

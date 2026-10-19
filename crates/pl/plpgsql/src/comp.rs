@@ -469,7 +469,7 @@ impl CompState {
 
     // plpgsql_parse_cwordtype: block-qualified var %TYPE, else table.column
     // (or schema.table.column) %TYPE from pg_attribute.
-    pub fn parse_cwordtype(&self, idents: &[String]) -> PgResult<PlType> {
+    pub fn parse_cwordtype(&self, idents: &[String]) -> PgResult<Option<PlType>> {
         let (schemaname, relname, fldname) = match idents.len() {
             2 => {
                 if let Some((idx, nnames)) =
@@ -478,14 +478,15 @@ impl CompState {
                     let item = &self.ns[idx as usize];
                     if item.itemtype == NsType::Var {
                         if let PlDatum::Var(v) = &self.datums[item.itemno as usize] {
-                            return Ok(v.datatype.clone());
+                            return Ok(Some(v.datatype.clone()));
                         }
                     }
+                    // pl_comp.c:1610: a block-qualified record's datatype,
+                    // NULL for a datatype-less rec (trigger NEW/OLD) so the
+                    // caller falls through to plain type-name parsing.
                     if item.itemtype == NsType::Rec && nnames == 2 {
                         if let PlDatum::Rec(r) = &self.datums[item.itemno as usize] {
-                            if let Some(dt) = &r.datatype {
-                                return Ok(dt.clone());
-                            }
+                            return Ok(r.datatype.clone());
                         }
                     }
                 }
@@ -535,7 +536,7 @@ impl CompState {
                     format!("cache lookup failed for attribute {attnum} of relation {class_oid}"),
                 )
             })?;
-        Self::build_datatype(shape.atttypid, shape.atttypmod, shape.attcollation, None)
+        Self::build_datatype(shape.atttypid, shape.atttypmod, shape.attcollation, None).map(Some)
     }
 }
 

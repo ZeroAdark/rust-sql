@@ -263,13 +263,17 @@ pub fn LockAcquireExtended(
                 } else {
                     "Processes holding the lock"
                 };
-                elog_seams::ereport_msg::call(
-                    LOG,
-                    format!(
-                        "process {} could not obtain {modename} on {tag_desc}",
-                        init_small::globals::MyProcPid()
-                    ),
-                    Some(format!("{noun}: {holders}, Wait queue: {waiters}.")),
+                // lock.c:1187 errdetail_log_plural: server log only.
+                elog_seams::ereport::call(
+                    types_error::PgError::new(
+                        LOG,
+                        format!(
+                            "process {} could not obtain {modename} on {tag_desc}",
+                            init_small::globals::MyProcPid()
+                        ),
+                    )
+                    .with_detail_log(format!("{noun}: {holders}, Wait queue: {waiters}."))
+                    .with_location("lock.c", 1184, "LockAcquireExtended"),
                 )?;
             }
             remove_locallock_if_unused(&localtag)?;

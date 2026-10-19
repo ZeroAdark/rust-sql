@@ -81,3 +81,52 @@ fn deep_regex_nesting_reports_etoobig_and_does_not_abort() {
         assert_eq!(line, format!("PROBE ERR {REG_ETOOBIG}"), "depth {depth}: got {line:?}");
     }
 }
+
+/// regexport.c traverse_lacons() check_stack_depth(): the guard's failure is
+/// the structured 54001 ereport, restored losslessly at the statement
+/// boundary from a `Box<PgError>` panic payload (pg_trgm's NFA walk reaches
+/// it through pg_reg_getnumoutarcs/pg_reg_getoutarcs, which return no error).
+#[test]
+fn traverse_lacons_stack_guard_raises_54001() {
+    use regex_core::regex_export_free_error::{pg_reg_getnumoutarcs, pg_reg_getnumstates};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use types_error::{PgError, ERRCODE_STATEMENT_TOO_COMPLEX};
+
+    let h = std::thread::Builder::new()
+        .stack_size(32 << 20)
+        .spawn(|| {
+            ::stack_depth::set_stack_base();
+            ::stack_depth::set_thread_stack_ceiling(32 << 20);
+            ::stack_depth::set_enforced_stack_budget_for_tests(8 << 20);
+            // A chain of 2000 two-chr lookaheads: one LACON arc per state, so
+            // the outarc walk from the chain's head recurses 2000 deep.
+            let pat: Vec<u32> = format!("{}ab", "(?=ab)".repeat(2000))
+                .chars()
+                .map(|c| c as u32)
+                .collect();
+            let ctx = MemoryContext::new("t");
+            let re = pg_regcomp(ctx.mcx(), &pat, REG_ADVANCED, 0).expect("compiles");
+            let nstates = pg_reg_getnumstates(&re);
+            for st in 0..nstates {
+                pg_reg_getnumoutarcs(&re, st);
+            }
+            ::stack_depth::set_enforced_stack_budget_for_tests(64 << 10);
+            let mut fired = 0;
+            for st in 0..nstates {
+                let Err(payload) = catch_unwind(AssertUnwindSafe(|| pg_reg_getnumoutarcs(&re, st)))
+                else {
+                    continue;
+                };
+                let e = payload
+                    .downcast::<Box<PgError>>()
+                    .expect("stack guard must panic with the Box<PgError> payload");
+                assert_eq!(e.sqlstate(), ERRCODE_STATEMENT_TOO_COMPLEX);
+                assert_eq!(e.message(), "stack depth limit exceeded");
+                assert!(e.hint().is_some_and(|h| h.contains("max_stack_depth")), "{:?}", e.hint());
+                fired += 1;
+            }
+            assert!(fired > 0, "the 64 kB budget must trip the walk");
+        })
+        .unwrap();
+    h.join().expect("walk thread must not die");
+}

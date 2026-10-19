@@ -1,4 +1,4 @@
-# proofs/wall-retry runqueue — FLEET WALL-RETRY lane (2026-07-29).
+# proofs/wall-retry runqueue — CI WALL-RETRY lane (2026-07-29).
 # Re-attempts the memory-walled harness set at a BIG per-solve budget
 # (KANI_SOLVE_RSS_GB=40 on a 128GB c8g.16xlarge, conc 3) — every row that
 # walled on the 6-8GiB laptop/pod caps gets a 40GiB ceiling here.

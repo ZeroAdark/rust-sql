@@ -1052,6 +1052,12 @@ pub fn run_hash_plane_owned_group(ctx: &SqeCtx, node: &PlanNode) -> AnswerSet {
         cols.push(c);
     }
     let ncols = cols.len();
+    let packed_lanes: Vec<(usize, crate::bank::Face)> = [sum_idx, avg_idx]
+        .into_iter()
+        .filter(|&ci| ci != usize::MAX)
+        .map(|ci| (ci, bank.face(cols[ci])))
+        .filter(|(_, f)| matches!(f, crate::bank::Face::PackedNumeric { .. }))
+        .collect();
 
     // partition law over the leading group col's ndv estimate.
     let ndv = ctx.faces.stats(bank, g0).ndv_est_sum() as usize;
@@ -1084,6 +1090,7 @@ pub fn run_hash_plane_owned_group(ctx: &SqeCtx, node: &PlanNode) -> AnswerSet {
         pays: Vec<Vec<u32>>,  // packed path
         pays_a: Vec<Vec<u32>>, // wide path: sum inputs
         pays_b: Vec<Vec<u64>>, // wide path: avg inputs
+        mant: Vec<Vec<u64>>,
         sp: Option<SpillW>,
     }
     struct SK {
@@ -1145,6 +1152,7 @@ pub fn run_hash_plane_owned_group(ctx: &SqeCtx, node: &PlanNode) -> AnswerSet {
                 pays,
                 pays_a,
                 pays_b,
+                mant: packed_lanes.iter().map(|_| Vec::new()).collect(),
                 sp: storer.as_ref().map(|st| SpillW::new(&**st, "scatter", w)),
             }
         },
@@ -1165,6 +1173,13 @@ pub fn run_hash_plane_owned_group(ctx: &SqeCtx, node: &PlanNode) -> AnswerSet {
                 let d = scr.decode_full(cur, g, rows);
                 // each slice lives in its own scratch until the next granule
                 ds.push(unsafe { std::slice::from_raw_parts(d.as_ptr(), d.len()) });
+            }
+            // A PackedNumeric datum points at its image; the payload lanes
+            // carry the mantissa (stats witnessed it inside the lane range).
+            for (m, &(ci, face)) in s.mant.iter_mut().zip(&packed_lanes) {
+                m.clear();
+                m.extend(ds[ci].iter().map(|&d| face.word_key(d) as u64));
+                ds[ci] = unsafe { std::slice::from_raw_parts(m.as_ptr(), m.len()) };
             }
             // Two-loop variant splits on the loop-invariant `nullable`
             // and `packed` elections (R2: no per-row branch on a granule

@@ -125,6 +125,22 @@ fn in_errors() {
 }
 
 #[test]
+fn in_error_keeps_non_utf8_input_bytes() {
+    let e = io::numeric_in_bytes(b"12\xe9", -1, None).unwrap_err();
+    assert_eq!(e.sqlstate(), ERRCODE_INVALID_TEXT_REPRESENTATION);
+    assert_eq!(
+        e.message_raw.as_deref(),
+        Some(&b"invalid input syntax for type numeric: \"12\xe9\""[..])
+    );
+    assert_eq!(
+        e.message(),
+        "invalid input syntax for type numeric: \"12\u{fffd}\""
+    );
+    let e = io::numeric_in_bytes(b"junk", -1, None).unwrap_err();
+    assert!(e.message_raw.is_none());
+}
+
+#[test]
 fn short_header_packing() {
     let img = n("5");
     assert!(img.num().is_short());

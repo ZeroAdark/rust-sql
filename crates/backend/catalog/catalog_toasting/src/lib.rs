@@ -200,10 +200,10 @@ fn create_toast_table<'mcx>(
     catalog_index::index_create(
         mcx,
         &toast_rel,
-        &toast_idxname,
+        toast_idxname.as_bytes(),
         InvalidOid,
         &mut indexInfo,
-        &["chunk_id", "chunk_seq"],
+        &[&b"chunk_id"[..], &b"chunk_seq"[..]],
         catalog_index::BTREE_AM_OID,
         rel.rd_rel.reltablespace,
         &collationIds,

@@ -404,6 +404,74 @@ fn report_list_is_o_changed() {
 }
 
 #[test]
+fn report_order_follows_guc_report_list() {
+    setup();
+    let _guard = APPLICATION_NAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    elog::config::set_where_to_send_output(types_dest::CommandDest::Remote);
+    begin_reporting_guc_options();
+    SENT.with(|s| s.borrow_mut().clear());
+    let names = || -> Vec<String> {
+        SENT.with(|s| std::mem::take(&mut *s.borrow_mut()))
+            .iter()
+            .filter(|(t, _)| *t == b'S')
+            .map(|(_, body)| String::from_utf8_lossy(body.split(|b| *b == 0).next().unwrap()).into_owned())
+            .collect()
+    };
+
+    // guc.c:4272 head-pushes: the newest change in a command reports first.
+    AtStart_GUC();
+    assert_eq!(set_session("application_name", Some("b227")).unwrap(), 1);
+    assert_eq!(set_session("IntervalStyle", Some("sql_standard")).unwrap(), 1);
+    report_changed_guc_options();
+    assert_eq!(names(), ["IntervalStyle", "application_name"]);
+
+    // guc.c:2276 walks guc_stack_list newest-first and head-pushes each
+    // restore: the first variable stacked reports first at abort.
+    AtEOXact_GUC(false, 1);
+    report_changed_guc_options();
+    assert_eq!(names(), ["application_name", "IntervalStyle"]);
+
+    // ResetAllOptions (guc.c:2008) walks guc_nondef_list oldest-first and
+    // head-pushes: the most recently changed variable reports first.
+    AtStart_GUC();
+    assert_eq!(set_session("IntervalStyle", Some("iso_8601")).unwrap(), 1);
+    assert_eq!(set_session("application_name", Some("b227")).unwrap(), 1);
+    report_changed_guc_options();
+    names();
+    ResetAllOptions();
+    report_changed_guc_options();
+    assert_eq!(names(), ["application_name", "IntervalStyle"]);
+    AtEOXact_GUC(true, 1);
+}
+
+#[test]
+fn explain_guc_options_follow_nondef_order() {
+    setup();
+    let explain_names = || -> Vec<String> {
+        with_store(|reg| {
+            crate::registry::get_explain_guc_options(reg, &mut |_| Ok(true))
+                .unwrap()
+                .into_iter()
+                .map(|(name, _)| name.to_string())
+                .collect()
+        })
+        .unwrap()
+    };
+    AtStart_GUC();
+    assert_eq!(set_session("work_mem", Some("65536")).unwrap(), 1);
+    assert_eq!(set_session("enable_seqscan", Some("off")).unwrap(), 1);
+    assert_eq!(explain_names(), ["work_mem", "enable_seqscan"]);
+    AtEOXact_GUC(false, 1);
+    assert_eq!(explain_names(), Vec::<&str>::new());
+
+    AtStart_GUC();
+    assert_eq!(set_session("enable_seqscan", Some("off")).unwrap(), 1);
+    assert_eq!(set_session("work_mem", Some("65536")).unwrap(), 1);
+    assert_eq!(explain_names(), ["enable_seqscan", "work_mem"]);
+    AtEOXact_GUC(false, 1);
+}
+
+#[test]
 fn reset_and_reset_all() {
     setup();
     let _guard = APPLICATION_NAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1129,7 +1197,7 @@ fn reset_store_to_process_base_evicts_prior_session_low_source_gucs() {
     // reset_store_to_process_base wraps this and then re-overlays the
     // process-global postmaster base, which is not deterministic under the
     // shared test binary.)
-    with_store_mut(crate::registry::reset_session_options_to_boot).unwrap();
+    scrub_to_boot();
 
     let (value, source) = int_state(name);
     assert_eq!(value, boot, "scrub must return the value to its boot default");
@@ -1143,6 +1211,115 @@ fn reset_store_to_process_base_evicts_prior_session_low_source_gucs() {
     })
     .unwrap();
     assert_eq!(reset_val, boot, "scrub must rebuild reset_val to boot");
+}
+
+fn scrub_to_boot() {
+    let mut hooks: Vec<crate::registry::DeferredAssignHook> = Vec::new();
+    with_store_mut(|reg| crate::registry::reset_session_options_to_boot(reg, &mut hooks)).unwrap();
+    for hook in hooks {
+        hook();
+    }
+}
+
+fn string_state(name: &str) -> (Option<String>, GucSource) {
+    with_store(|reg| {
+        let v = reg.find_option(name).unwrap();
+        let val = match v {
+            GucVariable::String(c) => c.value.clone().flatten(),
+            _ => unreachable!(),
+        };
+        (val, v.gen().source)
+    })
+    .unwrap()
+}
+
+// The warm-claimed worker scrub emulates a fresh fork: a GUC_NO_RESET_ALL
+// session value (session_authorization, transaction_read_only, ...) that
+// ResetAllOptions preserves by C parity must not survive into the next
+// leader's engagement either.
+#[test]
+fn reset_store_to_process_base_evicts_no_reset_all_session_values() {
+    setup();
+    let name = "transaction_read_only";
+    let state = || {
+        with_store(|reg| {
+            let v = reg.find_option(name).unwrap();
+            let val = match v {
+                GucVariable::Bool(c) => c.value.unwrap(),
+                _ => unreachable!(),
+            };
+            (val, v.gen().source)
+        })
+        .unwrap()
+    };
+    set_config_option_ext(
+        name,
+        Some("on"),
+        PGC_USERSET,
+        PGC_S_SESSION,
+        BOOTSTRAP_SUPERUSERID,
+        GUC_ACTION_SET,
+        true,
+        ErrorLevel(0),
+        false,
+    )
+    .unwrap();
+    assert_eq!(state(), (true, PGC_S_SESSION));
+
+    crate::store::reset_all_options();
+    assert_eq!(state().0, true, "RESET ALL keeps GUC_NO_RESET_ALL values (C parity)");
+
+    scrub_to_boot();
+    assert_eq!(state(), (false, PGC_S_DEFAULT), "scrub must not skip GUC_NO_RESET_ALL");
+}
+
+// assign_session_authorization's shape: SetSessionAuthorization re-enters the
+// store through SetConfigOption("is_superuser"); the scrub must fire it past
+// its own borrow (pooled workers died "RefCell already borrowed" inline).
+fn reentrant_session_authorization_assign(
+    _newval: Option<&str>,
+    _extra: Option<&guc_tables::GucHookExtra>,
+) {
+    // Installed process-wide: stay inert for another test's InitializeGUCOptions.
+    if with_store(|_| ()).is_none() {
+        return;
+    }
+    crate::store::set_config_option_global(
+        "is_superuser",
+        Some("off"),
+        PGC_INTERNAL,
+        PGC_S_DYNAMIC_DEFAULT,
+        BOOTSTRAP_SUPERUSERID,
+        GUC_ACTION_SET,
+        true,
+        ErrorLevel(0),
+        false,
+    )
+    .unwrap();
+}
+
+#[test]
+fn scrub_runs_reentrant_no_reset_all_assign_hooks_outside_the_store_borrow() {
+    setup();
+    guc_tables::hooks::assign_session_authorization
+        .install_if_absent(reentrant_session_authorization_assign);
+    let name = "session_authorization";
+    set_config_option_ext(
+        name,
+        Some("alice"),
+        PGC_USERSET,
+        PGC_S_SESSION,
+        BOOTSTRAP_SUPERUSERID,
+        GUC_ACTION_SET,
+        true,
+        ErrorLevel(0),
+        false,
+    )
+    .unwrap();
+    assert_eq!(string_state(name), (Some("alice".to_string()), PGC_S_SESSION));
+
+    scrub_to_boot();
+    assert_eq!(string_state(name), (None, PGC_S_DEFAULT));
 }
 
 fn reentrant_string_check(
@@ -1350,4 +1527,289 @@ fn pending_restart_status_crosses_the_child_bind() {
     })
     .join()
     .unwrap();
+}
+
+/// postmaster.c fork / launch_backend.c:1034: a fresh backend starts with
+/// the postmaster's PgReloadTime, so pg_conf_load_time() reports the
+/// configuration load time and not the 2000-01-01 epoch.
+#[test]
+fn child_inherits_the_postmaster_reload_time() {
+    let _g = APPLICATION_NAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // This thread alone plays the postmaster (MyProcPid == PostmasterPid);
+    // other test threads' reloads must not publish over the inherited value.
+    let saved_pm = init_small::globals::PostmasterPid();
+    init_small::globals::SetMyProcPid(77_782);
+    init_small::globals::SetPostmasterPid(77_782);
+    set_pg_reload_time(4_242_424_242);
+    init_small::globals::SetPostmasterPid(saved_pm);
+    let child = std::thread::spawn(|| {
+        assert_eq!(pg_reload_time(), 0, "a fresh thread starts at the epoch");
+        crate::store::inherit_postmaster_reload_time();
+        pg_reload_time()
+    })
+    .join()
+    .unwrap();
+    assert_eq!(child, 4_242_424_242);
+}
+
+// guc.c:453 walks guc_hashtab, which MarkGUCPrefixReserved (guc.c:5314) has
+// already purged invalid placeholders from; the GUC_REMOVED tombstone that
+// stands in for the purge must not be reset by name on the next reload
+// (that fails the reserved-prefix check and logs a spurious diagnostic).
+#[test]
+fn process_config_file_skips_removed_placeholder_tombstones() {
+    setup();
+    let _guard = APPLICATION_NAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("guc_pcf_tombstone_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let conf = dir.join("postgresql.conf");
+    init_small::globals::SetDataDir(dir.to_str().unwrap());
+
+    std::fs::write(&conf, "b169rsv.stale = 'x'\n").unwrap();
+    SetConfigOption("config_file", Some(conf.to_str().unwrap()), PGC_POSTMASTER, PGC_S_OVERRIDE)
+        .unwrap();
+    let clean =
+        crate::process_config::process_config_file_internal(PGC_SIGHUP, true, types_error::LOG)
+            .unwrap();
+    assert!(clean);
+    assert_eq!(show("b169rsv.stale"), Some("x".to_string()));
+    assert_eq!(
+        with_store(|reg| reg.find_option("b169rsv.stale").unwrap().gen().reset_source).unwrap(),
+        PGC_S_FILE
+    );
+
+    let prev = elog::set_emit_log_hook(Some(capture_emitted));
+    MarkGUCPrefixReserved("b169rsv");
+    let emitted = std::mem::take(&mut *EMITTED.lock().unwrap_or_else(|e| e.into_inner()));
+    assert_eq!(emitted.len(), 1, "{emitted:?}");
+    assert_eq!(emitted[0].level, types_error::WARNING);
+    assert!(with_store(|reg| reg.find_option("b169rsv.stale").is_none()).unwrap());
+
+    // Removed from the file too: C's hash walk no longer sees the variable,
+    // so the reload is silent.
+    std::fs::write(&conf, "\n").unwrap();
+    let clean =
+        crate::process_config::process_config_file_internal(PGC_SIGHUP, true, types_error::LOG)
+            .unwrap();
+    elog::set_emit_log_hook(prev);
+    assert!(clean);
+    let emitted = std::mem::take(&mut *EMITTED.lock().unwrap_or_else(|e| e.into_inner()));
+    let msgs: Vec<String> = emitted
+        .iter()
+        .map(|e| e.message().to_string())
+        .filter(|m| m.contains("b169rsv"))
+        .collect();
+    assert!(msgs.is_empty(), "{msgs:?}");
+    assert!(with_store(|reg| reg.find_option("b169rsv.stale").is_none()).unwrap());
+}
+
+// GUC_check_errdetail_raw: a check hook's non-UTF-8 detail bytes reach the
+// wire verbatim (user.c:2547 echoes a byte-truncated key word).
+#[test]
+fn check_hook_raw_detail_reaches_the_error() {
+    reset_guc_check_error();
+    GUC_check_errdetail_raw(b"Unrecognized key word: \"zz\xff\".".to_vec());
+    let e = crate::registry::check_hook_error("invalid value".to_string());
+    assert_eq!(e.message(), "invalid value");
+    assert_eq!(e.detail(), Some("Unrecognized key word: \"zz\u{fffd}\"."));
+    assert_eq!(e.detail_raw.as_deref(), Some(&b"Unrecognized key word: \"zz\xff\"."[..]));
+    assert_eq!(e.sqlstate(), ERRCODE_INVALID_PARAMETER_VALUE);
+}
+
+// regression: a placeholder's name is owned by the registry (C: a
+// guc_strdup into GUCMemoryContext, which dies with the backend), never
+// leaked into the process. Witness: allocations of one sentinel size that
+// nothing else in this test binary requests are censused by the allocator;
+// the names must all be released when their registry drops.
+mod placeholder_name_census {
+    use core::sync::atomic::{AtomicIsize, Ordering};
+    use std::alloc::{GlobalAlloc, Layout, System};
+
+    pub const SENTINEL: usize = 4093;
+    pub static LIVE: AtomicIsize = AtomicIsize::new(0);
+
+    pub struct Census;
+
+    // SAFETY: a pure pass-through to System plus a counter.
+    unsafe impl GlobalAlloc for Census {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            if layout.size() == SENTINEL {
+                LIVE.fetch_add(1, Ordering::SeqCst);
+            }
+            // SAFETY: forwarded verbatim.
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            if layout.size() == SENTINEL {
+                LIVE.fetch_sub(1, Ordering::SeqCst);
+            }
+            // SAFETY: forwarded verbatim.
+            unsafe { System.dealloc(ptr, layout) }
+        }
+    }
+
+    #[global_allocator]
+    static CENSUS: Census = Census;
+}
+
+#[test]
+fn placeholder_names_die_with_their_registry() {
+    use core::sync::atomic::Ordering;
+    use placeholder_name_census::{LIVE, SENTINEL};
+
+    let before = LIVE.load(Ordering::SeqCst);
+    let mut reg = GucRegistry::new();
+    for i in 0..8 {
+        let prefix = format!("lane{i}.");
+        let name = format!("{prefix}{}", "x".repeat(SENTINEL - prefix.len()));
+        assert_eq!(name.len(), SENTINEL);
+        reg.add_placeholder_variable(&name).unwrap();
+    }
+    assert!(
+        LIVE.load(Ordering::SeqCst) - before >= 8,
+        "the placeholder names were not allocated at the sentinel size"
+    );
+    drop(reg);
+    assert_eq!(
+        LIVE.load(Ordering::SeqCst),
+        before,
+        "placeholder names outlived their registry (C frees them with GUCMemoryContext at backend exit)"
+    );
+}
+
+// C 18.6 BeginReportingGUCOptions on a fresh connection (guc_hashtab
+// hash_seq_search order, 512 buckets), captured from the C oracle.
+#[test]
+fn hash_seq_order_matches_c_guc_hashtab() {
+    setup();
+    let names: Vec<String> = with_store(|reg| {
+        let mut out = Vec::new();
+        for idx in crate::name::hash_seq_order(reg) {
+            if reg[idx].gen().flags & GUC_REPORT != 0 {
+                out.push(reg[idx].name().to_string());
+            }
+        }
+        out
+    })
+    .unwrap();
+    assert_eq!(
+        names,
+        [
+            "in_hot_standby",
+            "integer_datetimes",
+            "TimeZone",
+            "IntervalStyle",
+            "search_path",
+            "is_superuser",
+            "application_name",
+            "default_transaction_read_only",
+            "scram_iterations",
+            "DateStyle",
+            "standard_conforming_strings",
+            "session_authorization",
+            "client_encoding",
+            "server_version",
+            "server_encoding",
+        ]
+    );
+    assert_eq!(crate::name::guc_name_hash("shared_buffers") & 511, 51);
+    assert_eq!(crate::name::guc_name_hash("Max_Connections") & 511, 351);
+}
+
+#[test]
+fn process_config_file_removed_params_error_items_in_c_hash_order() {
+    setup();
+    let _guard = APPLICATION_NAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("guc_pcf_removed2_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let conf = dir.join("postgresql.conf");
+    init_small::globals::SetDataDir(dir.to_str().unwrap());
+
+    std::fs::write(&conf, "max_connections = 100\nshared_buffers = 16384\n").unwrap();
+    SetConfigOption("config_file", Some(conf.to_str().unwrap()), PGC_POSTMASTER, PGC_S_OVERRIDE)
+        .unwrap();
+    let clean = crate::process_config::process_config_file_internal(
+        PGC_POSTMASTER,
+        true,
+        types_error::LOG,
+    )
+    .unwrap();
+    assert!(clean);
+
+    std::fs::write(&conf, "application_name = 'unrelated'\n").unwrap();
+    let (clean, items) = crate::process_config::process_config_file_internal_list(
+        PGC_SIGHUP,
+        false,
+        types_error::LOG,
+    )
+    .unwrap();
+    assert!(!clean);
+    let errs: Vec<&str> = items.iter().filter_map(|i| i.errmsg.as_deref()).collect();
+    assert_eq!(
+        errs,
+        [
+            "parameter \"shared_buffers\" cannot be changed without restarting the server",
+            "parameter \"max_connections\" cannot be changed without restarting the server",
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn sighup_reread_of_postmaster_param_reports_canonical_name() {
+    setup();
+    let e = set_config_option_ext(
+        "Shared_Buffers",
+        Some("99999"),
+        PGC_SIGHUP,
+        PGC_S_FILE,
+        BOOTSTRAP_SUPERUSERID,
+        GUC_ACTION_SET,
+        true,
+        types_error::ERROR,
+        false,
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.message(),
+        "parameter \"shared_buffers\" cannot be changed without restarting the server"
+    );
+}
+
+fn throwing_string_check_hook(
+    newval: &mut Option<String>,
+    _extra: &mut Option<guc_tables::GucHookExtra>,
+    _source: GucSource,
+) -> PgResult<bool> {
+    if newval.as_deref() != Some("xyz") {
+        return Ok(true);
+    }
+    Err(types_error::PgError::new(
+        types_error::ERROR,
+        "invalid input syntax for type interval: \"xyz\"",
+    )
+    .into())
+}
+
+// guc.c:6954 PG_RE_THROW: an error raised inside a check hook propagates
+// even when the rejection level is demoted (file source in a backend).
+#[test]
+fn check_hook_error_is_rethrown_at_demoted_elevel() {
+    setup();
+    guc_tables::hooks::check_temp_tablespaces.install_if_absent(throwing_string_check_hook);
+    let e = set_config_option_ext(
+        "temp_tablespaces",
+        Some("xyz"),
+        PGC_SIGHUP,
+        PGC_S_FILE,
+        BOOTSTRAP_SUPERUSERID,
+        GUC_ACTION_SET,
+        false,
+        ErrorLevel(0),
+        false,
+    )
+    .unwrap_err();
+    assert_eq!(e.message(), "invalid input syntax for type interval: \"xyz\"");
 }

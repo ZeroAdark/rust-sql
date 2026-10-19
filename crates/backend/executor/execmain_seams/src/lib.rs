@@ -156,6 +156,10 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
+    pub fn query_desc_fdw_batch_size(query_desc: QueryDescHandle, rti: u32) -> Option<i32>
+);
+
+seam_core::seam!(
     pub fn query_desc_agg_instrument(
         query_desc: QueryDescHandle,
         plan_node_id: i32,
@@ -326,6 +330,14 @@ seam_core::seam!(
         query_desc: QueryDescHandle,
         plan_node_id: i32,
     ) -> Option<Vec<(i32, IncrementalSortInfo)>>
+);
+
+seam_core::seam!(
+    // (worker number, agg stats) pairs (C AggState.shared_info).
+    pub fn query_desc_worker_agg_instrument(
+        query_desc: QueryDescHandle,
+        plan_node_id: i32,
+    ) -> Option<Vec<(i32, AggregateInstrumentation)>>
 );
 
 seam_core::seam!(

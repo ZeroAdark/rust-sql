@@ -1,4 +1,4 @@
-//! Compiler-fence-protected memory wipe, matching C `explicit_bzero`.
+//! Volatile memory wipe, matching C `explicit_bzero`.
 //!
 //! In upstream PostgreSQL every session is its own OS process, so freed heap
 //! memory (cleartext passwords, SASLprep intermediates, SCRAM verifier
@@ -12,10 +12,26 @@
 //! cannot be elided by the optimizer, and must be called before the owning
 //! buffer's memory is released to any freelist, keeper pool, or global
 //! allocator.
+//!
+//! The stores are `write_volatile`: a volatile store is a language-level side
+//! effect the optimizer may not delete even when the buffer is provably dead
+//! afterwards. (A plain `write_bytes` followed by `compiler_fence` is NOT
+//! enough — the fence only constrains reordering, and LLVM dead-store
+//! elimination removed the wipe from release builds.)
 
 #![no_std]
 
 use core::sync::atomic::{compiler_fence, Ordering};
+
+#[inline]
+fn wipe_bytes(p: *mut u8, n: usize) {
+    for i in 0..n {
+        // SAFETY: the caller guarantees `p..p+n` is a valid, exclusively
+        // borrowed, initialized byte range.
+        unsafe { core::ptr::write_volatile(p.add(i), 0) };
+    }
+    compiler_fence(Ordering::SeqCst);
+}
 
 /// Overwrite `buf` with zero bytes, guaranteeing the write is not optimized
 /// away, mirroring the semantics of glibc `explicit_bzero`.
@@ -24,16 +40,7 @@ pub fn secure_zero(buf: &mut [u8]) {
     if buf.is_empty() {
         return;
     }
-    // SAFETY: `buf` is a valid, aligned, exclusively-borrowed slice covering
-    // exactly `buf.len()` initialized bytes.
-    unsafe {
-        core::ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len());
-    }
-    // A SeqCst compiler fence after the store bars the optimizer from treating
-    // it as a dead store (the memory is freed right after and never read again
-    // through this reference), giving `explicit_bzero`-equivalent behavior
-    // without relying on any external crate.
-    compiler_fence(Ordering::SeqCst);
+    wipe_bytes(buf.as_mut_ptr(), buf.len());
 }
 
 /// Wipe a slice of any `Copy`/POD element type by clearing its raw bytes.
@@ -49,13 +56,7 @@ pub fn secure_zero_slice<T: Copy>(buf: &mut [T]) {
     if len_bytes == 0 {
         return;
     }
-    // SAFETY: `buf` is a valid, aligned, exclusively-borrowed slice; writing
-    // `len_bytes` zero bytes stays within its allocation, and 0 is a valid bit
-    // pattern for the integer element types used here.
-    unsafe {
-        core::ptr::write_bytes(buf.as_mut_ptr() as *mut u8, 0, len_bytes);
-    }
-    compiler_fence(Ordering::SeqCst);
+    wipe_bytes(buf.as_mut_ptr() as *mut u8, len_bytes);
 }
 
 #[cfg(test)]
@@ -82,10 +83,9 @@ mod tests {
         secure_zero(&mut empty);
     }
 
-    // Best-effort check that the wipe is observed even when the value is never
-    // read back through the original reference: read the bytes through a
-    // volatile pointer so the compiler cannot fold the wipe away against a
-    // known-dead buffer.
+    // Functional check only: the buffer is read back through a volatile
+    // pointer, so this cannot witness dead-store elimination of the wipe
+    // itself (scripts/secure-zero-dse-probe.sh inspects release codegen).
     #[test]
     fn not_elided_when_result_unused() {
         let mut secret = [0xABu8; 64];
@@ -98,5 +98,18 @@ mod tests {
             let b = unsafe { core::ptr::read_volatile(ptr.add(i)) };
             assert_eq!(b, 0, "byte {i} not wiped");
         }
+    }
+
+    #[test]
+    fn wipes_odd_sizes_and_wide_elements() {
+        for n in [1usize, 3, 7, 17, 100] {
+            let mut v = [0x5Au8; 100];
+            secure_zero(&mut v[..n]);
+            assert!(v[..n].iter().all(|&b| b == 0));
+            assert!(v[n..].iter().all(|&b| b == 0x5A));
+        }
+        let mut wide: [u64; 3] = [u64::MAX; 3];
+        secure_zero_slice(&mut wide[..2]);
+        assert_eq!(wide, [0, 0, u64::MAX]);
     }
 }

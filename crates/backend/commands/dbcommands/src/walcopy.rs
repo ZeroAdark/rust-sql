@@ -29,6 +29,9 @@ fn version_file_fsync_error(versionfile: &str, errno: i32) -> Box<types_error::P
 
 const RelationRelationId: Oid = 1259;
 const PG_MAJORVERSION: &str = "18";
+// wait_event_names.txt WaitEventIO order (PG_WAIT_IO | eventId).
+const WAIT_EVENT_VERSION_FILE_SYNC: u32 = 0x0A00_0000 | 65;
+const WAIT_EVENT_VERSION_FILE_WRITE: u32 = 0x0A00_0000 | 66;
 
 struct CreateDBRelInfo {
     rlocator: RelFileLocator,
@@ -269,23 +272,22 @@ pub(crate) fn CreateDirAndVersionFile(
             .into());
     }
 
+    waitevent_seams::pgstat_report_wait_start::call(WAIT_EVENT_VERSION_FILE_WRITE);
+    fd::set_errno(0);
     // SAFETY: fdnum is an open fd owned by the transient-file table.
     let written = unsafe { libc::write(fdnum, buf.as_ptr().cast(), buf.len()) };
     if written != buf.len() as isize {
-        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::ENOSPC);
-        return Err(ereport(ERROR)
-            .errcode_for_file_access()
-            .with_saved_errno(if errno == 0 { libc::ENOSPC } else { errno })
-            .errmsg(format!("could not write to file \"{versionfile}\": %m"))
-            .into_error()
-            .into());
+        return Err(version_file_write_error(&versionfile, fd::get_errno()));
     }
+    waitevent_seams::pgstat_report_wait_end::call();
 
+    waitevent_seams::pgstat_report_wait_start::call(WAIT_EVENT_VERSION_FILE_SYNC);
     if fd::pg_fsync(fdnum) != 0 {
         let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
         return Err(version_file_fsync_error(&versionfile, errno));
     }
     fd::fsync_fname(dbpath, true)?;
+    waitevent_seams::pgstat_report_wait_end::call();
 
     fd::CloseTransientFile(fdnum);
 
@@ -307,9 +309,32 @@ pub(crate) fn CreateDirAndVersionFile(
     Ok(())
 }
 
+// dbcommands.c:499-507: a short write that left errno unset is ENOSPC.
+fn version_file_write_error(versionfile: &str, errno: i32) -> Box<types_error::PgError> {
+    let errno = if errno == 0 { libc::ENOSPC } else { errno };
+    ereport(ERROR)
+        .with_saved_errno(errno)
+        .errcode_for_file_access()
+        .errmsg(format!("could not write to file \"{versionfile}\": %m"))
+        .into_error()
+        .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_write_without_errno_is_disk_full() {
+        let err = version_file_write_error("/base/16384/PG_VERSION", 0);
+        assert_eq!(err.sqlstate(), types_error::ERRCODE_DISK_FULL);
+        assert_eq!(
+            err.message(),
+            "could not write to file \"/base/16384/PG_VERSION\": No space left on device"
+        );
+        let err = version_file_write_error("/base/16384/PG_VERSION", libc::EIO);
+        assert_eq!(err.sqlstate(), types_error::ERRCODE_IO_ERROR);
+    }
 
     /// dbcommands.c:513: a failed fsync of the new database's PG_VERSION is
     /// raised at data_sync_elevel(ERROR) — PANIC at the data_sync_retry=off

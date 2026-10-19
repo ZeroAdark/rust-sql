@@ -19,10 +19,9 @@ use crate::{
 // the fnconf byte-diff caught the drift (OID 2467; e.g. C 18.3
 // atanh(-1.3990760221756862e-5) → -1.399076022266972e-05, the formula gives
 // ...669721e-05).
-// cbrt: same class — Rust std's cbrt is its own polynomial port, one ulp off
-// libm on e.g. cbrt(2) and cbrt(100) (antithesis r21, lane-locking/portals:
-// SELECT cbrt(2::float8)::text diverged from the C oracle's
-// 1.2599210498948734).
+// cbrt: the toolchain's builtins define a local `cbrt` that the static link
+// binds ahead of libm's (exact 3 for cbrt(27), where glibc answers
+// 3.0000000000000004), so the libm entry point is resolved at runtime.
 mod libm {
     extern "C" {
         pub fn erf(x: f64) -> f64;
@@ -197,9 +196,32 @@ pub fn dsqrt(arg1: f64) -> PgResult<f64> {
     Ok(result)
 }
 
+#[cfg(all(unix, not(target_family = "wasm")))]
+fn libm_cbrt() -> unsafe extern "C" fn(f64) -> f64 {
+    use core::sync::atomic::{AtomicPtr, Ordering};
+    static CBRT: AtomicPtr<libc::c_void> = AtomicPtr::new(core::ptr::null_mut());
+    let mut p = CBRT.load(Ordering::Relaxed);
+    if p.is_null() {
+        // SAFETY: dlsym with a NUL-terminated name; RTLD_NEXT skips this
+        // executable's own definitions. A racing duplicate store is benign.
+        p = unsafe { libc::dlsym(libc::RTLD_NEXT, c"cbrt".as_ptr()) };
+        if p.is_null() {
+            p = libm::cbrt as unsafe extern "C" fn(f64) -> f64 as *mut libc::c_void;
+        }
+        CBRT.store(p, Ordering::Relaxed);
+    }
+    // SAFETY: p is libm's (or the linked) `double cbrt(double)`.
+    unsafe { core::mem::transmute::<*mut libc::c_void, unsafe extern "C" fn(f64) -> f64>(p) }
+}
+
+#[cfg(not(all(unix, not(target_family = "wasm"))))]
+fn libm_cbrt() -> unsafe extern "C" fn(f64) -> f64 {
+    libm::cbrt
+}
+
 pub fn dcbrt(arg1: f64) -> PgResult<f64> {
     // SAFETY: pure libm function, no preconditions.
-    let result = unsafe { libm::cbrt(arg1) };
+    let result = unsafe { libm_cbrt()(arg1) };
     if result.is_infinite() && !arg1.is_infinite() {
         return Err(float_overflow_error().into());
     }

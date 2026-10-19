@@ -44,9 +44,16 @@ enum NumErr {
 pub fn numeric_in(
     input: &str,
     typmod: i32,
+    escontext: Option<&mut SoftErrorContext>,
+) -> PgResult<Option<NumericImage>> {
+    numeric_in_bytes(input.as_bytes(), typmod, escontext)
+}
+
+pub fn numeric_in_bytes(
+    s: &[u8],
+    typmod: i32,
     mut escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<Option<NumericImage>> {
-    let s = input.as_bytes();
     let mut cp = 0usize;
     while cp < s.len() && c_isspace(s[cp]) {
         cp += 1;
@@ -82,12 +89,12 @@ pub fn numeric_in(
             };
             cp += 3;
         } else {
-            return ereturn(escontext, None, invalid_numeric_syntax(input));
+            return ereturn(escontext, None, invalid_numeric_syntax(s));
         }
 
         while cp < s.len() {
             if !c_isspace(s[cp]) {
-                return ereturn(escontext, None, invalid_numeric_syntax(input));
+                return ereturn(escontext, None, invalid_numeric_syntax(s));
             }
             cp += 1;
         }
@@ -117,7 +124,7 @@ pub fn numeric_in(
                 end
             }
             Err(NumErr::InvalidSyntax) => {
-                return ereturn(escontext, None, invalid_numeric_syntax(input))
+                return ereturn(escontext, None, invalid_numeric_syntax(s))
             }
             Err(NumErr::OutOfRange) => return ereturn(escontext, None, numeric_overflow_error()),
         }
@@ -125,7 +132,7 @@ pub fn numeric_in(
         match set_var_from_non_decimal_integer_str(s, cp + 2, sign, base, &mut value) {
             Ok(end) => end,
             Err(NumErr::InvalidSyntax) => {
-                return ereturn(escontext, None, invalid_numeric_syntax(input))
+                return ereturn(escontext, None, invalid_numeric_syntax(s))
             }
             Err(NumErr::OutOfRange) => return ereturn(escontext, None, numeric_overflow_error()),
         }
@@ -134,7 +141,7 @@ pub fn numeric_in(
     cp = endpos;
     while cp < s.len() {
         if !c_isspace(s[cp]) {
-            return ereturn(escontext, None, invalid_numeric_syntax(input));
+            return ereturn(escontext, None, invalid_numeric_syntax(s));
         }
         cp += 1;
     }

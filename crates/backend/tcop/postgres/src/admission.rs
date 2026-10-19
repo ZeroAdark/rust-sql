@@ -28,6 +28,13 @@
 //! an explicit transaction in the aborted state keeps its slot until the
 //! client sends ROLLBACK.
 //!
+//! The same holds for a session at a transaction boundary that still holds
+//! a session-level lock (pg_advisory_lock): its waiters can be the admitted
+//! sessions, so it runs uncounted. COMMIT PREPARED / ROLLBACK PREPARED end a
+//! prepared transaction whose locks admitted sessions may wait on; they are
+//! never parked either (the caller reports them, checked only before
+//! parking).
+//!
 //! Safety valve: a live transaction that reaches the gate WITHOUT a slot —
 //! the gate was armed by SIGHUP mid-transaction, or an exemption lapsed
 //! mid-transaction (e.g. superuser SET ROLE to a non-superuser) — may
@@ -209,6 +216,10 @@ impl Drop for StatementAdmission {
     }
 }
 
+pub(crate) fn finishes_prepared(tag: types_core::CommandTag) -> bool {
+    matches!(cmdtag::GetCommandTagNameAndLen(tag).0, "COMMIT PREPARED" | "ROLLBACK PREPARED")
+}
+
 fn try_admit(limit: i32, defer_to_waiters: bool) -> bool {
     loop {
         if defer_to_waiters && WAITERS.load(Relaxed) > 0 {
@@ -227,7 +238,9 @@ fn try_admit(limit: i32, defer_to_waiters: bool) -> bool {
     }
 }
 
-pub fn acquire_for_statement() -> PgResult<StatementAdmission> {
+pub fn acquire_for_statement(
+    finishes_prepared: impl FnOnce() -> bool,
+) -> PgResult<StatementAdmission> {
     let depth = DEPTH.with(|d| {
         let v = d.get();
         d.set(v + 1);
@@ -264,7 +277,7 @@ pub fn acquire_for_statement() -> PgResult<StatementAdmission> {
 
     // Safety valve (see module comment): a live transaction with no slot
     // may hold locks — run it uncounted, NEVER park it.
-    if txn_still_open() {
+    if txn_still_open() || lock::HoldsSessionLock() {
         return Ok(guard);
     }
 
@@ -272,11 +285,17 @@ pub fn acquire_for_statement() -> PgResult<StatementAdmission> {
         hold_slot();
         return Ok(guard);
     }
+    if finishes_prepared() {
+        return Ok(guard);
+    }
 
     // Slow path: FIFO-park on the CV until a release signals us (head
     // first) or the recheck tick re-runs the CAS. We are at a transaction
     // boundary with no slot: by construction we hold no locks and no
     // snapshot while parked.
+    // statement_timeout bounds the wait: start_xact_command keeps a timer
+    // already running, so the statement's budget includes the queueing.
+    crate::simple_query::arm_statement_timeout()?;
     WAITERS.fetch_add(1, Relaxed);
     TOTAL_WAITS.fetch_add(1, Relaxed);
     let started = Instant::now();

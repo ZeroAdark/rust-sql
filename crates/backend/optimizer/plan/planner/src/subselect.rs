@@ -569,6 +569,8 @@ fn convert_any_sublink_to_join<'mcx>(
                 vartype: ty,
                 vartypmod: tm,
                 varcollid: crate::pathkeys::expr_collation(te.expr),
+                varnosyn: rtindex as u32,
+                varattnosyn: te.resno,
                 ..Default::default()
             },
         )?);

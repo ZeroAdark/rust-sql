@@ -499,7 +499,7 @@ the three arrays; lines not in `sloc` are non-code (render neutral).
    Concrete case: `proofs/float-agg` (29 runqueue harnesses over the
    float8[] aggregate transitions/finals — avg, var/stddev pop+samp,
    covar, corr, regr_*) was solved on the CI cluster and re-verified at main
-   (`proofs/FLEET-DECODE-2026-07-30.md` §2: the three sqrt-bearing grids
+   (`proofs/CI-DECODE-2026-07-30.md` §2: the three sqrt-bearing grids
    prove 3.9/5.4/16.0 s under the det-sqrt model), yet at the time of
    this capture it had **zero rows in SUITE.tsv** — a dark family — and
    zero kaniraw locally. That is why `float/src/aggregates.rs` reads

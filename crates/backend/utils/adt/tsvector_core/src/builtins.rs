@@ -348,9 +348,19 @@ pub fn fc_tsvector_unnest(
 ) -> PgResult<Datum> {
     let flinfo = flinfo.expect("tsvector_unnest: NULL flinfo");
     if !flinfo.has_fn_extra() {
+        ::funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
+        // SAFETY: expectedDesc contract — the executor armed it with the scan
+        // tupdesc, live for the duration of this call.
+        let expected = fcinfo
+            .rsinfo_mut()
+            .and_then(|rsi| rsi.expectedDesc)
+            .map(|p| unsafe { p.cast::<::types_tuple::TupleDescData<'_>>().as_ref() });
+        let class = ::funcapi::get_call_result_type(fcinfo.result_mcx(), flinfo, expected)?.class;
+        if class != ::funcapi::TypeFuncClass::Composite {
+            return Err(Box::new(PgError::error("return type must be a row type")));
+        }
         let rows = unnest_collect(fcinfo)?;
-        let fctx = ::funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
-        fctx.user_fctx = Some(Box::new(UnnestRows::Tuples(rows)));
+        ::funcapi::per_MultiFuncCall(flinfo).user_fctx = Some(Box::new(UnnestRows::Tuples(rows)));
     }
     let fctx = ::funcapi::per_MultiFuncCall(flinfo);
     let idx = fctx.call_cntr as usize;

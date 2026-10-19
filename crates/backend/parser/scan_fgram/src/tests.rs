@@ -371,3 +371,50 @@ fn gb18030_escape_string_ending_in_a_lone_lead_byte_reports_the_byte() {
     assert_eq!(err.sqlstate(), types_error::ERRCODE_CHARACTER_NOT_IN_REPERTOIRE);
     assert_eq!(err.message(), "invalid byte sequence for encoding \"GB18030\": 0x81");
 }
+
+#[test]
+fn yyerror_carries_scanner_yyerror_location() {
+    let err = lex_err("'abc");
+    assert_eq!(err.message(), "unterminated quoted string at or near \"'abc\"");
+    let loc = err.location().expect("scan.l location");
+    assert_eq!(loc.filename.as_deref(), Some("scan.l"));
+    assert_eq!(loc.lineno, 1240);
+    assert_eq!(loc.funcname.as_deref(), Some("scanner_yyerror"));
+    assert_eq!(err.message_raw, None);
+}
+
+#[test]
+fn yyerror_sends_the_matched_byte_verbatim() {
+    // <xeu>. after a high surrogate matches one byte of a multibyte
+    // character; C's errmsg carries that byte, not a replacement character.
+    let ctx = test_ctx();
+    let mut sc = Scanner::new(b"E'\\uD83D\xC3\xA9'", ctx.mcx(), ScannerSettings::default());
+    let err = lex(&mut sc).expect_err("surrogate pair error");
+    assert_eq!(err.message(), "invalid Unicode surrogate pair at or near \"\u{FFFD}\"");
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"invalid Unicode surrogate pair at or near \"\xC3\"".as_slice())
+    );
+    assert_eq!(err.location().map(|l| l.lineno), Some(1240));
+}
+
+#[test]
+fn literal_buffer_stops_at_max_alloc_size() {
+    assert!(literal_alloc_check(536870910, 1).is_ok());
+    assert!(literal_alloc_check(0, 536870911).is_ok());
+    let err = literal_alloc_check(536870911, 1).unwrap_err();
+    assert_eq!(err.message(), "invalid memory alloc request size 1073741824");
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+    let err = literal_alloc_check(0, 1 << 30).unwrap_err();
+    assert_eq!(err.message(), "invalid memory alloc request size 2147483648");
+
+    let ctx = test_ctx();
+    let mut sc = Scanner::new(b"'a'", ctx.mcx(), ScannerSettings::default());
+    sc.literalbuf.resize(536870911, b'a');
+    assert!(sc.addlit(b"").is_ok());
+    let err = sc.addlit(b"a").unwrap_err();
+    assert_eq!(err.message(), "invalid memory alloc request size 1073741824");
+    let err = sc.addlitchar(b'a').unwrap_err();
+    assert_eq!(err.message(), "invalid memory alloc request size 1073741824");
+    sc.literalbuf.clear();
+}

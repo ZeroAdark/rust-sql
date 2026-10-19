@@ -198,12 +198,12 @@ pub fn debug_print_tree(
         Err(e) if e.sqlstate == ERRCODE_FEATURE_NOT_SUPPORTED => elog::ereport(LOG)
             .errmsg_internal(format!("{title}:"))
             .errdetail_internal(format!("{} (node dump not yet ported)", e.message))
-            .finish(ErrorLocation::new("print.c", 88, "elog_node_display")),
+            .finish(ErrorLocation::new("print.c", 85, "elog_node_display")),
         Err(e) => Err(e),
     }
 }
 
-// elog_node_display (print.c:70-89) over an already-serialized
+// elog_node_display (print.c:71-87) over an already-serialized
 // nodeToStringWithLocations dump: the debug_print_* sites in tcop and
 // plancache hold the Query, the Query list and the PlannedStmt by value
 // (no node handle), so they serialize through outfuncs' slice writers and
@@ -223,7 +223,7 @@ pub fn elog_node_dump_display(
     elog::ereport(lev)
         .errmsg_internal(format!("{title}:"))
         .errdetail_internal(f.as_str().to_owned())
-        .finish(ErrorLocation::new("print.c", 88, "elog_node_display"))
+        .finish(ErrorLocation::new("print.c", 85, "elog_node_display"))
 }
 
 /// Arena byte buffer for the printf-style printers: C prints raw bytes

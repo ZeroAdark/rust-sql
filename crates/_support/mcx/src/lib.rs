@@ -447,11 +447,28 @@ mod tls_pools {
         unsafe { Global.deallocate(p.cast(), Layout::new::<AcctInner>()) };
     }
 
+    // Retired `session_root*` shells (poisoned at teardown, see
+    // `retire_session_root`) wait here until the OS thread dies; the stack's
+    // Drop — a real TLS destructor, the last code to run on the thread —
+    // frees them. Every other per-thread holder of a root handle is
+    // ManuallyDrop (no destructor), so nothing can observe a shell after
+    // this runs: this is C's "TopMemoryContext dies with the process" for a
+    // thread-per-session backend. Uncapped: `give` must never free early.
+    fn free_retired_root(addr: usize) {
+        // SAFETY: `addr` is a `Box::into_raw` shell from `session_root_mut`,
+        // retired (arena released, poisoned) and buried exactly once by the
+        // Roots-phase cleanup; the burying thread is exiting and no live
+        // reference remains (every TLS holder is ManuallyDrop).
+        unsafe { drop(alloc::boxed::Box::from_raw(addr as *mut MemoryContext)) };
+    }
+
     std::thread_local! {
         pub(crate) static ACCT: LocalStack<NonNull<AcctInner>> =
             const { LocalStack::new(ACCT_POOL_MAX, dispose_acct) };
         pub(crate) static CHILD_VECS: LocalStack<alloc::vec::Vec<AcctWeak>> =
             const { LocalStack::new(CHILD_VEC_POOL_MAX, core::mem::drop) };
+        pub(crate) static RETIRED_ROOTS: LocalStack<usize> =
+            const { LocalStack::new(usize::MAX, free_retired_root) };
     }
 }
 
@@ -726,7 +743,7 @@ fn notify_root_observer(acct: &AcctRc) {
     }
 }
 
-/// Process-wide Σ of block bytes held by LIVE memory contexts (GL-MEMWATCH-1).
+/// Process-wide Σ of block bytes held by LIVE memory contexts (regression).
 ///
 /// Maintained at BLOCK transitions only (arena block alloc/free, dedicated/
 /// oversize chunks, recycled-keeper adoption/parking) — one relaxed atomic
@@ -764,11 +781,11 @@ pub mod global_footprint {
         BYTES.load(Relaxed)
     }
 
-    /// Registered ENGINE-ESTATE bytes (GL-CONCMEM-1): plain-Rust executor
+    /// Registered ENGINE-ESTATE bytes (regression): plain-Rust executor
     /// estates — the lane aggregation tables' chunked row stores, entry
     /// arrays and key arenas — charge their block bytes into the SAME
     /// process ledger, so the memory watchdog's accounted line and the
-    /// GL-MEMCEIL-1 ceiling see engine memory, not only context blocks
+    /// regression ceiling see engine memory, not only context blocks
     /// (the concurrent-window autopsy's 6.3GiB unaccounted delta was
     /// exactly this estate). Charge/uncharge at BLOCK grain only (growth
     /// events, clear, Drop) — never per row; an uncharge must never exceed
@@ -1013,11 +1030,28 @@ pub fn session_root_mut(ctx: MemoryContext) -> &'static mut MemoryContext {
             // access fails closed via `check_live`.
             let shell = unsafe { &mut *(addr as *mut MemoryContext) };
             shell.retire_session_root();
+            bury_retired_root(addr);
         }),
     );
     // SAFETY: heap allocation; retired-but-never-freed by the closure above,
     // so the reference is valid for the process lifetime.
     unsafe { &mut *raw }
+}
+
+/// Queue a retired shell for the thread-death free (see
+/// `tls_pools::free_retired_root`). Measured before this: ~20 session roots
+/// per backend x (256 B shell + 192 B Acct node + the children vec) =
+/// ~10 KiB left behind by EVERY session, the whole plain-session residue.
+/// Without a per-thread pool (no_std, tests, PGRUST_MCX_POOL_STRIPE=0, or a
+/// thread whose TLS is already gone) the shell stays leaked-and-poisoned as
+/// before — never freed early.
+fn bury_retired_root(addr: usize) {
+    #[cfg(all(feature = "std", not(test)))]
+    if local_pool_on() {
+        let _ = tls_pools::RETIRED_ROOTS.try_with(|s| s.give(addr));
+        return;
+    }
+    let _ = addr;
 }
 
 // Allocator-retention release hook (mimalloc mi_collect shape); installed by
@@ -1638,7 +1672,7 @@ impl MemoryContext {
     }
 }
 
-// GL-MEMWATCH-1: C parity for aset.c's MemoryContextStats(TopMemoryContext)
+// regression: C parity for aset.c's MemoryContextStats(TopMemoryContext)
 // on allocation failure — the installed observer (mcxt_stats) dumps the
 // failing thread's context forest before the error propagates. Set-once at
 // boot, fn-pointer seam (root-observer pattern above).
@@ -1991,7 +2025,17 @@ unsafe impl Allocator for Mcx<'_> {
                 result
             }
             // GenerationRealloc: a shrink stays in place (oldsize >= size branch).
+            // A zero-size target releases the chunk now: a ZST deallocate is a
+            // no-op by contract, so a retained chunk would pin its block forever.
             Backend::Generation(a) => {
+                if new_layout.size() == 0 {
+                    // SAFETY: single-statement borrow (as bump_mut); ptr/old_layout per trait contract.
+                    unsafe { (*a.get()).dealloc(ptr, old_layout, &self.0.acct) };
+                    let dangling = new_layout.align() as *mut u8;
+                    // SAFETY: align is a non-zero power of two, hence non-null.
+                    let nn = unsafe { NonNull::new_unchecked(dangling) };
+                    return Ok(NonNull::slice_from_raw_parts(nn, 0));
+                }
                 if ptr.as_ptr() as usize % new_layout.align() == 0 {
                     return Ok(NonNull::slice_from_raw_parts(ptr, new_layout.size()));
                 }

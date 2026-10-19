@@ -1166,7 +1166,7 @@ mod parse_lquery_alloc_tests {
 
     // ltree_io.c:322 sizes each level's nodeitem array by the whole query's
     // pipe count, so palloc0 rejects the request before any syntax check.
-    // bug-inventory 2026-09-13 batch-46 (fp-contrib-ltree-ltree_io#1): the
+    // bug-inventory 2026-09-13 batch-46 (regression): the
     // port reported 42601 at character 2 instead of C's XX000.
     #[test]
     fn pipe_count_hits_c_palloc_limit_before_syntax() {

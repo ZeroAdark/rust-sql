@@ -158,19 +158,16 @@ pub fn deconstruct_array_builtin<'mcx>(
 }
 
 // array_contains_nulls: accurate null scan over the bitmap.
-pub fn array_contains_nulls(array: &[u8]) -> bool {
+pub fn array_contains_nulls(array: &[u8]) -> PgResult<bool> {
     let Some(bo) = arr_nullbitmap_off(array) else {
-        return false;
+        return Ok(false);
     };
     let (ndim, dims, _lbs) = read_dims_lbounds(array);
-    let mut nelems = match array_get_n_items(ndim, &dims) {
-        Ok(n) => n,
-        Err(_) => return true,
-    };
+    let mut nelems = array_get_n_items(ndim, &dims)?;
     let mut b = bo;
     while nelems >= 8 {
         if array[b] != 0xFF {
-            return true;
+            return Ok(true);
         }
         b += 1;
         nelems -= 8;
@@ -178,12 +175,12 @@ pub fn array_contains_nulls(array: &[u8]) -> bool {
     let mut bitmask: u32 = 1;
     while nelems > 0 {
         if (array[b] as u32 & bitmask) == 0 {
-            return true;
+            return Ok(true);
         }
         bitmask <<= 1;
         nelems -= 1;
     }
-    false
+    Ok(false)
 }
 
 pub fn construct_empty_array<'mcx>(mcx: Mcx<'mcx>, elmtype: Oid) -> PgResult<PgVec<'mcx, u8>> {
@@ -416,7 +413,7 @@ pub fn array_get_integer_typmods<'mcx>(
                 .with_sqlstate(::types_error::ERRCODE_ARRAY_SUBSCRIPT_ERROR),
         ));
     }
-    if array_contains_nulls(arr) {
+    if array_contains_nulls(arr)? {
         return Err(Box::new(
             PgError::error("typmod array must not contain nulls")
                 .with_sqlstate(ERRCODE_NULL_VALUE_NOT_ALLOWED),

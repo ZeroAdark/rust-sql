@@ -322,6 +322,7 @@ pub(crate) fn fc_crosstab_hash(
     }
 
     let crosstab_hash = load_categories_hash(mcx, &cats_sql)?;
+    srf.restart_store();
     get_crosstab_tuplestore(mcx, &sql, &crosstab_hash, &mut srf)?;
     Ok(srf.finish(fcinfo))
 }

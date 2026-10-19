@@ -1934,3 +1934,45 @@ fn node_dump_wrap_inside_a_multibyte_char_does_not_panic() {
     let pretty = print::pretty_format_node_dump(mcx, &format!("{{A :b {dump}}}")).unwrap();
     assert!(pretty.as_str().lines().all(|l| l.len() <= 78 + 3), "{pretty}");
 }
+
+// C expression_tree_mutator T_Aggref (nodeFuncs.c:3025-3026) mutates
+// aggdirectargs before args: a failing direct argument's error wins.
+#[test]
+fn mutator_visits_aggref_direct_args_before_args() {
+    let ctx = cx();
+    let mcx = ctx.mcx();
+    let agg = Node::mk(
+        mcx,
+        types_nodes::primnodes::Aggref {
+            aggfnoid: 3974,
+            aggtype: 701,
+            aggdirectargs: NodeList::make1(mcx, extern_param(mcx, 1)).unwrap(),
+            args: NodeList::make1(mcx, extern_param(mcx, 2)).unwrap(),
+            ..types_nodes::primnodes::Aggref::default()
+        },
+    )
+    .unwrap();
+    let mut seen = Vec::new();
+    let out = expression_tree_mutator(mcx, agg, &mut |n| {
+        seen.push(n.as_param().unwrap().paramid);
+        Ok(None)
+    })
+    .unwrap();
+    assert!(out.is_none());
+    assert_eq!(seen, vec![1, 2]);
+}
+
+// elog_node_display's ereport closes at print.c:85 (the C __LINE__ of a
+// multi-line ereport is its closing line); verbose logging shows it.
+#[test]
+fn elog_node_display_reports_print_c_ereport_line() {
+    let ctx = cx();
+    let mcx = ctx.mcx();
+    let e = print::elog_node_dump_display(mcx, types_error::ERROR, "parse tree", "{QUERY}", false)
+        .unwrap_err();
+    let loc = e.location.as_ref().unwrap();
+    assert_eq!(
+        (loc.filename.as_deref(), loc.lineno, loc.funcname.as_deref()),
+        (Some("print.c"), 85, Some("elog_node_display"))
+    );
+}

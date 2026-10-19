@@ -294,6 +294,14 @@ fn byteain_hex_digit_message_is_c_exact() {
 }
 
 #[test]
+fn byteain_hex_digit_message_stops_at_nul() {
+    install_mb_for_levenshtein();
+    let ctx = MemoryContext::new("t");
+    let err = bytea::byteain(ctx.mcx(), b"\\xa\0", None).unwrap_err();
+    assert_eq!(err.message, "invalid hexadecimal digit: \"\"");
+}
+
+#[test]
 fn bytea_substring_and_pos() {
     install_detoast_seams();
     let ctx = MemoryContext::new("t");
@@ -1832,4 +1840,58 @@ mod interrupts {
         assert_eq!(fields.len(), 1 << 20);
         assert_eq!(fields.get((1 << 20) - 1).unwrap(), (b"x".as_slice(), false));
     }
+}
+
+// encode.c hex_decode_safe under pg_input_is_valid: ereturn without
+// details_wanted never renders the offending mbchar, so a truncated
+// multibyte byte yields false instead of pg_mblen_range's 22021.
+#[test]
+fn hex_decode_soft_error_without_details_skips_mblen() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let mut out: mcx::PgVec<'_, u8> = mcx::vec_with_capacity_in(mcx, 8).unwrap();
+    let mut esc = types_error::SoftErrorContext::new(false);
+    assert_eq!(bytea::hex_decode_into(b"\xe2", Some(&mut esc), &mut out).unwrap(), None);
+    assert!(esc.error_occurred());
+    assert!(esc.error().is_none());
+    let mut esc = types_error::SoftErrorContext::new(false);
+    assert_eq!(bytea::hex_decode_into(b"1\xe2", Some(&mut esc), &mut out).unwrap(), None);
+    assert!(esc.error_occurred());
+}
+
+// regression: varlena.c:4485 pallocs (len + 1) * sizeof(pg_wchar)
+// before the engine runs, so a 268435455-byte source is an XX000 alloc error
+// on every engine path.
+#[test]
+fn replace_text_regexp_wchar_buffer_is_alloc_bounded() {
+    crate::replace_regexp::wchar_buffer_check(268435454).unwrap();
+    let e = crate::replace_regexp::wchar_buffer_check(268435455).unwrap_err();
+    assert_eq!(e.message(), "invalid memory alloc request size 1073741824");
+    assert_eq!(e.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+}
+
+// regression: format('%I', ...) quotes through quote_identifier,
+// whose palloc(strlen + nquotes + 3) (ruleutils.c:13121) is the XX000 bound
+// on the quoted result, ahead of any StringInfo 54000.
+#[test]
+fn format_identifier_is_alloc_bounded() {
+    crate::concat_format::quote_identifier_alloc_check(536870910, 536870910).unwrap();
+    let e = crate::concat_format::quote_identifier_alloc_check(536870911, 536870911).unwrap_err();
+    assert_eq!(e.message(), "invalid memory alloc request size 1073741825");
+    assert_eq!(e.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+}
+
+// audit-18.6 regression: textToQualifiedNameList runs over
+// text_to_cstring's buffer, so SplitIdentifierString never sees bytes past
+// the first NUL (varlena.c:3626).
+#[test]
+fn text_to_qualified_name_list_stops_at_nul() {
+    let cx = MemoryContext::new("t");
+    let names = textToQualifiedNameList(cx.mcx(), b"t\0.a.b.c").unwrap();
+    assert_eq!(names.len(), 1);
+    assert_eq!(names[0].as_slice(), b"t");
+    let names = text_to_qualified_name_list_bytes(cx.mcx(), b"s.t\0.a.b.c").unwrap();
+    assert_eq!(names, [b"s".to_vec(), b"t".to_vec()]);
+    let err = textToQualifiedNameList(cx.mcx(), b"\0a").unwrap_err();
+    assert_eq!(err.sqlstate, types_error::ERRCODE_INVALID_NAME);
 }

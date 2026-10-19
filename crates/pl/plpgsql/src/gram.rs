@@ -238,7 +238,10 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
             if startlocation < 0 {
                 startlocation = lloc;
             }
-            if parenlevel == 0 && (tok == until || (until2 != 0 && tok == until2) || (until3 != 0 && tok == until3)) {
+            // pl_gram.y:2792-2796 compares an absent until2/until3 (0) too,
+            // so end of input (token 0) ends the construct like a terminator
+            // and the grammar reports the EOF.
+            if parenlevel == 0 && (tok == until || tok == until2 || tok == until3) {
                 tok_final = tok;
                 self.last_endtoken_loc = lloc;
                 break;
@@ -412,7 +415,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
             if t2.0 == ('%' as i32) {
                 let t3 = self.yylex()?;
                 if Self::tok_is_keyword(&t3, K_TYPE, "type") {
-                    result = Some(self.comp.parse_cwordtype(&idents)?);
+                    result = self.comp.parse_cwordtype(&idents)?;
                 } else if Self::tok_is_keyword(&t3, K_ROWTYPE, "rowtype") {
                     result = Some(self.comp.parse_cwordrowtype(&idents)?);
                 } else {
@@ -491,13 +494,10 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
             t = self.yylex()?;
         }
         let type_name = self.source_span(startlocation, endloc);
-        // C passes the span verbatim; trailing C-locale whitespace is
-        // neutral to parse_datatype, but Unicode spaces are identifier bytes.
-        let type_name = type_name.trim_end_matches(|c: char| c.is_ascii() && pg_string::isspace_c_locale(c as u8));
         if type_name.is_empty() {
             return Err(self.yyerror("missing data type declaration", t.2));
         }
-        let result = self.parse_datatype(type_name, startlocation)?;
+        let result = self.parse_datatype(&type_name, startlocation)?;
         self.push_back(&t)?;
         Ok(result)
     }
@@ -585,7 +585,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                     return Err(self.yyerror("syntax error", v.2));
                 }
             } else {
-                return Err(self.yyerror("unrecognized option", opt.2));
+                return Err(self.yyerror("syntax error", opt.2));
             }
         }
     }
@@ -677,7 +677,10 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                     }
                     K_DECLARE => continue,
                     LESS_LESS => {
-                        // pl_gram.y:499-503: parser_errposition(@1), the "<<".
+                        // pl_gram.y:493-503: the full << label >> production
+                        // is parsed first; parser_errposition(@1), the "<<".
+                        self.any_identifier()?;
+                        self.expect(GREATER_GREATER, "syntax error")?;
                         return Err(self.gram_err_pos(
                             ERRCODE_SYNTAX_ERROR,
                             "block label must be placed before DECLARE, not after".to_string(),
@@ -848,10 +851,11 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
 
         let mut datatype = self.read_datatype(None)?;
 
-        // decl_collate (pl_gram.y:789-806) + the decl_statement collation
-        // insertion (pl_gram.y:516-526); errposition is the COLLATE keyword.
+        // decl_collate (pl_gram.y:789-806); the decl_statement collation
+        // insertion (pl_gram.y:516-526) runs after decl_defval, errposition
+        // is the COLLATE keyword.
         let t = self.yylex()?;
-        if t.0 == K_COLLATE {
+        let collate = if t.0 == K_COLLATE {
             let collate_loc = t.2;
             let ct = self.yylex()?;
             let names: Vec<String> = if ct.0 == T_WORD {
@@ -864,21 +868,11 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                 return Err(self.yyerror("syntax error", ct.2));
             };
             let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-            let collation = catalog_namespace::get_collation_oid(&refs, false)?;
-            if !types_core::OidIsValid(datatype.collation) {
-                return Err(self.gram_err_pos(
-                    types_error::ERRCODE_DATATYPE_MISMATCH,
-                    format!(
-                        "collations are not supported by type {}",
-                        format_type::format_type_be(datatype.typoid)?
-                    ),
-                    collate_loc,
-                ));
-            }
-            datatype.collation = collation;
+            Some((catalog_namespace::get_collation_oid(&refs, false)?, collate_loc))
         } else {
             self.push_back(&t)?;
-        }
+            None
+        };
 
         // decl_notnull.
         let mut notnull = false;
@@ -902,6 +896,19 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
             return Err(self.yyerror("syntax error", t.2));
         };
 
+        if let Some((collation, collate_loc)) = collate {
+            if !types_core::OidIsValid(datatype.collation) {
+                return Err(self.gram_err_pos(
+                    types_error::ERRCODE_DATATYPE_MISMATCH,
+                    format!(
+                        "collations are not supported by type {}",
+                        format_type::format_type_be(datatype.typoid)?
+                    ),
+                    collate_loc,
+                ));
+            }
+            datatype.collation = collation;
+        }
         let dno = self.comp.build_variable(&name, lineno, datatype, true)?;
         if notnull && default_val.is_none() {
             return Err(self.gram_err_pos(
@@ -1283,7 +1290,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                     cursor_options |= CURSOR_OPT_NO_SCROLL;
                     t = self.yylex()?;
                 } else {
-                    self.push_back(&t2)?;
+                    t = t2;
                 }
             } else if Self::tok_is_keyword(&t, K_SCROLL, "scroll") {
                 cursor_options |= CURSOR_OPT_SCROLL;
@@ -1523,7 +1530,12 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
             let mut argpos = argc;
             let t1 = self.yylex()?;
             let arglocation = t1.2;
-            let named_candidate = t1.0 == T_WORD || t1.0 == T_DATUM || Self::token_is_unreserved_keyword(&t1);
+            // pl_gram.y:3963: plpgsql_peek2 sees raw tokens, so a compound
+            // reference (IDENT '.' ...) is never a named argument.
+            let named_candidate = t1.0 == T_WORD
+                || (t1.0 == T_DATUM
+                    && !t1.1.wdatum.as_ref().expect("T_DATUM").ident.is_empty())
+                || Self::token_is_unreserved_keyword(&t1);
             let argname: Option<String> = if named_candidate {
                 let t2 = self.yylex()?;
                 let is_named = t2.0 == COLON_EQUALS || t2.0 == EQUALS_GREATER;
@@ -1531,8 +1543,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                     let name = if t1.0 == T_WORD {
                         t1.1.word.as_ref().expect("T_WORD").ident.clone()
                     } else if t1.0 == T_DATUM {
-                        let w = t1.1.wdatum.as_ref().expect("T_DATUM");
-                        if !w.ident.is_empty() { w.ident.clone() } else { w.idents.join(".") }
+                        t1.1.wdatum.as_ref().expect("T_DATUM").ident.clone()
                     } else {
                         Self::unreserved_keyword_name(&t1).unwrap_or("").to_string()
                     };
@@ -1834,7 +1845,16 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         let tokloc = t.2;
         if t.0 == K_EXECUTE {
             let mut term = 0i32;
-            let dynquery = self.read_sql_expression2(K_LOOP, K_USING, "LOOP", &mut term)?;
+            let dynquery =
+                self.read_sql_expression2(K_LOOP, K_USING, "LOOP or USING", &mut term)?;
+            let var = self.query_for_target(
+                &name,
+                var_lineno,
+                var_loc,
+                scalar,
+                rowrec,
+                types_error::ERRCODE_DATATYPE_MISMATCH,
+            )?;
             let mut params = Vec::new();
             if term == K_USING {
                 loop {
@@ -1847,14 +1867,6 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                     }
                 }
             }
-            let var = self.query_for_target(
-                &name,
-                var_lineno,
-                var_loc,
-                scalar,
-                rowrec,
-                types_error::ERRCODE_DATATYPE_MISMATCH,
-            )?;
             let (body, end_label, end_loc) = self.parse_loop_body()?;
             self.check_labels(label.as_deref(), end_label.as_deref(), end_loc)?;
             self.comp.ns_pop();
@@ -2054,22 +2066,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
     // stmt_foreach_a (pl_gram.y).
     fn parse_foreach(&mut self, label: Option<String>, lloc: i32) -> PgResult<PlStmt> {
         self.comp.ns_push_label(label.as_deref(), LABEL_LOOP);
-        let (name, _var_lineno, scalar, rowrec, var_loc) = self.parse_for_variable()?;
-        let varno = if let Some(r) = rowrec {
-            self.check_assignable(r, var_loc)?;
-            r
-        } else if let Some(s) = scalar {
-            self.check_assignable(s, var_loc)?;
-            s
-        } else {
-            let _ = name;
-            return Err(self.gram_err_pos(
-                ERRCODE_SYNTAX_ERROR,
-                "loop variable of FOREACH must be a known variable or list of variables"
-                    .to_string(),
-                var_loc,
-            ));
-        };
+        let (_name, _var_lineno, scalar, rowrec, var_loc) = self.parse_for_variable()?;
         let t = self.yylex()?;
         let slice = if t.0 == K_SLICE {
             let it = self.expect(ICONST, "syntax error")?;
@@ -2082,6 +2079,20 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         self.expect(K_ARRAY, "syntax error")?;
         let expr = self.read_sql_expression(K_LOOP, "LOOP")?;
         let (body, end_label, end_loc) = self.parse_loop_body()?;
+        let varno = if let Some(r) = rowrec {
+            self.check_assignable(r, var_loc)?;
+            r
+        } else if let Some(s) = scalar {
+            self.check_assignable(s, var_loc)?;
+            s
+        } else {
+            return Err(self.gram_err_pos(
+                ERRCODE_SYNTAX_ERROR,
+                "loop variable of FOREACH must be a known variable or list of variables"
+                    .to_string(),
+                var_loc,
+            ));
+        };
         self.check_labels(label.as_deref(), end_label.as_deref(), end_loc)?;
         self.comp.ns_pop();
         Ok(PlStmt::ForEachA {
@@ -2616,7 +2627,6 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                     w.dno,
                     if !w.ident.is_empty() { w.ident.clone() } else { w.idents.join(".") },
                 );
-                self.check_assignable(dno, vt.2)?;
                 // pl_gram.y:1163-1174: a row, a record, or an array element
                 // (next token '[') is "not a scalar variable".
                 let not_scalar =
@@ -2629,6 +2639,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                         vt.2,
                     ));
                 }
+                self.check_assignable(dno, vt.2)?;
                 dno
             } else {
                 return Err(self.current_token_is_not_variable(&vt));
@@ -2668,6 +2679,22 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
             } else {
                 return Err(self.yyerror("unrecognized GET DIAGNOSTICS item", it.2));
             };
+            items.push(GetDiagItem { kind, target });
+
+            let nt = self.yylex()?;
+            if nt.0 == (',' as i32) {
+                continue;
+            }
+            if nt.0 == (';' as i32) {
+                break;
+            }
+            return Err(self.yyerror("syntax error", nt.2));
+        }
+
+        // pl_gram.y:1013-1057: area restrictions are checked only after the
+        // whole item list and the ';' have been consumed.
+        for item in &items {
+            let kind = item.kind;
             let kindname = getdiag_kindname(kind);
             if is_stacked && matches!(kind, GETDIAG_ROW_COUNT | GETDIAG_ROUTINE_OID) {
                 return Err(self.gram_err_pos(
@@ -2689,16 +2716,6 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                     lloc,
                 ));
             }
-            items.push(GetDiagItem { kind, target });
-
-            let nt = self.yylex()?;
-            if nt.0 == (',' as i32) {
-                continue;
-            }
-            if nt.0 == (';' as i32) {
-                break;
-            }
-            return Err(self.yyerror("syntax error", nt.2));
         }
 
         Ok(PlStmt::GetDiag {
@@ -2847,11 +2864,11 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
         let mut strict = false;
         let mut target: Dno = -1;
         let mut params: Vec<PlExpr> = Vec::new();
+        let mut endloc = self.last_endtoken_loc;
         loop {
             if endtoken == K_INTO {
                 if into {
-                    let t = self.yylex()?;
-                    return Err(self.yyerror("syntax error", t.2));
+                    return Err(self.yyerror("syntax error", endloc));
                 }
                 into = true;
                 let (tgt, s) = self.read_into_target(true)?;
@@ -2859,13 +2876,10 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                 strict = s;
                 let t = self.yylex()?;
                 endtoken = t.0;
-                if endtoken != K_USING && endtoken != (';' as i32) {
-                    return Err(self.yyerror("syntax error", t.2));
-                }
+                endloc = t.2;
             } else if endtoken == K_USING {
                 if !params.is_empty() {
-                    let t = self.yylex()?;
-                    return Err(self.yyerror("syntax error", t.2));
+                    return Err(self.yyerror("syntax error", endloc));
                 }
                 loop {
                     let mut term = 0i32;
@@ -2882,6 +2896,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
                     )?;
                     params.push(expr);
                     endtoken = term;
+                    endloc = self.last_endtoken_loc;
                     if term != (',' as i32) {
                         break;
                     }
@@ -2889,8 +2904,7 @@ impl<'a, 'mcx> Parser<'a, 'mcx> {
             } else if endtoken == (';' as i32) {
                 break;
             } else {
-                let t = self.yylex()?;
-                return Err(self.yyerror("syntax error", t.2));
+                return Err(self.yyerror("syntax error", endloc));
             }
         }
         Ok(PlStmt::DynExecute {
@@ -2970,6 +2984,16 @@ mod audit_b081_tests;
 #[cfg(test)]
 #[path = "gram_audit_b202_tests.rs"]
 mod audit_b202_tests;
+
+#[cfg(test)]
+#[path = "gram_bugs_batch75_tests.rs"]
+mod bugs_batch75_tests;
+#[cfg(test)]
+#[path = "gram_bugs_batch186_tests.rs"]
+mod bugs_batch186_tests;
+#[cfg(test)]
+#[path = "gram_bugs_batch233_tests.rs"]
+mod bugs_batch233_tests;
 
 #[cfg(test)]
 mod tests {

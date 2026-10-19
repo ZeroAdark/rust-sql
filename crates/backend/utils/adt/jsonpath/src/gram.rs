@@ -404,6 +404,12 @@ impl<'a, 'e, 's, 'mcx> Parser<'a, 'e, 's, 'mcx> {
         self.lookahead = None;
     }
 
+    // jsonpath_gram.y: expr never starts with EXISTS_P (only a predicate
+    // does), so bison rejects the lookahead before the operand is parsed.
+    fn expr_start(&mut self) -> PgResult<bool> {
+        Ok(self.peek_tok()? != Some(Token::ExistsP))
+    }
+
     fn expect_char(&mut self, c: u8) -> POut<()> {
         if self.at_char(c)? {
             self.advance();
@@ -534,6 +540,9 @@ impl<'a, 'e, 's, 'mcx> Parser<'a, 'e, 's, 'mcx> {
         if lkind == Expr {
             if let Some(op) = self.comp_op()? {
                 self.advance();
+                if !self.expr_start()? {
+                    return Ok(None);
+                }
                 let (right, rkind) = match self.parse_additive()? {
                     Some(v) => v,
                     None => return Ok(None),
@@ -633,6 +642,9 @@ impl<'a, 'e, 's, 'mcx> Parser<'a, 'e, 's, 'mcx> {
                 break;
             }
             self.advance();
+            if !self.expr_start()? {
+                return Ok(None);
+            }
             let (right, rkind) = match self.parse_multiplicative()? {
                 Some(v) => v,
                 None => return Ok(None),
@@ -665,6 +677,9 @@ impl<'a, 'e, 's, 'mcx> Parser<'a, 'e, 's, 'mcx> {
                 break;
             }
             self.advance();
+            if !self.expr_start()? {
+                return Ok(None);
+            }
             let (right, rkind) = match self.parse_unary()? {
                 Some(v) => v,
                 None => return Ok(None),
@@ -685,6 +700,9 @@ impl<'a, 'e, 's, 'mcx> Parser<'a, 'e, 's, 'mcx> {
         }
         if self.at_char(b'+')? {
             self.advance();
+            if !self.expr_start()? {
+                return Ok(None);
+            }
             let (e, k) = match self.parse_unary()? {
                 Some(v) => v,
                 None => return Ok(None),
@@ -696,6 +714,9 @@ impl<'a, 'e, 's, 'mcx> Parser<'a, 'e, 's, 'mcx> {
         }
         if self.at_char(b'-')? {
             self.advance();
+            if !self.expr_start()? {
+                return Ok(None);
+            }
             let (e, k) = match self.parse_unary()? {
                 Some(v) => v,
                 None => return Ok(None),
@@ -786,6 +807,9 @@ impl<'a, 'e, 's, 'mcx> Parser<'a, 'e, 's, 'mcx> {
         if self.peek_tok()? == Some(Token::ExistsP) {
             self.advance();
             if self.expect_char(b'(')?.is_none() {
+                return Ok(None);
+            }
+            if !self.expr_start()? {
                 return Ok(None);
             }
             let (e, k) = match self.parse_additive()? {
@@ -1028,6 +1052,9 @@ impl<'a, 'e, 's, 'mcx> Parser<'a, 'e, 's, 'mcx> {
 
     /// index_elem: expr | expr TO_P expr — expr only.
     fn parse_index_elem(&mut self) -> POut<Item<'mcx>> {
+        if !self.expr_start()? {
+            return Ok(None);
+        }
         let (from, fk) = match self.parse_additive()? {
             Some(v) => v,
             None => return Ok(None),
@@ -1037,6 +1064,9 @@ impl<'a, 'e, 's, 'mcx> Parser<'a, 'e, 's, 'mcx> {
         }
         if self.peek_tok()? == Some(Token::ToP) {
             self.advance();
+            if !self.expr_start()? {
+                return Ok(None);
+            }
             let (to, tk) = match self.parse_additive()? {
                 Some(v) => v,
                 None => return Ok(None),

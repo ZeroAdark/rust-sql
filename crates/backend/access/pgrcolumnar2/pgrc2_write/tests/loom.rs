@@ -11,7 +11,7 @@
 //!   RUSTFLAGS="--cfg loom" cargo test -p pgrc2_write --test loom --release
 //!
 //! **BLOCKED TREE-WIDE (witnessed 2026-08-14, CI cluster job
-//! pgrust-fast-tests-43faca58e3-1786681622-4d77): the invocation above no
+//! pgrust-tests-43faca58e3-1786681622-4d77): the invocation above no
 //! longer compiles** — `--cfg loom` applies to the whole dep graph, and
 //! pgrc2_write's cone now reaches `pgstat` (via adt_jsonb_shred → …
 //! adt_date → xact → … → bufmgr → pgstat), whose STATIC `pgsync::Mutex`es

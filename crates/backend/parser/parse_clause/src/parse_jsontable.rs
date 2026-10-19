@@ -122,16 +122,19 @@ pub(crate) fn transformJsonTable<'mcx>(
         )?;
         tf.plan = Some(plan);
 
-        // C copyObject's the transformed PASSING values into the TableFunc
-        // (they are evaluated separately); the shallow list clone shares the
-        // immutable expression nodes — setrefs' rtoffset-0 walker only
-        // records dependencies, so aliasing is safe.
+        // C copyObject's the transformed PASSING values into the TableFunc:
+        // in-place walkers (single-use CTE inlining's
+        // IncrementVarSublevelsUp) must not visit one Var twice.
         let je = tf
             .docexpr
             .expect("set above")
             .as_json_expr()
             .expect("transformJsonFuncExpr yields JsonExpr");
-        tf.passingvalexprs = je.passing_values.clone_in(mcx)?;
+        let mut passing = NodeList::nil();
+        for n in je.passing_values.iter() {
+            passing.lappend(mcx, copyfuncs::copy_object(mcx, n)?)?;
+        }
+        tf.passingvalexprs = passing;
 
         tf.ordinalitycol = -1;
         tf.location = jt.location;

@@ -64,6 +64,12 @@ pub fn args_unicode_mode(args: Option<&[u8]>) -> Result<bool, String> {
     Ok(ctx.unicode_mode != 0)
 }
 
+/// pgp-pgsql.c:475 decrypt_internal: init_work parses the args before the
+/// output MBuf is sized from the input.
+pub fn validate_args(args: Option<&[u8]>) -> Result<(), String> {
+    args_unicode_mode(args).map(|_| ())
+}
+
 // pgp-pgsql.c:511 decrypt_internal: check_expect runs on the decrypted
 // context whether or not pgp_decrypt failed; the NOTICEs precede the ERROR.
 fn finish_decrypt(
@@ -98,10 +104,16 @@ pub fn sym_decrypt(
     }
     ctx.text_mode = if need_text { 1 } else { 0 };
     set_symkey(key).map_err(|e| DecryptError { message: e, notices: Vec::new() })?;
+    ctx.mbuf_cap = decrypt_mbuf_cap(data.len());
 
     let exp = ctx.clone();
     let result = decrypt::decrypt_symmetric(&mut ctx, data, key);
     finish_decrypt(&exp, &ctx, result)
+}
+
+/// pgp-pgsql.c:479 decrypt_internal: mbuf_create(VARSIZE_ANY(data) + 2048).
+fn decrypt_mbuf_cap(input_len: usize) -> usize {
+    input_len + 4 + 2048
 }
 
 fn build_expect_notices(exp: &PgpContext, ctx: &PgpContext) -> Vec<String> {
@@ -130,24 +142,29 @@ pub fn pub_encrypt(
     key: &[u8],
     args: Option<&[u8]>,
     is_text: bool,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, DecryptError> {
     let mut ctx = PgpContext::default();
+    let fail = |message: String, ctx: &PgpContext| DecryptError {
+        message,
+        notices: ctx.debug_notices.clone(),
+    };
     if let Some(a) = args {
-        ctx.parse_args(a)?;
+        ctx.parse_args(a).map_err(|e| fail(e, &ctx))?;
     }
     ctx.text_mode = if is_text { 1 } else { 0 };
 
-    let pk = pubkey::read_key(key, None, 0)?;
+    let pk = pubkey::read_key(key, None, 0, &mut ctx).map_err(|e| fail(e, &ctx))?;
 
     let klen = consts::cipher_key_size(ctx.cipher_algo);
     let mut sess_key = vec![0u8; klen];
     if !consts::fill_random(&mut sess_key) {
-        return Err(consts::NO_RANDOM.to_string());
+        return Err(fail(consts::NO_RANDOM.to_string(), &ctx));
     }
 
     let mut out = Vec::new();
-    pubenc::write_pubenc_sesskey(&mut out, &pk, ctx.cipher_algo, &sess_key)?;
-    encrypt::write_encdata_packet(&ctx, data, &sess_key, &mut out)?;
+    pubenc::write_pubenc_sesskey(&mut out, &pk, ctx.cipher_algo, &sess_key)
+        .map_err(|e| fail(e, &ctx))?;
+    encrypt::write_encdata_packet(&ctx, data, &sess_key, &mut out).map_err(|e| fail(e, &ctx))?;
     Ok(out)
 }
 
@@ -165,8 +182,9 @@ pub fn pub_decrypt(
     }
     ctx.text_mode = if need_text { 1 } else { 0 };
 
-    let pk = pubkey::read_key(key, psw, 1)
-        .map_err(|e| DecryptError { message: e, notices: Vec::new() })?;
+    let pk = pubkey::read_key(key, psw, 1, &mut ctx)
+        .map_err(|e| DecryptError { message: e, notices: ctx.debug_notices.clone() })?;
+    ctx.mbuf_cap = decrypt_mbuf_cap(data.len());
 
     let exp = ctx.clone();
     let result = decrypt::decrypt_pubkey(&mut ctx, data, &mut |ctx, body| {
@@ -369,7 +387,7 @@ mod tests {
     fn pub_encrypt_refuses_secret_key() {
         let seckey = armor::armor_decode(RSA_SECKEY.as_bytes()).expect("dearmor seckey");
         let err = pub_encrypt(b"Secret msg", &seckey, None, true).unwrap_err();
-        assert_eq!(err, "Refusing to encrypt with secret key");
+        assert_eq!(err.message, "Refusing to encrypt with secret key");
     }
 
     #[test]
@@ -409,5 +427,44 @@ mod tests {
         let out = pub_decrypt(&msg, &seckey, None, Some(b"ignore-cipher-failure=1"), true)
             .expect("pub decrypt");
         assert_eq!(out.plaintext, b"Secret message.");
+    }
+
+    // pgp-encrypt.c:651: the data cipher is created before init_compress, so
+    // twofish (accepted by the option parser, absent from the cipher table)
+    // is reported ahead of a BZIP2 compress-algo.
+    #[test]
+    fn cipher_failure_precedes_compression_failure() {
+        let err = sym_encrypt(b"x", b"k", Some(b"s2k-cipher-algo=aes, cipher-algo=twofish, compress-algo=3"), true)
+            .unwrap_err();
+        assert_eq!(err, "Unsupported cipher algorithm");
+        let err = sym_encrypt(b"x", b"k", Some(b"cipher-algo=aes, compress-algo=3"), true).unwrap_err();
+        assert_eq!(err, "Unsupported compression algorithm");
+        let pubkey = armor::armor_decode(RSA_PUBKEY.as_bytes()).expect("dearmor pubkey");
+        let err = pub_encrypt(b"x", &pubkey, Some(b"cipher-algo=twofish, compress-algo=3"), true).unwrap_err();
+        assert_eq!(err.message, "Unsupported cipher algorithm");
+    }
+
+    // pgp-mpi-openssl.c:186 + bn_gcd.c: BN_mod_inverse refuses the modulus 1
+    // of a crafted Elgamal secret subkey (p = 1) -> "Math operation failed",
+    // with no px_debug line.
+    #[test]
+    fn elgamal_modulus_one_is_math_failed() {
+        let key = unhex("c715040000000010000101000202000101000001010002");
+        let msg = unhex("c11003000000000000000010000101000101");
+        let err = pub_decrypt(&msg, &key, None, Some(b"debug=1"), false).unwrap_err();
+        assert_eq!((err.message.as_str(), err.notices.len()), ("Math operation failed", 0));
+    }
+
+    // pgp.c:234 pgp_set_sess_key stores `use ? 1 : 0`; the public-key decrypt
+    // path leaves it for check_expect (pgp-pgsql.c:513).
+    #[test]
+    fn sess_key_option_is_normalised_before_check_expect() {
+        let pubkey = armor::armor_decode(RSA_PUBKEY.as_bytes()).expect("dearmor pubkey");
+        let seckey = armor::armor_decode(RSA_SECKEY.as_bytes()).expect("dearmor seckey");
+        let ct = pub_encrypt(b"x", &pubkey, None, true).expect("pub encrypt");
+        let out = pub_decrypt(&ct, &seckey, None, Some(b"sess-key=5, expect-sess-key=5"), true).expect("decrypt");
+        assert_eq!(out.notices, ["pgp_decrypt: unexpected use_sess_key: expected 5 got 1"]);
+        let out = pub_decrypt(&ct, &seckey, None, Some(b"sess-key=5, expect-sess-key=1"), true).expect("decrypt");
+        assert!(out.notices.is_empty(), "{:?}", out.notices);
     }
 }

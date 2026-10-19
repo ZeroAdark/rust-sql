@@ -25,6 +25,7 @@ guc_tables = { path = "../../../utils/misc/guc_tables" }
 heapam = { path = "../heapam" }
 heapam_visibility = { path = "../heapam_visibility" }
 init_small = { path = "../../../utils/init/init_small" }
+elog = { path = "../../../utils/error/elog" }
 pgstat = { path = "../../../utils/activity/pgstat" }
 rmgr = { path = "../../transam/rmgr" }
 

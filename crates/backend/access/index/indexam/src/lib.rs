@@ -685,7 +685,7 @@ pub fn index_fetch_heap<'mcx>(
 
     // Start a run when the index holds more TIDs for this heap page. MVCC
     // verdicts are fill-time-independent; non-MVCC keeps the per-tuple path.
-    if !scan.xs_heap_continue && scan.xs_snapshot.as_deref().is_some_and(IsMVCCSnapshot) {
+    if same_page_run_allowed(scan) {
         if let IndexScanOpaque::Btree(so) = &scan.opaque {
             let mut run: [MaybeUninit<ItemPointerData>; INDEX_FETCH_BATCH_MAX] =
                 [const { MaybeUninit::uninit() }; INDEX_FETCH_BATCH_MAX];
@@ -809,7 +809,7 @@ pub fn index_getnext_tidrun<'mcx>(
         return Ok(0);
     }
     prefetch::on_heap_fetch(scan)?;
-    if !scan.xs_heap_continue && scan.xs_snapshot.as_deref().is_some_and(IsMVCCSnapshot) {
+    if same_page_run_allowed(scan) {
         if let IndexScanOpaque::Btree(so) = &scan.opaque {
             let mut run: [MaybeUninit<ItemPointerData>; INDEX_FETCH_BATCH_MAX] =
                 [const { MaybeUninit::uninit() }; INDEX_FETCH_BATCH_MAX];
@@ -834,6 +834,17 @@ pub fn index_getnext_tidrun<'mcx>(
         }
     }
     Ok(1)
+}
+
+// A serializable xact predicate-locks (and conflict-out checks) each heap
+// tuple as index_fetch_heap reaches it (heapam.c heap_hot_search_buffer);
+// filling a run ahead of the caller would lock tuples C never fetches (a
+// LIMIT stops first), so the run stays per-tuple there.
+#[inline]
+fn same_page_run_allowed(scan: &IndexScanDescData<'_>) -> bool {
+    !scan.xs_heap_continue
+        && scan.xs_snapshot.as_deref().is_some_and(IsMVCCSnapshot)
+        && !predicate::engine::SerializableXactActive()
 }
 
 // One probe on the enabled flag then one add: C's pgstat_should_count_relation shape.

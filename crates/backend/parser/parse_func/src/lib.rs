@@ -852,10 +852,8 @@ fn pack_variadic_args<'mcx>(
             vargs.push(n);
         }
     }
-    let element_typeid = post_coercion_type(
-        actual_arg_types[non_var_args],
-        declared_arg_types[non_var_args],
-    )?;
+    // parse_func.c:731: the type of the node make_fn_arguments produced.
+    let element_typeid = nodes_core::expr_type(vargs[0]);
     let array_typeid = lsyscache::get_array_type(element_typeid)?;
     let vargs = NodeList::from_slice(mcx, vargs.as_slice())?;
     if !OidIsValid(array_typeid) {
@@ -1014,6 +1012,13 @@ fn cache_lookup_failed_aggregate(funcid: Oid) -> Box<PgError> {
     Box::new(PgError::error(format!(
         "cache lookup failed for aggregate {funcid}"
     )))
+}
+
+#[track_caller]
+#[cold]
+#[inline(never)]
+fn unrecognized_prokind(prokind: i8) -> Box<PgError> {
+    Box::new(PgError::error(format!("unrecognized prokind: {}", prokind as u8 as char)))
 }
 
 // parse_func.c:1681 elog(ERROR, "cache lookup failed for function %u").
@@ -1731,7 +1736,7 @@ fn func_get_detail<'mcx>(
             nvargs: best.nvargs,
             argdefaults,
         },
-        other => panic!("unrecognized prokind: {other} (parse_func.c func_get_detail)"),
+        other => return Err(unrecognized_prokind(other)),
     })
 }
 

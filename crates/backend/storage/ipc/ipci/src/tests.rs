@@ -121,12 +121,19 @@ fn bringup() {
     g::SetMaxBackends(100 + 16 + 8 + 10 + 2);
 }
 
+static STARTUP_HOOK_RUNS: AtomicUsize = AtomicUsize::new(0);
+
 #[test]
 fn create_shared_memory_and_semaphores_end_to_end() {
     bringup();
+    register_shmem_startup_hook(|| {
+        STARTUP_HOOK_RUNS.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    });
 
     ipci_seams::create_shared_memory_and_semaphores::call(4).unwrap();
 
+    assert_eq!(STARTUP_HOOK_RUNS.load(Ordering::Relaxed), 1);
     assert_eq!(BE_STATUS_INITS.load(Ordering::Relaxed), 1);
     assert_eq!(lmgr_proc::ProcGlobal().allProcs.len() > 0, true);
     pmsignal::MarkPostmasterChildSlotAssigned(1).unwrap();
@@ -160,6 +167,7 @@ fn create_shared_memory_and_semaphores_end_to_end() {
 
     ResetShmemAfterCrash().unwrap();
 
+    assert_eq!(STARTUP_HOOK_RUNS.load(Ordering::Relaxed), 2, "ipci.c:248 reruns shmem_startup_hook");
     assert_eq!(varsup::TransamVariables().nextOid.load(Ordering::Relaxed), 0);
     assert_eq!(lock0.state.load(Ordering::Relaxed), lwlock::LW_FLAG_RELEASE_OK);
     assert_eq!(BE_STATUS_RESETS.load(Ordering::Relaxed), 1);

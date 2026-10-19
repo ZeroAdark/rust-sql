@@ -453,7 +453,13 @@ impl<'a> JsonLex<'a> {
 
     // C: json_errdetail. The `%.*s` specifier prints the current token verbatim.
     pub fn errdetail(&self, error: JsonError) -> String {
-        errdetail_for(
+        String::from_utf8_lossy(&self.errdetail_bytes(error)).into_owned()
+    }
+
+    // The `%.*s` token bytes verbatim (non-UTF-8 input reaches the wire as C
+    // sends it).
+    pub fn errdetail_bytes(&self, error: JsonError) -> Vec<u8> {
+        errdetail_for_bytes(
             error,
             self.current_token(),
             self.input.get(self.token_terminator).copied(),
@@ -461,7 +467,7 @@ impl<'a> JsonLex<'a> {
     }
 
     // C: report_json_context — the "JSON data, line N: ..." errcontext line.
-    pub fn errcontext(&self) -> String {
+    pub fn errcontext(&self) -> Vec<u8> {
         let line_start = self.line_start;
         let context_end = self.token_terminator;
         let mut context_start = line_start;
@@ -480,7 +486,7 @@ impl<'a> JsonLex<'a> {
             context_start = line_start;
         }
 
-        let ctxt = String::from_utf8_lossy(&self.input[context_start..context_end]);
+        let ctxt = &self.input[context_start..context_end];
         let prefix = if context_start > line_start { "..." } else { "" };
         let suffix = if self.token_type != JsonToken::End
             && context_end < self.input.len()
@@ -492,10 +498,10 @@ impl<'a> JsonLex<'a> {
             ""
         };
 
-        format!(
-            "JSON data, line {}: {}{}{}",
-            self.line_number, prefix, ctxt, suffix
-        )
+        let mut out = format!("JSON data, line {}: {}", self.line_number, prefix).into_bytes();
+        out.extend_from_slice(ctxt);
+        out.extend_from_slice(suffix.as_bytes());
+        out
     }
 }
 
@@ -509,64 +515,60 @@ pub(crate) fn errdetail_for(
     token: &[u8],
     byte_at_terminator: Option<u8>,
 ) -> String {
-    let tok = || String::from_utf8_lossy(token);
+    String::from_utf8_lossy(&errdetail_for_bytes(error, token, byte_at_terminator)).into_owned()
+}
+
+fn errdetail_for_bytes(error: JsonError, token: &[u8], byte_at_terminator: Option<u8>) -> Vec<u8> {
+    let quoted = |prefix: &str, suffix: &str| {
+        let mut out = Vec::with_capacity(prefix.len() + token.len() + suffix.len());
+        out.extend_from_slice(prefix.as_bytes());
+        out.extend_from_slice(token);
+        out.extend_from_slice(suffix.as_bytes());
+        out
+    };
     match error {
-        JsonError::EscapingInvalid => {
-            format!("Escape sequence \"\\{}\" is invalid.", tok())
-        }
+        JsonError::EscapingInvalid => quoted("Escape sequence \"\\", "\" is invalid."),
         JsonError::EscapingRequired => format!(
             "Character with value 0x{:02x} must be escaped.",
             byte_at_terminator.unwrap_or(0)
-        ),
-        JsonError::ExpectedEnd => {
-            format!("Expected end of input, but found \"{}\".", tok())
-        }
+        )
+        .into_bytes(),
+        JsonError::ExpectedEnd => quoted("Expected end of input, but found \"", "\"."),
         JsonError::ExpectedArrayFirst => {
-            format!("Expected array element or \"]\", but found \"{}\".", tok())
+            quoted("Expected array element or \"]\", but found \"", "\".")
         }
-        JsonError::ExpectedArrayNext => {
-            format!("Expected \",\" or \"]\", but found \"{}\".", tok())
-        }
-        JsonError::ExpectedColon => {
-            format!("Expected \":\", but found \"{}\".", tok())
-        }
-        JsonError::ExpectedJson => {
-            format!("Expected JSON value, but found \"{}\".", tok())
-        }
-        JsonError::ExpectedMore => "The input string ended unexpectedly.".to_string(),
+        JsonError::ExpectedArrayNext => quoted("Expected \",\" or \"]\", but found \"", "\"."),
+        JsonError::ExpectedColon => quoted("Expected \":\", but found \"", "\"."),
+        JsonError::ExpectedJson => quoted("Expected JSON value, but found \"", "\"."),
+        JsonError::ExpectedMore => b"The input string ended unexpectedly.".to_vec(),
         JsonError::ExpectedObjectFirst => {
-            format!("Expected string or \"}}\", but found \"{}\".", tok())
+            quoted("Expected string or \"}\", but found \"", "\".")
         }
-        JsonError::ExpectedObjectNext => {
-            format!("Expected \",\" or \"}}\", but found \"{}\".", tok())
-        }
-        JsonError::ExpectedString => {
-            format!("Expected string, but found \"{}\".", tok())
-        }
-        JsonError::InvalidToken => format!("Token \"{}\" is invalid.", tok()),
-        JsonError::UnicodeCodePointZero => {
-            "\\u0000 cannot be converted to text.".to_string()
-        }
+        JsonError::ExpectedObjectNext => quoted("Expected \",\" or \"}\", but found \"", "\"."),
+        JsonError::ExpectedString => quoted("Expected string, but found \"", "\"."),
+        JsonError::InvalidToken => quoted("Token \"", "\" is invalid."),
+        JsonError::UnicodeCodePointZero => b"\\u0000 cannot be converted to text.".to_vec(),
         JsonError::UnicodeEscapeFormat => {
-            "\"\\u\" must be followed by four hexadecimal digits.".to_string()
+            b"\"\\u\" must be followed by four hexadecimal digits.".to_vec()
         }
         JsonError::UnicodeHighSurrogate => {
-            "Unicode high surrogate must not follow a high surrogate.".to_string()
+            b"Unicode high surrogate must not follow a high surrogate.".to_vec()
         }
         JsonError::UnicodeLowSurrogate => {
-            "Unicode low surrogate must follow a high surrogate.".to_string()
+            b"Unicode low surrogate must follow a high surrogate.".to_vec()
         }
         JsonError::UnicodeUntranslatable => format!(
             "Unicode escape value could not be translated to the server's encoding {}.",
             mbutils::GetDatabaseEncodingName()
-        ),
+        )
+        .into_bytes(),
         JsonError::NestingTooDeep => {
-            "JSON nested too deep, maximum permitted depth is 6400.".to_string()
+            b"JSON nested too deep, maximum permitted depth is 6400.".to_vec()
         }
         // C: JSON_INCOMPLETE falls through the switch to the "unexpected
         // json parse error type: %d" fallback (JsonParseErrorType value 1).
-        JsonError::Incomplete => "unexpected json parse error type: 1".to_string(),
-        JsonError::SemActionFailed | JsonError::Success => String::new(),
+        JsonError::Incomplete => b"unexpected json parse error type: 1".to_vec(),
+        JsonError::SemActionFailed | JsonError::Success => Vec::new(),
     }
 }
 

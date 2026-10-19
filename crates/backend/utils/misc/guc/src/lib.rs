@@ -66,7 +66,11 @@ pub struct GucCheckError {
     pub sqlstate: SqlState,
     pub message: Option<String>,
     pub detail: Option<String>,
+    // Exact wire bytes of the detail when a hook echoes non-UTF-8 input.
+    pub detail_raw: Option<Vec<u8>>,
     pub hint: Option<String>,
+    // guc.c:6954 PG_RE_THROW: the hook itself raised (not a false return).
+    pub thrown: bool,
 }
 
 impl Default for GucCheckError {
@@ -75,7 +79,9 @@ impl Default for GucCheckError {
             sqlstate: ERRCODE_INVALID_PARAMETER_VALUE,
             message: None,
             detail: None,
+            detail_raw: None,
             hint: None,
+            thrown: false,
         }
     }
 }
@@ -150,6 +156,14 @@ pub fn reset_guc_check_error() {
     GUC_CHECK_ERROR.with(|s| *s.borrow_mut() = GucCheckError::default());
 }
 
+pub(crate) fn mark_guc_check_thrown() {
+    GUC_CHECK_ERROR.with(|s| s.borrow_mut().thrown = true);
+}
+
+pub(crate) fn take_guc_check_thrown() -> bool {
+    GUC_CHECK_ERROR.with(|s| core::mem::take(&mut s.borrow_mut().thrown))
+}
+
 pub fn take_guc_check_error() -> GucCheckError {
     GUC_CHECK_ERROR.with(|s| core::mem::take(&mut *s.borrow_mut()))
 }
@@ -164,6 +178,14 @@ pub fn GUC_check_errmsg(message: impl Into<String>) {
 
 pub fn GUC_check_errdetail(detail: impl Into<String>) {
     GUC_CHECK_ERROR.with(|s| s.borrow_mut().detail = Some(detail.into()));
+}
+
+pub fn GUC_check_errdetail_raw(detail: Vec<u8>) {
+    GUC_CHECK_ERROR.with(|s| {
+        let mut s = s.borrow_mut();
+        s.detail = Some(String::from_utf8_lossy(&detail).into_owned());
+        s.detail_raw = Some(detail);
+    });
 }
 
 pub fn GUC_check_errhint(hint: impl Into<String>) {

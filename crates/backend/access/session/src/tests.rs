@@ -609,7 +609,7 @@ fn tls_source_census_and_session_surface_are_pinned() {
     //      torn down before unbind on every path; no session identity
     //      (the binder owns all session state movement).
     // night/m41-w-gap delta (525 = 524 + 1), deliberately NON-SESSION TLS:
-    //   65. access/heap/vacuumlazy/src/lib.rs — phase_trace ACC: the GL-M41-2
+    //   65. access/heap/vacuumlazy/src/lib.rs — phase_trace ACC: the regression
     //      per-phase vacuum clock accumulator (ns/calls/WAL per phase),
     //      trace-gated instrumentation scratch on the driving thread —
     //      reset at vacuum entry, read at the trace emit; no session
@@ -622,7 +622,7 @@ fn tls_source_census_and_session_surface_are_pinned() {
     //      session state it hints at lives in the binder layer's sticky
     //      slot (query_task_guard STICKY, already row 57-class), which
     //      owns capture/restore — the hint itself carries no identity.
-    // GL-SLEASE-1 flip (count UNCHANGED at 522 — the census counts
+    // regression flip (count UNCHANGED at 522 — the census counts
     // thread_local! source sites and the new cell rides row 61's block):
     //   62b. executor/execmain/src/execmain.rs — SERIAL_LEASE_HELD joined
     //      the SERIAL_LEASE_DEPTH block: the runtime whose permit the
@@ -650,7 +650,7 @@ fn tls_source_census_and_session_surface_are_pinned() {
     // removed the PdWorkerSink worker-fragment thread_local with the
     // executor paths it served (lanev2.rs pardistinct region) — a
     // deletion-explained movement, not an unclassified source.
-    // GL-MEMWATCH-1 delta (529 = 527 + 2), both deliberately NON-SESSION TLS:
+    // regression delta (529 = 527 + 2), both deliberately NON-SESSION TLS:
     //   68. tcop/postgres/src/simple_query.rs — HOG_CTX: the memory
     //      watchdog e2e's per-thread cache of the "WatchdogTestHog"
     //      session_root pointer (developer GUC, default-off). The context
@@ -684,7 +684,7 @@ fn tls_source_census_and_session_surface_are_pinned() {
     //      own write calls on the worker THREAD and zero on every
     //      statement boundary by RAII; no session identity, never
     //      captured/restored by an envelope.
-    // GL-INERT-FIXES-1 delta (533 = 532 + 1, composed at t44), GUC-backed non-envelope TLS:
+    // regression delta (533 = 532 + 1, composed at t44), GUC-backed non-envelope TLS:
     //   73. utils/adt/arrayfuncs/src/lib.rs — ARRAY_NULLS: C's Array_nulls
     //      backing cell behind the GUC var slot (default true). Session
     //      identity is owned by the GUC store (snapshot/restore writes
@@ -704,7 +704,7 @@ fn tls_source_census_and_session_surface_are_pinned() {
     //      the apply bgworker thread for the life of the worker; no session
     //      identity, never captured/restored by an envelope (one backend
     //      worker = one thread, rule 10).
-    // GL-AIO-1 delta (537 = 535 + 3 - 1, composed at t44), all NON-SESSION TLS
+    // regression delta (537 = 535 + 3 - 1, composed at t44), all NON-SESSION TLS
     // (+3 sites, -1 deleted with the aio_config crate):
     //   76. storage/aio/aio_core/src/lib.rs — MY_BACKEND (C
     //      pgaio_my_backend): this THREAD's aio backend-slot binding,
@@ -722,7 +722,7 @@ fn tls_source_census_and_session_surface_are_pinned() {
     //      (the read-path e2e witness). Pure thread-local diagnostics.
     //   (-1: aio_config's MY_BACKEND_ATTACHED site left with the crate,
     //      absorbed into row 76's real slot binding.)
-    // GL-STMTTASK-1 delta (538 = 537 + 1, composed at t44), deliberately NON-SESSION TLS:
+    // regression delta (538 = 537 + 1, composed at t44), deliberately NON-SESSION TLS:
     //   79. tcop/postgres_seams/src/lib.rs — stmt_task_arm ARMED: the
     //      statement-scoped protocol arm flag (exec_simple_query arms one
     //      statement's top-level portal run; the executor's statement-task
@@ -732,7 +732,7 @@ fn tls_source_census_and_session_surface_are_pinned() {
     //      captured/restored by an envelope (an engagement rebuilds
     //      nothing from it; consume-once semantics make leakage across
     //      statements structurally impossible).
-    // GL-STMTTASK-2 delta (539 = 538 + 1), deliberately NON-SESSION TLS:
+    // regression delta (539 = 538 + 1), deliberately NON-SESSION TLS:
     //   80. executor/execmain/src/lanev2/stmt_task.rs — SESSION_FUNNEL: the
     //      session thread's persistent statement-task row funnel (change 1,
     //      standing-engagement reuse — one ring + wake hook created on the
@@ -742,7 +742,7 @@ fn tls_source_census_and_session_surface_are_pinned() {
     //      carries no session identity — never captured/restored by an
     //      envelope (a fresh thread simply rebuilds one on first use); dies
     //      with the thread (Arc drop, heap only).
-    // GL-STMTTASK-2 quantum-yield delta (541 = 539 + 2), deliberately
+    // regression quantum-yield delta (541 = 539 + 2), deliberately
     // NON-SESSION TLS:
     //   81. tcop/postgres_seams/src/lib.rs — stmt_yield ARMED: the
     //      CHECK_FOR_INTERRUPTS-side span flag (set only for one
@@ -762,7 +762,7 @@ fn tls_source_census_and_session_surface_are_pinned() {
     //      (541 -> 542 net).
     // RC/t44-fixes NET-ZERO delta (542 -> 542): two offsetting movements,
     // both classified here rather than netted silently.
-    //   -1  storage/lmgr/lock/src/fastpath.rs — the GL-LOCKCACHE-1 fix
+    //   -1  storage/lmgr/lock/src/fastpath.rs — the regression fix
     //      (per-group fast-path use counts keyed by PGPROC, not thread)
     //      DELETES that file's thread_local block by construction: the
     //      counts were the defect, because proc identity is leased across
@@ -782,7 +782,7 @@ fn tls_source_census_and_session_surface_are_pinned() {
     //      thread's writer map, and any writer present there at a
     //      transaction end is abandoned by construction (statement-end
     //      flush removed every published one).
-    // GL-VACGUARD-1 delta (RC: 542 -> 543 net, see the pair above), deliberately NON-SESSION TLS:
+    // regression delta (RC: 542 -> 543 net, see the pair above), deliberately NON-SESSION TLS:
     //   85. access/heap/heapam/src/freeze.rs — FREEZE_MEMBER_SCRATCH: the
     //      reset-per-call bump context for FreezeMultiXactId's multixact
     //      member arrays, standing in for C's palloc into
@@ -795,7 +795,7 @@ fn tls_source_census_and_session_surface_are_pinned() {
     //      between calls, let alone session identity — pure per-thread
     //      scratch that dies with the thread, never captured or restored by
     //      an envelope.
-    // GL-SHMSEAM-1 delta (+1), TEST-ONLY and NOT session state — not a
+    // regression delta (+1), TEST-ONLY and NOT session state — not a
     // SESSION_ENVELOPE_MANIFEST member:
     //   utils/init/miscinit/src/tests.rs — EMITTED, the datadir-first-contact
     //   tests' capture buffer for what `elog::set_emit_log_hook` reported.
@@ -956,8 +956,8 @@ fn tls_source_census_and_session_surface_are_pinned() {
     //      own stack pages — it cannot migrate with a session by definition
     //      (the stack is the thread's); safe to lose (worst case a page
     //      range is charged conservatively). Non-session on the substance.
-    // 565, re-pinned at the GL-FLUSHPIPE-1 port (archive/main-t56-20260729
-    //      46f8b5b3b6 — the GL-FLUSHSIM-1 commit-path trajectory sim):
+    // 565, re-pinned at the regression port (archive/main-t56-20260729
+    //      46f8b5b3b6 — the regression commit-path trajectory sim):
     //   +1 access/transam/xlogrecovery/tests/sim_flushsim.rs —
     //      CURRENT_COMMIT: the sim harness's per-thread (actor, j, xid,
     //      claims_sync) tag for the commit in flight, letting the
@@ -1290,6 +1290,16 @@ fn tls_source_census_and_session_surface_are_pinned() {
     // 586, re-pinned at bugs/batch-159: utils/adt/acl builtins.rs
     // ACLITEMOUT_SCRATCH removed (aclitemout now uses the per-flinfo
     // cstring_scratch like nameout; one shared buffer aliased two results).
+    // 585, bug campaign batch-196 (2026-09-14), executor/sql_functions:
+    //   -1 pl/plpgsql/src/exec.rs CONTEXT_FRAMES — PL/pgSQL's private
+    //      mirror of error_context_stack for GET DIAGNOSTICS PG_CONTEXT;
+    //      folded into elog's existing emit-context registry (frames now
+    //      flag emit/walk) so SQL-function frames are walked too. The
+    //      registry TLS already exists; no session state involved.
+    // 586, bug campaign batch-175 (2026-09-14): commands/portalcmds/src/tests.rs
+    // FAIL_EXECUTOR_END — a cfg(test) Cell<bool> that makes the test-installed
+    // tap_executor_end fail on the calling thread only; no production session
+    // state, no SESSION_ENVELOPE_MANIFEST rows.
     assert_eq!(count_tree(crates), 586, "TLS census changed; classify the delta in SESSION_ENVELOPE_MANIFEST or document it as non-session TLS");
     let session_sources = [
         ("backend/access/session/src/lib.rs", 1),

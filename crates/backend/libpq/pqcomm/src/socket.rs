@@ -78,7 +78,7 @@ mod cfg {
         pub static UNIX_SOCKET_PERMISSIONS: Cell<i32> = const { Cell::new(0o777) };
         pub static UNIX_SOCKET_GROUP: RefCell<String> = const { RefCell::new(String::new()) };
         // client_connection_check_interval (ms, 0 = disabled): the in-query
-        // dead-client poll (GL-DISCONNECT-WEDGE-1). A killed client's parked
+        // dead-client poll (regression). A killed client's parked
         // parallel leader has no other cancel vector: it never touches the
         // socket from a blocking tuple-queue receive, and the disconnect
         // took the only session that could cancel it.
@@ -292,6 +292,20 @@ pub fn pq_check_connection() -> PgResult<bool> {
     }
 }
 
+// UNIXSOCK_PATH snprintf into ListenServerPort's char[MAXPGPATH]: the "too
+// long" LOG (pqcomm.c:457) echoes at most MAXPGPATH-1 bytes of it.
+pub(crate) fn unix_socket_path_for(dir: &str, port_number: u16) -> String {
+    let mut path = format!("{}/.s.PGSQL.{}", dir, port_number);
+    if path.len() >= ::types_core::primitive::MAXPGPATH {
+        let mut cut = ::types_core::primitive::MAXPGPATH - 1;
+        while !path.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        path.truncate(cut);
+    }
+    path
+}
+
 fn sun_path_buflen() -> usize {
     // SAFETY: plain-old-data zero pattern.
     let su: ip::sys::sockaddr_un = unsafe { std::mem::zeroed() };
@@ -326,7 +340,7 @@ pub fn ListenServerPort(
     if family == ip::sys::AF_UNIX {
         let dir = unix_socket_dir.expect("ListenServerPort: AF_UNIX requires unixSocketDir");
         debug_assert!(!dir.is_empty());
-        unix_socket_path = format!("{}/.s.PGSQL.{}", dir, port_number);
+        unix_socket_path = unix_socket_path_for(dir, port_number);
         if unix_socket_path.len() >= sun_path_buflen() {
             let _ = ereport(LOG)
                 .errmsg(format!(

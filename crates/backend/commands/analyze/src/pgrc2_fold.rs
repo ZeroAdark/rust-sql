@@ -207,6 +207,16 @@ fn resort_key(class: Class, sem: Sem, word: u64) -> ResortKey {
 
 /// pg_statistic negative-fraction convention (compute_scalar_stats /
 /// the footer-NDV override): d > 10% of rows → a fraction that scales.
+// analyze.c:2725 collapses the MCV items out of the histogram population
+// (num_hist = ndistinct - num_mcv); the planner scales the histogram by the
+// non-MCV fraction, so a bound that is also an MCV member is double-counted.
+fn tail_histogram<'a>(hist: &'a [Vec<u8>], mcv: &[(Vec<u8>, f64)]) -> Vec<&'a [u8]> {
+    hist.iter()
+        .map(|b| b.as_slice())
+        .filter(|b| !mcv.iter().any(|(m, _)| m.as_slice() == *b))
+        .collect()
+}
+
 fn stadistinct_convention(d: f64, totalrows: f64) -> f32 {
     if d <= 0.0 {
         return 0.0;
@@ -304,6 +314,16 @@ mod tests {
     /// pg_statistic's negative-fraction convention (the footer-NDV override's
     /// exact arithmetic).
     #[test]
+    fn histogram_excludes_the_served_mcv_members() {
+        let hist: Vec<Vec<u8>> = [b"a", b"b", b"c", b"d"].iter().map(|b| b.to_vec()).collect();
+        let mcv: Vec<(Vec<u8>, f64)> = vec![(b"b".to_vec(), 0.5), (b"d".to_vec(), 0.25)];
+        let tail = tail_histogram(&hist, &mcv);
+        assert_eq!(tail, [b"a".as_slice(), b"c".as_slice()]);
+        // No MCV slot served (empty set): the bounds pass through untouched.
+        assert_eq!(tail_histogram(&hist, &[]).len(), 4);
+    }
+
+    #[test]
     fn stadistinct_negative_fraction_convention() {
         assert_eq!(stadistinct_convention(50.0, 1000.0), 50.0);
         assert_eq!(stadistinct_convention(500.0, 1000.0), -0.5);
@@ -396,12 +416,14 @@ fn fill_column<'mcx>(
     let has_eq = s.extra.eqopr != types_core::InvalidOid;
     let has_lt = s.extra.ltopr != types_core::InvalidOid;
     let mut slot_idx = 0usize;
+    let mut mcv_served: &[(Vec<u8>, f64)] = &[];
 
     // ---- MCV ----
     if has_eq
         && !stat.sta_mcv.is_empty()
         && mcv_admissible(col.semantics, col.collation_class)
     {
+        mcv_served = &stat.sta_mcv;
         let n = stat.sta_mcv.len();
         let mut values: PgVec<'mcx, Datum> = mcx::vec_with_capacity_in(anl_mcx, n)?;
         let mut freqs: PgVec<'mcx, f32> = mcx::vec_with_capacity_in(anl_mcx, n)?;
@@ -422,12 +444,13 @@ fn fill_column<'mcx>(
     }
 
     // ---- histogram ----
-    if has_lt && stat.sta_histogram.len() >= 2 {
+    let hist = tail_histogram(&stat.sta_histogram, mcv_served);
+    if has_lt && hist.len() >= 2 {
         match hist_mode(col.semantics, col.collation_class) {
             HistMode::ByteOrder => {
-                let n = stat.sta_histogram.len();
+                let n = hist.len();
                 let mut values: PgVec<'mcx, Datum> = mcx::vec_with_capacity_in(anl_mcx, n)?;
-                for bytes in &stat.sta_histogram {
+                for bytes in &hist {
                     let Some(d) = render_datum(anl_mcx, col.class, bytes)? else {
                         return Ok(false);
                     };
@@ -441,8 +464,8 @@ fn fill_column<'mcx>(
                 slot_idx += 1;
             }
             HistMode::Resort => {
-                let mut keyed: Vec<(ResortKey, u64)> = Vec::with_capacity(stat.sta_histogram.len());
-                for bytes in &stat.sta_histogram {
+                let mut keyed: Vec<(ResortKey, u64)> = Vec::with_capacity(hist.len());
+                for bytes in &hist {
                     let (width, signed) = match col.class {
                         Class::ByvalWord { width, signed } => (width as usize, signed),
                         Class::F32 => (4, false),

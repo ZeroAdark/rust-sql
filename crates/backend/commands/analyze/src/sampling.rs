@@ -63,8 +63,8 @@ pub struct ReservoirStateData {
     pub randstate: PgPrng,
 }
 
-pub fn reservoir_init_selection_state(seed: u64, n: u32) -> ReservoirStateData {
-    let mut rs = ReservoirStateData { w: 0.0, randstate: PgPrng::seeded(seed) };
+pub fn reservoir_init_selection_state(seed: u32, n: u32) -> ReservoirStateData {
+    let mut rs = ReservoirStateData { w: 0.0, randstate: PgPrng::seeded(seed as u64) };
     rs.w = (-sampler_random_fract(&mut rs.randstate).ln() / n as f64).exp();
     rs
 }
@@ -166,6 +166,15 @@ mod tests {
             t += s + 1.0;
         }
         assert!(t > 5_000.0);
+    }
+
+    // sampling.c:139: the reservoir is seeded from pg_prng_uint32 (a 32-bit
+    // seed); pg_prng_seed(1) then draws 0x5c30.. for W and this for the next.
+    #[test]
+    fn reservoir_seed_is_the_32_bit_draw() {
+        let mut rs = reservoir_init_selection_state(1, 1);
+        assert!(rs.w > 1.0);
+        assert_eq!(rs.randstate.next_u64(), 14368974704090626991);
     }
 
     fn alloc_vec() -> std::vec::Vec<BlockNumber> {

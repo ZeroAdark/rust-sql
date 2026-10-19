@@ -66,8 +66,8 @@ const BUFFILE_SEGMENT_SIZE: i64 = 0x4000_0000;
 
 thread_local! {
     // C in_streamed_transaction / stream_xid.
-    static IN_STREAMED_TRANSACTION: Cell<bool> = const { Cell::new(false) };
-    static STREAM_XID: Cell<TransactionId> = const { Cell::new(InvalidTransactionId) };
+    pub(crate) static IN_STREAMED_TRANSACTION: Cell<bool> = const { Cell::new(false) };
+    pub(crate) static STREAM_XID: Cell<TransactionId> = const { Cell::new(InvalidTransactionId) };
     // C MyLogicalRepWorker->stream_fileset: created on the first streamed
     // transaction, lives for the worker (= this thread). Arc so the leader
     // can hand it to a parallel apply worker at FS_SERIALIZE_DONE.
@@ -243,10 +243,7 @@ pub(crate) fn handle_streamed_transaction(
     );
 
     if buf.len() < 5 {
-        protocol_violation(
-            "invalid transaction ID in streamed replication transaction",
-            "handle_streamed_transaction",
-        )?;
+        protocol_violation("insufficient data left in message", "handle_streamed_transaction")?;
     }
     let current_xid = u32::from_be_bytes(buf[1..5].try_into().expect("4 bytes"));
     if current_xid == InvalidTransactionId {
@@ -703,9 +700,24 @@ pub(crate) fn apply_spooled_messages(
     // The file handle must survive every per-message reset below
     // (C: TopTransactionContext, worker.c:2043): it gets a context of its own.
     let name = changes_filename(subid(), xid);
-    let file = StreamFd::open("LogicalStreamingContext", |fmcx| {
+    let _ = elog::elog(DEBUG1, format!("replaying changes from file \"{name}\""));
+    // The file is owned by the toplevel transaction (worker.c:2058-2064:
+    // BufFileOpenFileSet under TopTransactionResourceOwner) so it is not closed
+    // when a subtransaction aborts: a parallel apply worker replays the spool
+    // from inside a savepoint whenever the leader switched to partial
+    // serialization while the worker was in a subxact, and the spooled STREAM
+    // ABORT of that subxact must not take the file with it. Rig-verified
+    // (scripts/logical-applyparallelworker-e2e.sh).
+    let prev_owner = resowner::CurrentResourceOwner();
+    let top_owner = resowner::TopTransactionResourceOwner();
+    if !top_owner.is_null() {
+        resowner::SetCurrentResourceOwner(top_owner);
+    }
+    let opened = StreamFd::open("LogicalStreamingContext", |fmcx| {
         BufFileOpenFileSet(fmcx, fileset, &name, true)
-    })?;
+    });
+    resowner::SetCurrentResourceOwner(prev_owner);
+    let file = opened?;
     debug_assert!(STREAM_FD.with(|f| f.borrow().is_none()));
     STREAM_FD.with(|f| *f.borrow_mut() = Some(file));
 
@@ -783,6 +795,13 @@ pub(crate) fn apply_spooled_messages(
         if STREAM_FD.with(|f| f.borrow().is_none()) {
             ensure_last_message(mcx, fileset, xid, fileno, offset)?;
             break;
+        }
+
+        if nchanges % 1000 == 0 {
+            let _ = elog::elog(
+                DEBUG1,
+                format!("replayed {nchanges} changes from file \"{name}\""),
+            );
         }
     }
 
@@ -1035,6 +1054,11 @@ pub(crate) fn stream_cleanup_files(subid: Oid, xid: TransactionId) -> PgResult<(
     })
 }
 
+// worker.c:4354.
+pub(crate) fn stream_open_file_message(name: &str) -> String {
+    format!("opening file \"{name}\" for streamed changes")
+}
+
 // stream_open_file (worker.c:4328).
 fn stream_open_file(
     mcx: Mcx<'static>,
@@ -1045,6 +1069,7 @@ fn stream_open_file(
     debug_assert!(STREAM_FD.with(|f| f.borrow().is_none()));
     let _ = mcx;
     let name = changes_filename(subid, xid);
+    let _ = elog::elog(DEBUG1, stream_open_file_message(&name));
     // Create/open the buffile under the logical streaming context so that we
     // have it until stream stop (worker.c:4360).
     let file = StreamFd::open("LogicalStreamingContext", |smcx| {

@@ -37,6 +37,16 @@ fn format_search_filter(pattern: &str, user_name: &str) -> String {
     pattern.replace(LPH_USERNAME, user_name)
 }
 
+// The host a pg_hba.conf ldapserver token names once it has been through
+// libldap's URL parser: "[::1]" is the IPv6 literal ::1 (url.c strips the
+// enclosure); anything else is taken verbatim.
+fn ldap_uri_host(token: &str) -> &str {
+    match token.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
+        Some(inner) if !inner.is_empty() => inner,
+        _ => token,
+    }
+}
+
 // errdetail_for_ldap: attach the server's diagnostic message if present.
 fn errdetail_for_ldap(b: elog::ErrorBuilder, conn: &LdapConn) -> elog::ErrorBuilder {
     match conn.diagnostic_message() {
@@ -59,10 +69,14 @@ fn initialize_ldap_connection(port: &Port, hba: &HbaLine) -> PgResult<Result<Lda
     let opts = LdapOptions::initialize();
 
     let hosts: Vec<(String, i32)> = match &hba.ldapserver {
+        // auth.c:2296-2328 builds "scheme://<token>:port" per token and hands
+        // the list to ldap_initialize, whose URL parser (libldap url.c) takes
+        // a bracketed "[v6]" host and connects to the address inside; the
+        // brackets are URL syntax, not part of the host name.
         Some(s) if !s.is_empty() => s
             .split(' ')
             .filter(|h| !h.is_empty())
-            .map(|h| (h.to_string(), hba.ldapport))
+            .map(|h| (ldap_uri_host(h).to_string(), hba.ldapport))
             .collect(),
         _ => {
             // No hostnames: extract a domain name from the base DN and look
@@ -165,7 +179,9 @@ pub(crate) fn CheckLDAPAuth(port: &mut Port) -> PgResult<i32> {
 
     let user_name = port.user_name.clone().unwrap_or_default();
 
-    let fulluser: String = if let Some(basedn) = hba.ldapbasedn.as_deref() {
+    // C's fulluser is a char *: the entry DN bytes the server returned (or the
+    // prefix/suffix composition), bound and stored as the authn id verbatim.
+    let fulluser: Vec<u8> = if let Some(basedn) = hba.ldapbasedn.as_deref() {
         if user_name
             .chars()
             .any(|c| matches!(c, '*' | '(' | ')' | '\\' | '/'))
@@ -179,7 +195,7 @@ pub(crate) fn CheckLDAPAuth(port: &mut Port) -> PgResult<i32> {
 
         let binddn = hba.ldapbinddn.clone().unwrap_or_default();
         let bindpasswd = hba.ldapbindpasswd.clone().unwrap_or_default();
-        let r = ldap.simple_bind(&binddn, bindpasswd.as_bytes());
+        let r = ldap.simple_bind(binddn.as_bytes(), bindpasswd.as_bytes());
         if r != LDAP_SUCCESS {
             errdetail_for_ldap(
                 ereport(LOG).errmsg(format!(
@@ -256,10 +272,12 @@ pub(crate) fn CheckLDAPAuth(port: &mut Port) -> PgResult<i32> {
             user_name,
             hba.ldapsuffix.as_deref().unwrap_or("")
         )
+        .into_bytes()
     };
 
     let r = ldap.simple_bind(&fulluser, &passwd);
     if r != LDAP_SUCCESS {
+        let fulluser = String::from_utf8_lossy(&fulluser);
         errdetail_for_ldap(
             ereport(LOG).errmsg(format!(
                 "LDAP login failed for user \"{fulluser}\" on server \"{server_name}\": {}",
@@ -272,7 +290,7 @@ pub(crate) fn CheckLDAPAuth(port: &mut Port) -> PgResult<i32> {
         return Ok(STATUS_ERROR);
     }
 
-    set_authn_id(port, &fulluser)?;
+    set_authn_id(port, &String::from_utf8_lossy(&fulluser))?;
 
     ldap.unbind();
     Ok(STATUS_OK)
@@ -288,5 +306,18 @@ mod ldap_tests {
             format_search_filter("(|(uid=$username)(mail=$username))", "alice"),
             "(|(uid=alice)(mail=alice))"
         );
+    }
+
+    // auth.c:2296-2328 hands "ldap://<token>:port" to ldap_initialize, so a
+    // bracketed IPv6 literal in ldapserver reaches the connect as the address
+    // inside the brackets (libldap url.c); other tokens are the host verbatim.
+    #[test]
+    fn ldapserver_bracketed_ipv6_literal_is_the_address_inside() {
+        assert_eq!(ldap_uri_host("[::1]"), "::1");
+        assert_eq!(ldap_uri_host("[fe80::1%25lo0]"), "fe80::1%25lo0");
+        assert_eq!(ldap_uri_host("ldap.example.test"), "ldap.example.test");
+        assert_eq!(ldap_uri_host("127.0.0.1"), "127.0.0.1");
+        assert_eq!(ldap_uri_host("[]"), "[]");
+        assert_eq!(ldap_uri_host("[::1"), "[::1");
     }
 }

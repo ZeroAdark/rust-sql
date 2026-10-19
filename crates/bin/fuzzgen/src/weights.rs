@@ -2029,7 +2029,7 @@ pub const PROD_WEIGHTS: &[ProdWeight] = &[
     // adtm:xml is coverage-only. It used to default ON with a "set
     // --weight adtm:xml=0 on every differential leg" contract, but the
     // Antithesis sqldiff drivers run defaults and the contract was never
-    // enforced — round-13 (run 72b2e74701d0e1310d59d39345e716da-59-13,
+    // enforced — round-13 (recorded run,
     // seed 2904803255780464198) a database_to_xml_and_xmlschema
     // whole-database dump reached a differential batch and diverged on
     // instance-global content. Default 0 makes the differential legs

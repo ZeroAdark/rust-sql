@@ -80,10 +80,10 @@ thread_local! {
 }
 
 pub fn pgstat_report_checkpointer() {
-    PENDING_CHECKPOINTER_STATS.with(|s| {
+    let reported = PENDING_CHECKPOINTER_STATS.with(|s| {
         let mut pending = s.borrow_mut();
         if *pending == PgStat_CheckpointerStats::default() {
-            return;
+            return false;
         }
         let mut shared = pgsync::lock(&SHARED_CHECKPOINTER);
         shared.num_timed += pending.num_timed;
@@ -97,7 +97,11 @@ pub fn pgstat_report_checkpointer() {
         shared.buffers_written += pending.buffers_written;
         shared.slru_written += pending.slru_written;
         *pending = PgStat_CheckpointerStats::default();
+        true
     });
+    if reported {
+        crate::io::pgstat_flush_io(false);
+    }
 }
 
 pub fn pgstat_fetch_stat_checkpointer() -> PgStat_CheckpointerStats {

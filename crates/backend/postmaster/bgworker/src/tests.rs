@@ -444,3 +444,38 @@ fn worker_identity_sets_process_title_to_bgw_name() {
         Some("titled worker")
     );
 }
+
+// bgworker.c:1032 / :455: BackgroundWorkerList is head-inserted, so the
+// postmaster walks registrations newest-first (static and dynamic alike).
+#[test]
+fn registrations_are_traversed_newest_first() {
+    let _g = bringup();
+    static_registration_setup();
+    RegisterBackgroundWorker(&mk_worker("first static", BGWORKER_SHMEM_ACCESS)).unwrap();
+    RegisterBackgroundWorker(&mk_worker("second static", BGWORKER_SHMEM_ACCESS)).unwrap();
+    g::SetIsUnderPostmaster(true);
+    BackgroundWorkerShmemInit().expect("shmem init");
+    let names = |idxs: Vec<usize>| -> Vec<String> {
+        with_registry(|reg| idxs.iter().map(|&i| rw_ref(reg, i).worker.bgw_name.clone()).collect())
+    };
+    assert_eq!(names(registered_indexes()), vec!["second static", "first static"]);
+    register("dynamic", BGWORKER_SHMEM_ACCESS).expect("slot");
+    BackgroundWorkerStateChange(true);
+    assert_eq!(names(registered_indexes()), vec!["dynamic", "second static", "first static"]);
+}
+
+/// bgworker.c:982: a static worker failing SanityCheckBackgroundWorker is
+/// refused at LOG and keeps ERRCODE_INVALID_PARAMETER_VALUE.
+#[test]
+fn static_sanity_failure_logs_with_invalid_parameter_value() {
+    let _g = bringup();
+    static_registration_setup();
+    let w = mk_worker("no shmem", 0);
+    let (_, logs) = with_log_capture(|| RegisterBackgroundWorker(&w).expect("register"));
+    let hit = logs
+        .iter()
+        .find(|(_, m, _)| m.ends_with("background workers without shared memory access are not supported"))
+        .unwrap_or_else(|| panic!("no sanity LOG in {logs:?}"));
+    assert_eq!(hit.0, types_error::ERRCODE_INVALID_PARAMETER_VALUE);
+    assert!(pending_names().is_empty());
+}

@@ -27,7 +27,7 @@ pub fn init_all() {
 }
 
 // ---------------------------------------------------------------------------
-// Serial-lease v2 boot posture (GL-SLEASE-2). The wait-report seam pair is
+// Serial-lease v2 boot posture (regression). The wait-report seam pair is
 // the single choke point every C-parity blocking site brackets its sleep
 // with; when the lease is armed (PGRUST_RUNTIME_SERIAL_LEASE=1) the seams
 // point at these wrappers — the stock reporter plus the lease's donation
@@ -36,7 +36,7 @@ pub fn init_all() {
 // is byte-identical (seams are set-once fn pointers; no extra branch
 // exists anywhere). This selector lives HERE, not in waitevent, because it
 // needs both the reporter impls and the lease engine (execmain), and boot
-// wiring is this crate's charter. Umbra-model deletability (the GL-SLEASE-2
+// wiring is this crate's charter. Umbra-model deletability (the regression
 // letter): task-ified serial execution deletes this block and the seams
 // revert to waitevent::init_seams() unconditionally.
 // ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ fn init_waitevent_seams_with_lease_posture() {
                 waitevent::pgstat_reset_wait_event_storage,
             );
         } else {
-            // GL-SLEASE-3 ladder arm (PGRUST_RUNTIME_SERIAL_LEASE_DONATION=0):
+            // regression ladder arm (PGRUST_RUNTIME_SERIAL_LEASE_DONATION=0):
             // armed WITHOUT donation — stock wait seams, admission tap only.
             // Admitted runs hold their permit across blocking waits (the v1
             // semantics, deliberately): attribution arm, never a shipping
@@ -303,7 +303,7 @@ pub fn init_all_with_transport(transport: Transport) {
     procsignal::init_seams();
     shmem::init_seams();
     // The foreign-segment probe CreateLockFile needs when the data directory
-    // was last held by C PostgreSQL (GL-SHMSEAM-1). pgrust creates no SysV
+    // was last held by C PostgreSQL (regression). pgrust creates no SysV
     // segment of its own, so this is a read-only install.
     sysv_shmem::init_seams();
     sinval::init_seams();

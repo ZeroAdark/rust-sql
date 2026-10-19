@@ -253,14 +253,12 @@ impl<'mcx, 's> CopyFromState<'mcx, 's> {
         let mut at = 0usize;
         let mut bytesread = 0usize;
         while maxread > 0 && bytesread < minread && !self.raw_reached_eof {
-            loop {
-                let msgbuf = match &self.src {
-                    CopySrc::Frontend { msgbuf } => msgbuf,
-                    _ => unreachable!(),
-                };
-                if msgbuf.cursor < msgbuf.len() {
-                    break;
-                }
+            let buffered = match &self.src {
+                CopySrc::Frontend { msgbuf } => msgbuf.cursor < msgbuf.len(),
+                _ => unreachable!(),
+            };
+            // C's `goto readmessage`: a Flush/Sync body is never data.
+            while !buffered {
                 struct CancelHoldoff;
                 impl Drop for CancelHoldoff {
                     fn drop(&mut self) {
@@ -302,9 +300,8 @@ impl<'mcx, 's> CopyFromState<'mcx, 's> {
                         return Ok(bytesread);
                     }
                     b'f' => {
-                        let body = msgbuf.as_bytes();
-                        let nul = body.iter().position(|&b| b == 0).unwrap_or(body.len());
-                        let msg = String::from_utf8_lossy(&body[..nul]);
+                        let s = pqformat::pq_getmsgstring(self.convertcx.mcx(), msgbuf)?;
+                        let msg = String::from_utf8_lossy(s.as_bytes());
                         return Err(Box::new(
                             PgError::error(format!("COPY from stdin failed: {msg}"))
                                 .with_sqlstate(ERRCODE_QUERY_CANCELED)
@@ -1122,10 +1119,16 @@ impl<'mcx, 's> CopyFromState<'mcx, 's> {
                                 self.attname(m)
                             ),
                         };
-                        ereport(types_error::NOTICE)
+                        // C uses relname_only for this notice. Keep its explicit
+                        // context for callers without CopyFrom's emit callback,
+                        // and suppress only this COPY frame while it is emitted.
+                        self.in_skip_row_notice = true;
+                        let notice = ereport(types_error::NOTICE)
                             .errmsg(msg)
                             .errcontext_msg(format!("COPY {}", self.relname))
-                            .finish(loc("CopyFromTextLikeOneRow"))?;
+                            .finish(loc("CopyFromTextLikeOneRow"));
+                        self.in_skip_row_notice = false;
+                        notice?;
                     }
                     break;
                 }
@@ -1494,6 +1497,7 @@ pub mod bench_internals {
             relname: String::new(),
             escontext: None,
             num_errors: 0,
+            in_skip_row_notice: false,
             defaults: mcx::vec_from_elem_in(mcx, false, max_fields),
             bytes_processed: 0,
             volatile_defexprs: false,

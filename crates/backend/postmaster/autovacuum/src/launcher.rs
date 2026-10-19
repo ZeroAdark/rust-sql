@@ -257,6 +257,11 @@ fn launcher_body() -> PgResult<Never> {
 
     rebuild_database_list(InvalidOid)?;
 
+    // C's process-local autovacuum_max_workers copy: the launcher's own
+    // pre-reload value (the shared GUC cell is already updated by the
+    // postmaster's reload before SIGHUP reaches this thread).
+    let mut max_workers_seen = autovacuum_max_workers();
+
     while !interrupt::ShutdownRequestPending() {
         let nap_ms = launcher_determine_sleep(shmem::av_worker_available(), false)?;
 
@@ -271,7 +276,7 @@ fn launcher_body() -> PgResult<Never> {
             latch::ResetLatch(l);
         }
 
-        ProcessAutoVacLauncherInterrupts()?;
+        ProcessAutoVacLauncherInterrupts(&mut max_workers_seen)?;
 
         // A worker finished, or the postmaster failed to start one.
         if GOT_SIGUSR2.replace(false) {
@@ -332,14 +337,21 @@ fn launcher_body() -> PgResult<Never> {
     AutoVacLauncherShutdown()
 }
 
-fn ProcessAutoVacLauncherInterrupts() -> PgResult<()> {
+/// autovacuum.c:761-773 against the launcher's own saved copy, not the
+/// shared cell the postmaster's reload already rewrote.
+fn max_workers_changed(max_workers_seen: &mut i32) -> bool {
+    let now = autovacuum_max_workers();
+    let changed = *max_workers_seen != now;
+    *max_workers_seen = now;
+    changed
+}
+
+fn ProcessAutoVacLauncherInterrupts(max_workers_seen: &mut i32) -> PgResult<()> {
     if interrupt::ShutdownRequestPending() {
         AutoVacLauncherShutdown();
     }
 
     if interrupt::ConfigReloadPending() {
-        let autovacuum_max_workers_prev = autovacuum_max_workers();
-
         interrupt::SetConfigReloadPending(false);
         guc_file_seams::process_config_file::call(GucContext::PGC_SIGHUP)?;
 
@@ -347,7 +359,7 @@ fn ProcessAutoVacLauncherInterrupts() -> PgResult<()> {
             AutoVacLauncherShutdown();
         }
 
-        if autovacuum_max_workers_prev != autovacuum_max_workers() {
+        if max_workers_changed(max_workers_seen) {
             check_av_worker_gucs();
         }
 
@@ -672,6 +684,24 @@ fn loc(routine: &'static str) -> types_error::ErrorLocation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// autovacuum.c:761: the launcher compares against ITS OWN pre-reload
+    /// copy. The postmaster's reload rewrites the shared cell before the
+    /// launcher runs its own, so reading the cell as "prev" (the old code)
+    /// never sees a change.
+    #[test]
+    fn max_workers_change_is_seen_against_the_launcher_copy() {
+        let saved = autovacuum_max_workers();
+        let mut seen = saved;
+        assert!(!max_workers_changed(&mut seen));
+        crate::AV_MAX_WORKERS.store(saved + 14, std::sync::atomic::Ordering::Relaxed);
+        let prev_from_cell = autovacuum_max_workers();
+        assert_eq!(prev_from_cell, saved + 14, "the cell is already updated");
+        assert!(max_workers_changed(&mut seen));
+        assert_eq!(seen, saved + 14);
+        assert!(!max_workers_changed(&mut seen));
+        crate::AV_MAX_WORKERS.store(saved, std::sync::atomic::Ordering::Relaxed);
+    }
 
     // upstream 4cc49cb70396 (18.6): descending by score (3b42bdb471 swapped
     // pg_cmp_s32's arguments); the push-to-head loop then leaves the

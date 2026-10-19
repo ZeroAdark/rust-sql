@@ -173,3 +173,23 @@ fn gtsquery_consistent_contains_and_containedby() {
         assert_eq!(run(false, RTContainsStrategyNumber, &miss_q), (false, true));
     }
 }
+
+// tsquery_gist.c gtsquery_picksplit orders equal costs with pg_qsort: eight
+// distinct one-bit signatures (costs [2,2,0,0,0,0,0,0]) are walked as
+// 8,6,7,3,4,5,2,1, splitting {6,3,5,1} | {8,7,4,2}; a stable or Rust
+// unstable sort walks them differently and moves entries across sides.
+#[test]
+fn gtsquery_picksplit_pg_qsort_tie_order() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let mut entryvec = GistEntryVector::with_len(9);
+    for i in 1..=8usize {
+        entryvec.vector[i].key = Datum::from_u64(1u64 << (i - 1));
+    }
+    let mut v = GistSplitVec::default();
+    gtsquery_picksplit_core(mcx, &entryvec, &mut v).unwrap();
+    assert_eq!(v.spl_left, vec![6, 3, 5, 1]);
+    assert_eq!(v.spl_right, vec![8, 7, 4, 2]);
+    assert_eq!(v.spl_ldatum.as_u64(), 0b0011_0101);
+    assert_eq!(v.spl_rdatum.as_u64(), 0b1100_1010);
+}

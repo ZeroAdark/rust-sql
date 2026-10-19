@@ -39,6 +39,7 @@ datum = { path = "../../../_support/types/datum" }
 types_fmgr = { path = "../../../_support/types/fmgr" }
 types_hash = { path = "../../../_support/types/hash" }
 dynahash = { path = "../../utils/hash/dynahash" }
+ipc_seams = { path = "../../storage/ipc/ipc_seams" }
 funcapi = { path = "../../utils/fmgr/funcapi" }
 varlena = { path = "../../utils/adt/varlena" }
 arrayfuncs = { path = "../../utils/adt/arrayfuncs" }

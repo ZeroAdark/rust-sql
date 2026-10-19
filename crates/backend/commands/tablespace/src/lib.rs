@@ -407,9 +407,7 @@ pub fn DropTableSpace<'mcx>(mcx: Mcx<'mcx>, stmt: &DropTableSpaceStmt<'mcx>) -> 
 
     pg_shdepend::deleteSharedDependencyRecordsFor(mcx, TableSpaceRelationId, tablespaceoid, 0)?;
 
-    let lock = lwlock::main_lock(TABLESPACE_CREATE_LOCK);
-    lwlock::LWLockAcquire(lock, lwlock::LW_EXCLUSIVE, init_small::globals::MyProcNumber())?;
-
+    let mut hold = CreateLockHold::acquire(lwlock::main_lock(TABLESPACE_CREATE_LOCK))?;
     let result = (|| -> PgResult<()> {
         if !destroy_tablespace_directories(tablespaceoid, false)? {
             checkpointer::RequestCheckpoint(
@@ -418,12 +416,12 @@ pub fn DropTableSpace<'mcx>(mcx: Mcx<'mcx>, stmt: &DropTableSpaceStmt<'mcx>) -> 
                     | transam_xlog::CHECKPOINT_WAIT,
             )?;
 
-            lwlock::LWLockRelease(lock)?;
+            hold.release()?;
             let gen = procsignal::EmitProcSignalBarrier(
                 ProcSignalBarrierType::PROCSIGNAL_BARRIER_SMGRRELEASE,
             );
             procsignal::WaitForProcSignalBarrier(gen)?;
-            lwlock::LWLockAcquire(lock, lwlock::LW_EXCLUSIVE, init_small::globals::MyProcNumber())?;
+            hold.reacquire()?;
 
             if !destroy_tablespace_directories(tablespaceoid, false)? {
                 return Err(ereport(ERROR)
@@ -445,10 +443,44 @@ pub fn DropTableSpace<'mcx>(mcx: Mcx<'mcx>, stmt: &DropTableSpaceStmt<'mcx>) -> 
         xact::ForceSyncCommit();
         Ok(())
     })();
-    lwlock::LWLockRelease(lock)?;
+    hold.finish()?;
     result?;
 
     rel.close(types_storage::lock::NoLock)
+}
+
+// tablespace.c:515-556: the barrier wait runs with TablespaceCreateLock
+// released, so an error raised there (a query cancel) has nothing to release
+// (C leaves the held case to LWLockReleaseAll); an unconditional release
+// turned that 57014 into "lock TablespaceCreate is not held".
+struct CreateLockHold<'a> {
+    lock: &'a lwlock::LWLock,
+    held: bool,
+}
+
+impl<'a> CreateLockHold<'a> {
+    fn acquire(lock: &'a lwlock::LWLock) -> PgResult<Self> {
+        lwlock::LWLockAcquire(lock, lwlock::LW_EXCLUSIVE, init_small::globals::MyProcNumber())?;
+        Ok(Self { lock, held: true })
+    }
+
+    fn release(&mut self) -> PgResult<()> {
+        self.held = false;
+        lwlock::LWLockRelease(self.lock)
+    }
+
+    fn reacquire(&mut self) -> PgResult<()> {
+        lwlock::LWLockAcquire(self.lock, lwlock::LW_EXCLUSIVE, init_small::globals::MyProcNumber())?;
+        self.held = true;
+        Ok(())
+    }
+
+    fn finish(self) -> PgResult<()> {
+        if self.held {
+            lwlock::LWLockRelease(self.lock)?;
+        }
+        Ok(())
+    }
 }
 
 fn create_tablespace_directories(location: &str, tablespaceoid: Oid) -> PgResult<()> {
@@ -1062,7 +1094,7 @@ pub fn check_default_tablespace(
     Ok(true)
 }
 
-fn temp_tablespace_oids(mcx: Mcx<'_>, namelist: &[String], check_perms: bool, source: types_guc::GucSource) -> PgResult<std::vec::Vec<Oid>> {
+fn temp_tablespace_oids(mcx: Mcx<'_>, namelist: &[std::vec::Vec<u8>], check_perms: bool, source: types_guc::GucSource) -> PgResult<std::vec::Vec<Oid>> {
     let mut spcs = std::vec::Vec::with_capacity(namelist.len());
     for curname in namelist {
         if curname.is_empty() {
@@ -1070,6 +1102,26 @@ fn temp_tablespace_oids(mcx: Mcx<'_>, namelist: &[String], check_perms: bool, so
             continue;
         }
         let missing_ok = !check_perms || source <= types_guc::GucSource::PGC_S_TEST;
+        // A truncated identifier can end mid-character (SQL_ASCII clips by
+        // byte): no tablespace carries such a name, and tablespace.c:1207
+        // echoes the bytes verbatim.
+        let Ok(curname) = core::str::from_utf8(curname) else {
+            let mut msg = b"tablespace \"".to_vec();
+            msg.extend_from_slice(curname);
+            msg.extend_from_slice(b"\" does not exist");
+            if !missing_ok {
+                return Err(Box::new(
+                    PgError::error_raw_message(msg).with_sqlstate(ERRCODE_UNDEFINED_OBJECT),
+                ));
+            }
+            if check_perms && source == types_guc::GucSource::PGC_S_TEST {
+                ereport(NOTICE)
+                    .errcode(ERRCODE_UNDEFINED_OBJECT)
+                    .errmsg_raw(msg)
+                    .finish(loc("check_temp_tablespaces"))?;
+            }
+            continue;
+        };
         let curoid = get_tablespace_oid(mcx, curname, missing_ok)?;
         if curoid == InvalidOid {
             if check_perms && source == types_guc::GucSource::PGC_S_TEST {
@@ -1110,7 +1162,7 @@ pub fn check_temp_tablespaces(
     let ctx = MemoryContext::new("check_temp_tablespaces");
     let mcx = ctx.mcx();
     let Some(namelist) =
-        varlena::split_identifier_string(mcx, &raw, b',', mbutils::GetDatabaseEncoding())?
+        varlena::split_identifier_string_bytes(mcx, raw.as_bytes(), b',', mbutils::GetDatabaseEncoding())?
     else {
         guc_seams::guc_check_errdetail::call("List syntax is invalid.".to_string());
         return Ok(false);
@@ -1138,7 +1190,7 @@ pub fn PrepareTempTablespaces(mcx: Mcx<'_>) -> PgResult<()> {
     }
     let raw = guc_tables::vars::temp_tablespaces.read().unwrap_or_default();
     let Some(namelist) =
-        varlena::split_identifier_string(mcx, &raw, b',', mbutils::GetDatabaseEncoding())?
+        varlena::split_identifier_string_bytes(mcx, raw.as_bytes(), b',', mbutils::GetDatabaseEncoding())?
     else {
         fd::SetTempTablespaces(&[]);
         return Ok(());
@@ -1330,6 +1382,36 @@ pub fn init_seams() {
     guc_tables::hooks::check_default_tablespace.install(check_default_tablespace);
     guc_tables::hooks::check_temp_tablespaces.install(check_temp_tablespaces);
     guc_tables::hooks::assign_temp_tablespaces.install(assign_temp_tablespaces);
+}
+
+#[cfg(test)]
+mod create_lock_hold_tests {
+    use super::*;
+
+    #[test]
+    fn finish_releases_only_a_held_lock() {
+        let slot = lwlock::LWLockPadded::new_unlocked(0);
+        let lock = &slot.lock;
+
+        let mut hold = CreateLockHold::acquire(lock).unwrap();
+        assert!(lwlock::LWLockHeldByMe(lock));
+        hold.release().unwrap();
+        assert!(!lwlock::LWLockHeldByMe(lock));
+        let err = lwlock::LWLockRelease(lock).unwrap_err();
+        assert!(err.message.ends_with(" is not held"), "{}", err.message);
+        hold.finish().unwrap();
+
+        let mut hold = CreateLockHold::acquire(lock).unwrap();
+        hold.release().unwrap();
+        hold.reacquire().unwrap();
+        assert!(lwlock::LWLockHeldByMe(lock));
+        hold.finish().unwrap();
+        assert!(!lwlock::LWLockHeldByMe(lock));
+
+        let hold = CreateLockHold::acquire(lock).unwrap();
+        hold.finish().unwrap();
+        assert!(!lwlock::LWLockHeldByMe(lock));
+    }
 }
 
 #[cfg(test)]

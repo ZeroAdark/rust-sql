@@ -99,7 +99,7 @@ fn tzset_offset_builds_iso_abbreviation() {
 }
 
 // Regression: the pg_timezone_abbrevs clock.rs:32 panic (CI cluster job
-// pgrust-fast-tests-18ae4c1cf2-1784615648-0f06). DynamicZoneAbbrev caches
+// pgrust-tests-18ae4c1cf2-1784615648-0f06). DynamicZoneAbbrev caches
 // `&'static PgTz` in the PROCESS-shared zone-abbreviation table, so pg_tzset
 // pointers must be process-permanent — one entry per zone for every thread,
 // still valid after the resolving session/thread is gone. The old

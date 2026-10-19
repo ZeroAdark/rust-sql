@@ -26,7 +26,7 @@ use ::types_core::xact::{
 use ::types_core::{BlockNumber, InvalidOid, MultiXactId, Oid};
 use ::types_error::{
     PgError, PgResult, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_INVALID_PARAMETER_VALUE,
-    ERRCODE_LOCK_NOT_AVAILABLE, ERRCODE_SYNTAX_ERROR, ERRCODE_UNDEFINED_TABLE, ERROR, WARNING,
+    ERRCODE_LOCK_NOT_AVAILABLE, ERRCODE_SYNTAX_ERROR, ERRCODE_UNDEFINED_TABLE, ERROR, LOG, WARNING,
 };
 use ::types_nodes::parsenodes::VacuumStmt;
 use ::types_nodes::NodeList;
@@ -74,6 +74,13 @@ const PARALLEL_VACUUM_DELAY_REPORT_INTERVAL_NS: i64 = 1_000_000_000;
 // vacuumparallel.c's worker-exit flush reads C's vacuum.c global.
 pub fn parallel_vacuum_worker_delay_ns() -> i64 {
     PARALLEL_VACUUM_WORKER_DELAY_NS.get()
+}
+
+// A fresh C worker process starts with both statics zeroed (vacuum.c:95);
+// pooled worker threads must reset them at entry.
+pub fn reset_parallel_vacuum_worker_delay() {
+    PARALLEL_VACUUM_WORKER_DELAY_NS.set(0);
+    LAST_DELAY_REPORT.set(None);
 }
 
 pub fn vacuum_cost_delay() -> f64 {
@@ -566,7 +573,10 @@ pub fn expand_vacuum_rel<'mcx>(
     vacrels: &mut ::mcx::PgVec<'mcx, ExpandedVacRel<'mcx>>,
 ) -> PgResult<()> {
     if vrel.oid != InvalidOid {
-        vacrels.push(ExpandedVacRel { oid: vrel.oid, relname: None, va_cols: &vrel.va_cols });
+        // vacuum.c:838: the caller's RangeVar (autovacuum's makeRangeVar) is
+        // kept so vacuum_open_relation can name a skipped relation.
+        let relname = vrel.relation.and_then(|n| n.as_range_var()).and_then(|rv| rv.relname);
+        vacrels.push(ExpandedVacRel { oid: vrel.oid, relname, va_cols: &vrel.va_cols });
         return Ok(());
     }
     let rv = vrel
@@ -700,6 +710,7 @@ fn vacuum_rel<'mcx>(
         relid,
         relname,
         params.options & !VACOPT_ANALYZE,
+        params.log_min_duration >= 0,
         lmode,
     )? {
         Some(rel) => rel,
@@ -861,6 +872,7 @@ pub fn vacuum_open_relation<'mcx>(
     relid: Oid,
     relname: Option<&str>,
     options: u32,
+    verbose: bool,
     lmode: LOCKMODE,
 ) -> PgResult<Option<Relation<'mcx>>> {
     debug_assert!(options & (VACOPT_VACUUM | VACOPT_ANALYZE) != 0);
@@ -879,20 +891,20 @@ pub fn vacuum_open_relation<'mcx>(
     let Some(relname) = relname else {
         return Ok(None);
     };
-    // C: autovacuum workers stay silent here unless verbose (divergence:
-    // keyed off VACOPT_VERBOSE, C keys off log_min_duration >= 0).
-    if miscinit::GetMyBackendType() == types_core::BackendType::AutovacWorker
-        && options & VACOPT_VERBOSE == 0
-    {
+    let elevel = if miscinit::GetMyBackendType() != types_core::BackendType::AutovacWorker {
+        WARNING
+    } else if verbose {
+        LOG
+    } else {
         return Ok(None);
-    }
+    };
     let verb = if options & VACOPT_VACUUM != 0 { "vacuum" } else { "analyze" };
     let (code, why) = if rel_lock {
         (ERRCODE_UNDEFINED_TABLE, "relation no longer exists")
     } else {
         (ERRCODE_LOCK_NOT_AVAILABLE, "lock not available")
     };
-    ereport(WARNING)
+    ereport(elevel)
         .errcode(code)
         .errmsg(format!("skipping {verb} of \"{relname}\" --- {why}"))
         .finish(loc("vacuum_open_relation"))?;
@@ -1050,13 +1062,27 @@ pub fn vac_estimate_reltuples(
     scanned_pages: BlockNumber,
     scanned_tuples: f64,
 ) -> f64 {
-    let old_rel_pages = rel.rd_rel.relpages;
-    let old_rel_tuples = rel.rd_rel.reltuples as f64;
+    // vacuum.c:1351: relpages is read as a BlockNumber.
+    estimate_reltuples(
+        rel.rd_rel.relpages as BlockNumber,
+        rel.rd_rel.reltuples as f64,
+        total_pages,
+        scanned_pages,
+        scanned_tuples,
+    )
+}
 
+fn estimate_reltuples(
+    old_rel_pages: BlockNumber,
+    old_rel_tuples: f64,
+    total_pages: BlockNumber,
+    scanned_pages: BlockNumber,
+    scanned_tuples: f64,
+) -> f64 {
     if scanned_pages >= total_pages {
         return scanned_tuples;
     }
-    if old_rel_pages == total_pages as i32 && (scanned_pages as f64) < total_pages as f64 * 0.02 {
+    if old_rel_pages == total_pages && (scanned_pages as f64) < total_pages as f64 * 0.02 {
         return old_rel_tuples;
     }
     if scanned_pages <= 1 {
@@ -1958,5 +1984,63 @@ mod ivinfo_tests {
                  2 index pages are currently deleted, of which 1 are currently reusable."
             )
         );
+    }
+}
+
+#[cfg(test)]
+mod reltuples_and_worker_delay_tests {
+    use super::*;
+
+    // vacuum.c:1351 reads relpages as BlockNumber: a stored value with the
+    // high bit set is a large page count, not a negative density.
+    #[test]
+    fn estimate_reltuples_reads_relpages_unsigned() {
+        let est = estimate_reltuples(
+            2_147_483_648,
+            2_147_483_648.0,
+            2_147_483_648,
+            67_108_864,
+            67_108_864.0,
+        );
+        assert_eq!(est, 2_147_483_648.0);
+        assert_eq!(estimate_reltuples(10, 100.0, 10, 5, 50.0), 100.0);
+    }
+
+    #[test]
+    fn worker_delay_reset_clears_the_carried_remainder() {
+        PARALLEL_VACUUM_WORKER_DELAY_NS.set(123_456);
+        LAST_DELAY_REPORT.set(Some(pg_clock::MonoStamp::now()));
+        reset_parallel_vacuum_worker_delay();
+        assert_eq!(parallel_vacuum_worker_delay_ns(), 0);
+        assert!(LAST_DELAY_REPORT.get().is_none());
+    }
+}
+
+#[cfg(test)]
+mod expand_vacuum_rel_tests {
+    use ::mcx::{MemoryContext, PgVec};
+    use ::types_nodes::parsenodes::VacuumRelation;
+    use ::types_nodes::primnodes::RangeVar;
+    use ::types_nodes::Node;
+
+    // vacuum.c:838 + autovacuum's makeRangeVar: an OID-given VacuumRelation
+    // keeps its RangeVar so vacuum_open_relation can name a skipped relation.
+    #[test]
+    fn oid_given_relation_keeps_its_rangevar_name() {
+        let cx = MemoryContext::new("t");
+        let mcx = cx.mcx();
+        let mut rv = Node::build::<RangeVar>(mcx).unwrap();
+        rv.schemaname = Some("public");
+        rv.relname = Some("b230_t");
+        rv.location = -1;
+        let mut vrel = Node::build::<VacuumRelation>(mcx).unwrap();
+        vrel.relation = Some(rv.seal());
+        vrel.oid = 16384;
+        let vrel = vrel.seal_ref();
+        let mut vacrels = PgVec::new_in(mcx);
+        super::expand_vacuum_rel(mcx, vrel, super::VACOPT_VACUUM, &mut vacrels).unwrap();
+        assert_eq!(vacrels.len(), 1);
+        assert_eq!(vacrels[0].oid, 16384);
+        assert_eq!(vacrels[0].relname, Some("b230_t"));
     }
 }

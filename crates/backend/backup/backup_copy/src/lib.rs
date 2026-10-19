@@ -198,7 +198,7 @@ fn send_xlog_rec_ptr_result(mcx: Mcx<'_>, ptr: XLogRecPtr, tli: TimeLineID) -> P
         Some(ResultValue::Int8(tli as i64)),
     ];
     seam::do_tup_output::call(tstate, values);
-    seam::end_tup_output::call(tstate);
+    seam::end_tup_output::call(tstate)?;
     pq_puttextmessage(mcx, PQ_MSG_COMMAND_COMPLETE, SELECT_TAG)
 }
 
@@ -227,7 +227,7 @@ fn send_tablespace_list(state: &BbsinkState) -> PgResult<()> {
         seam::do_tup_output::call(tstate, vec![spcoid, spclocation, size]);
     }
 
-    seam::end_tup_output::call(tstate);
+    seam::end_tup_output::call(tstate)?;
     Ok(())
 }
 

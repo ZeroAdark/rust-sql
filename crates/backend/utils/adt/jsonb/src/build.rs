@@ -35,12 +35,34 @@ impl<T> Clone for ArenaVec<'_, T> {
 }
 impl<T> Copy for ArenaVec<'_, T> {}
 
-impl<'mcx, T: Copy> ArenaVec<'mcx, T> {
+/// C's `sizeof` of the element the arena array mirrors: the buffer's
+/// palloc/repalloc requests are admitted against MaxAllocSize at C's stride,
+/// so the "invalid memory alloc request size" boundary lands on the same
+/// element count as jsonb_util.c (appendElement / appendKey doubling).
+pub trait CElem: Copy {
+    const C_SIZE: usize;
+}
+
+impl CElem for JsonbValue<'_> {
+    const C_SIZE: usize = 32;
+}
+
+impl CElem for JsonbPair<'_> {
+    const C_SIZE: usize = 72;
+}
+
+// mcxt.c MemoryContextSizeFailure for palloc(sizeof(T) * cap) at C's stride.
+pub(crate) fn c_buffer_admitted<T: CElem>(cap: usize) -> PgResult<()> {
+    ::mcx::check_alloc_size(cap.saturating_mul(T::C_SIZE))
+}
+
+impl<'mcx, T: CElem> ArenaVec<'mcx, T> {
     const NO_DROP: () = assert!(!core::mem::needs_drop::<T>());
 
     pub fn with_capacity(mcx: Mcx<'mcx>, cap: usize) -> PgResult<ArenaVec<'mcx, T>> {
         #[allow(clippy::let_unit_value)]
         let _ = Self::NO_DROP;
+        c_buffer_admitted::<T>(cap)?;
         let layout = Layout::array::<T>(cap).expect("ArenaVec layout");
         let ptr = mcx
             .allocate(layout)
@@ -59,6 +81,7 @@ impl<'mcx, T: Copy> ArenaVec<'mcx, T> {
         if self.len == self.cap {
             // C: repalloc doubling.
             let new_cap = (self.cap as usize).max(1) * 2;
+            c_buffer_admitted::<T>(new_cap)?;
             let layout = Layout::array::<T>(new_cap).expect("ArenaVec layout");
             let new_ptr = mcx
                 .allocate(layout)

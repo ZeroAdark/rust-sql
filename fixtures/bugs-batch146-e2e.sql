@@ -1,0 +1,57 @@
+-- Differential fixture for the 2026-09-13 audit bug batch 146
+-- (backend/optimizer: GROUP Vars inside TABLESAMPLE arguments at deparse,
+-- JsonExpr aggregate-preprocessing order, unique-path ordering-operator
+-- error). Run via scripts/bugs-batch146-e2e.sh against the frozen expected
+-- captured from C PostgreSQL 18.6.
+\pset pager off
+
+-- regression: flatten_group_exprs (rootless arm, ruleutils) rewrites GROUP
+-- Vars inside RTE_RELATION.tablesample (nodeFuncs.c range_table_mutator)
+CREATE TABLE b146_t (a int, b int);
+CREATE TABLE b146_t2 (c int);
+INSERT INTO b146_t VALUES (1, 1), (2, 2), (50, 3);
+INSERT INTO b146_t2 VALUES (1), (2), (3);
+CREATE VIEW b146_v AS
+  SELECT a FROM b146_t GROUP BY a
+  HAVING EXISTS (SELECT 1 FROM b146_t2 TABLESAMPLE system (a));
+SELECT pg_get_viewdef('b146_v'::regclass);
+CREATE VIEW b146_v2 AS
+  SELECT a, (SELECT count(*) FROM b146_t2 TABLESAMPLE system (a) REPEATABLE (a) WHERE c > a)
+  FROM b146_t GROUP BY a;
+SELECT pg_get_viewdef('b146_v2'::regclass);
+SELECT * FROM b146_v2 ORDER BY a;
+
+-- regression: preprocess_aggrefs visits JsonExpr passing_values before
+-- on_empty / on_error (expression_tree_walker order)
+CREATE DOMAIN b146_d1 AS int;
+CREATE DOMAIN b146_d2 AS int;
+CREATE FUNCTION b146_sf1(b146_d1, int) RETURNS b146_d1 LANGUAGE sql AS 'select $1';
+CREATE FUNCTION b146_sf2(b146_d2, int) RETURNS b146_d2 LANGUAGE sql AS 'select $1';
+CREATE AGGREGATE b146_agg1(int) (sfunc = b146_sf1, stype = b146_d1, initcond = '5');
+CREATE AGGREGATE b146_agg2(int) (sfunc = b146_sf2, stype = b146_d2, initcond = '5');
+ALTER DOMAIN b146_d1 ADD CHECK (VALUE > 10);
+ALTER DOMAIN b146_d2 ADD CHECK (VALUE > 10);
+SELECT json_value('{"x":1}', '$.x' PASSING b146_agg1(a) AS p DEFAULT b146_agg2(1) + 0 ON EMPTY) FROM b146_t;
+SELECT json_value('{"x":1}', '$.x' PASSING b146_agg1(a) AS p DEFAULT b146_agg2(1) + 0 ON ERROR) FROM b146_t;
+SELECT json_value('{"x":1}', '$.x' PASSING b146_agg2(a) AS p DEFAULT b146_agg1(1) + 0 ON EMPTY) FROM b146_t;
+
+-- regression: a MERGES operator that is a btree equality member
+-- without an ordering operator makes create_unique_path raise XX000
+-- (pathnode.c:1877), not panic; the operator OID is masked
+CREATE OPERATOR === (leftarg = int4, rightarg = int4, function = int4eq, merges);
+CREATE OPERATOR FAMILY b146_fam USING btree;
+ALTER OPERATOR FAMILY b146_fam USING btree ADD OPERATOR 3 === (int4, int4);
+DO $$
+BEGIN
+  PERFORM * FROM b146_t WHERE EXISTS (SELECT 1 FROM b146_t2 WHERE b146_t.a === b146_t2.c);
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE '% %', SQLSTATE, regexp_replace(SQLERRM, '\d+$', 'N');
+END $$;
+SET enable_mergejoin = off;
+DO $$
+BEGIN
+  PERFORM * FROM b146_t WHERE EXISTS (SELECT 1 FROM b146_t2 WHERE b146_t.a === b146_t2.c);
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE '% %', SQLSTATE, regexp_replace(SQLERRM, '\d+$', 'N');
+END $$;
+RESET enable_mergejoin;

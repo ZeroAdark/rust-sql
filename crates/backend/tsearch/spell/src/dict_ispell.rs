@@ -1,5 +1,5 @@
 use ::mcx::{Mcx, PgVec};
-use ::ts_locale::dict_api::{DictInitData, LexizeResult};
+use ::ts_locale::dict_api::{def_get_string, DictInitData, LexizeResult};
 use ::ts_locale::{
     get_tsearch_config_filename, lowerstr, readstoplist, searchstoplist, StopList, TsLexeme,
 };
@@ -31,21 +31,21 @@ pub fn dispell_init(init: &DictInitData<'static>) -> PgResult<DictISpell> {
             if dictloaded {
                 return Err(invalid_param("multiple DictFile parameters".into()).into());
             }
-            let path = get_tsearch_config_filename(mcx, value.as_slice(), "dict")?;
+            let path = get_tsearch_config_filename(mcx, def_get_string(name, value)?, "dict")?;
             obj.ni_import_dictionary(&path)?;
             dictloaded = true;
         } else if name.as_slice() == b"afffile" {
             if affloaded {
                 return Err(invalid_param("multiple AffFile parameters".into()).into());
             }
-            let path = get_tsearch_config_filename(mcx, value.as_slice(), "affix")?;
+            let path = get_tsearch_config_filename(mcx, def_get_string(name, value)?, "affix")?;
             obj.ni_import_affixes(&path)?;
             affloaded = true;
         } else if name.as_slice() == b"stopwords" {
             if stoploaded {
                 return Err(invalid_param("multiple StopWords parameters".into()).into());
             }
-            stoplist = readstoplist(mcx, Some(value.as_slice()), true)?;
+            stoplist = readstoplist(mcx, Some(def_get_string(name, value)?), true)?;
             stoploaded = true;
         } else {
             return Err(invalid_param(format!(

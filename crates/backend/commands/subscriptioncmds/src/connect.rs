@@ -336,7 +336,7 @@ pub(crate) fn drop_slot_at_pub_node(
 ) -> PgResult<()> {
     let cmd = format!("DROP_REPLICATION_SLOT \"{}\" WAIT", slotname.replace('"', "\"\""));
     let res = conn.exec(&cmd)?;
-    if res.status == ExecStatus::CommandOk || res.status == ExecStatus::TuplesOk {
+    if res.status == ExecStatus::CommandOk {
         let _ = elog::elog(
             types_error::NOTICE,
             format!("dropped replication slot \"{slotname}\" on publisher"),
@@ -470,8 +470,10 @@ pub(crate) fn AlterSubscription_refresh<'mcx>(
         // Remove local entries whose tables vanished from the publications.
         pubrel_local_oids.sort_unstable();
         let mut removed: Vec<(types_core::Oid, u8)> = Vec::new();
-        for rstate in subrel_states.iter() {
-            let relid = rstate.relid;
+        // C walks the qsort'd subrel_local_oids (subscriptioncmds.c:962), not
+        // the heap-scan order of subrel_states: the DEBUG1 "table removed"
+        // lines, worker stops and slot/origin drops come out in OID order.
+        for &relid in subrel_local_oids.iter() {
             if pubrel_local_oids.binary_search(&relid).is_ok() {
                 continue;
             }

@@ -173,9 +173,17 @@ fn uuidv7_timestamp_out_of_range_err() -> PgError {
 #[cold]
 #[inline(never)]
 fn invalid_syntax_err(input: &[u8]) -> PgError {
-    let s = String::from_utf8_lossy(input);
-    PgError::error(format!("invalid input syntax for type uuid: \"{s}\""))
-        .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
+    // uuid.c:193 "%s": the input bytes verbatim (SQL_ASCII high bytes).
+    let err = match core::str::from_utf8(input) {
+        Ok(s) => PgError::error(format!("invalid input syntax for type uuid: \"{s}\"")),
+        Err(_) => {
+            let mut msg = b"invalid input syntax for type uuid: \"".to_vec();
+            msg.extend_from_slice(input);
+            msg.push(b'"');
+            PgError::error_raw_message(msg)
+        }
+    };
+    err.with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
 }
 
 fn hex_nibble(b: u8) -> Option<u8> {

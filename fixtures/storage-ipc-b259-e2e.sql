@@ -1,0 +1,36 @@
+-- bugs/batch-259-backend-storage-ipc: C-vs-pgrust parity for the fixes in
+-- storage/ipc. Expected file captured from C 18.6
+-- (scripts/regress-diff.sh --capture).
+\set VERBOSITY verbose
+
+-- ipci.c:332-333: WalRcv is carved before WalSummarizer.
+SELECT name FROM pg_get_shmem_allocations()
+  WHERE name IN ('Wal Receiver Ctl', 'Wal Summarizer Ctl') ORDER BY off;
+
+-- ALTER DATABASE SET TABLESPACE after a parallel query: the parked pool
+-- executors of the moved database must not serve the next parallel query with
+-- their pre-move relcache/smgr state ("could not open file base/<db>/2662").
+\getenv b259dir REGRESS_DIFF_DIR
+\set b259ts :b259dir '/b259ts'
+\! mkdir -p "$REGRESS_DIFF_DIR/b259ts"
+CREATE TABLESPACE b259ts LOCATION :'b259ts';
+CREATE DATABASE b259db;
+\c b259db
+CREATE TABLE b259t AS SELECT g FROM generate_series(1, 200000) g;
+SET max_parallel_workers_per_gather = 2;
+SET parallel_setup_cost = 0;
+SET parallel_tuple_cost = 0;
+SET min_parallel_table_scan_size = 0;
+SELECT count(*) FROM b259t;
+\c postgres
+ALTER DATABASE b259db SET TABLESPACE b259ts;
+\c b259db
+SET max_parallel_workers_per_gather = 2;
+SET parallel_setup_cost = 0;
+SET parallel_tuple_cost = 0;
+SET min_parallel_table_scan_size = 0;
+SELECT count(*) FROM b259t;
+SELECT count(*) FROM b259t;
+\c postgres
+DROP DATABASE b259db;
+DROP TABLESPACE b259ts;

@@ -193,16 +193,17 @@ fn ts_headline_common(fcinfo: &mut Fcinfo, cfg: Option<Oid>, has_opts: bool) -> 
         ));
     }
 
-    // C: PG_NARGS() > 3 && PG_GETARG_POINTER(3).
+    let mut prs = HeadlineParsedText::new(mcx);
+    let mut env = CacheEnv::new(mcx, cfg);
+    hlparsetext(mcx, &mut env, &mut prs, query, text)?;
+
+    // C: hlparsetext runs before the options list is parsed.
+    // PG_NARGS() > 3 && PG_GETARG_POINTER(3).
     let opts = if has_opts && fcinfo.nargs() > base + 2 && fcinfo.arg(base + 2).as_usize() != 0 {
         Some(::ts_cache::deserialize_deflist(mcx, text_data(fcinfo, base + 2)?)?)
     } else {
         None
     };
-
-    let mut prs = HeadlineParsedText::new(mcx);
-    let mut env = CacheEnv::new(mcx, cfg);
-    hlparsetext(mcx, &mut env, &mut prs, query, text)?;
 
     let opts_datum = match &opts {
         Some(v) => Datum::from_usize(v as *const _ as usize),

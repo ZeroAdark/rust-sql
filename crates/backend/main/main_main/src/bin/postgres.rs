@@ -110,7 +110,32 @@ mod alloc_track {
         n
     }
 
-    #[cfg(not(target_arch = "aarch64"))]
+    // x86_64 frame-pointer walk (rbp chain; Apple targets keep frame
+    // pointers, and debug builds elsewhere do too): same guards as above.
+    #[cfg(target_arch = "x86_64")]
+    unsafe fn backtrace_fp(buf: &mut [usize; BT_DEPTH]) -> usize {
+        let mut fp: usize;
+        core::arch::asm!("mov {}, rbp", out(reg) fp);
+        let mut n = 0;
+        let mut prev = 0usize;
+        while n < BT_DEPTH
+            && fp > prev
+            && fp % 8 == 0
+            && (prev == 0 || fp - prev < (64 << 20))
+        {
+            let lr = *((fp + 8) as *const usize);
+            if lr < 0x1_0000 {
+                break;
+            }
+            buf[n] = lr;
+            n += 1;
+            prev = fp;
+            fp = *(fp as *const usize);
+        }
+        n
+    }
+
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     unsafe fn backtrace_fp(_buf: &mut [usize; BT_DEPTH]) -> usize {
         0
     }
@@ -167,9 +192,12 @@ mod alloc_track {
 
     fn dump_map(m: &HashMap<usize, Rec>, when: &str) {
         // Group by backtrace.
+        // Keyed by backtrace alone: a leak site that runs once per session
+        // shows up as one row whose count grows per session, not as one row
+        // per dead backend thread (each session runs on its own thread).
         let mut groups: HashMap<(&'static str, &[usize]), (usize, usize)> = HashMap::new();
         for r in m.values() {
-            let e = groups.entry((r.tname, &r.bt[..r.n])).or_insert((0, 0));
+            let e = groups.entry(("*", &r.bt[..r.n])).or_insert((0, 0));
             e.0 += 1;
             e.1 += r.size;
         }
@@ -192,7 +220,7 @@ mod alloc_track {
             m.values().map(|r| r.size).sum::<usize>(),
             slide,
         );
-        for (tname, bt, count, bytes) in rows.iter().take(25) {
+        for (tname, bt, count, bytes) in rows.iter().take(80) {
             let addrs: Vec<String> = bt.iter().map(|a| format!("0x{a:x}")).collect();
             eprintln!("ALLOC-TRACK leak: thread={} n={} bytes={} bt={}", tname, count, bytes, addrs.join(" "));
         }
@@ -301,7 +329,7 @@ fn run() {
     // spill pass.
     #[cfg(not(target_family = "wasm"))]
     mcx::set_allocator_release(|| unsafe { libmimalloc_sys::mi_collect(true) });
-    // GL-MEMWATCH-1: allocator statistics for the memory watchdog's ledger —
+    // regression: allocator statistics for the memory watchdog's ledger —
     // mi_process_info is a cheap stats read (no heap walk). current_commit is
     // the r/w memory mimalloc has committed; the watchdog logs it beside RSS
     // and the accounted context bytes so allocator retention is separable
@@ -324,7 +352,7 @@ fn run() {
         }
         memwatchdog::AllocatorStats { current_rss: rss, current_commit: commit }
     });
-    // GL-CONCMEM-1: the POOL-QOS memory governor's fallback usage basis for
+    // regression: the POOL-QOS memory governor's fallback usage basis for
     // hosts without /proc (the primary basis is RssAnon) — the allocator's
     // process RSS, the same cheap mi_process_info read as above.
     #[cfg(not(target_family = "wasm"))]
@@ -375,6 +403,8 @@ fn run() {
     let argv: Vec<String> = main_main::argv_from_os(std::env::args_os());
     if let Err(e) = main_main::pg_main(&argv) {
         elog::emit_unhandled_error_report(&e);
-        std::process::exit(1);
+        // errfinish FATAL -> proc_exit(1): the registered exit callbacks run
+        // (postmaster.pid is unlinked when shared_preload_libraries fails).
+        ::ipc::proc_exit(1, init_small::globals::MyProcPid());
     }
 }

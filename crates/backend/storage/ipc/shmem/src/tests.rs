@@ -315,3 +315,20 @@ fn init_shmem_allocation_seeds_freeoffset_like_c() {
     assert_eq!(initial_freeoffset(12800), 12928);
     assert_eq!(initial_freeoffset(20), 128);
 }
+
+// shmem.c:210-219: freeoffset moves only inside the success arm. A request
+// the allocator refuses must leave the bump counter -- the <anonymous> and
+// free rows of pg_shmem_allocations -- where it was.
+#[test]
+fn refused_alloc_does_not_advance_the_bump_counter() {
+    let huge = isize::MAX as usize - 2 * PG_CACHE_LINE_SIZE;
+    let before = SHMEM_FREEOFFSET.load(Ordering::Relaxed);
+    let mut allocated = 0;
+    let (p, _) = ShmemAllocRaw(huge, &mut allocated);
+    assert!(p.is_null());
+    let after = SHMEM_FREEOFFSET.load(Ordering::Relaxed);
+    assert!(after - before < huge, "counter advanced by a refused request");
+    let err = ShmemAlloc(huge).unwrap_err();
+    assert_eq!(err.message, format!("out of shared memory ({huge} bytes requested)"));
+    assert!(SHMEM_FREEOFFSET.load(Ordering::Relaxed) - before < huge);
+}

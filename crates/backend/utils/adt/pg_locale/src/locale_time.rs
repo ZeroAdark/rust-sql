@@ -74,6 +74,10 @@ pub fn cache_locale_time(mcx: Mcx<'_>) -> PgResult<Rc<LocalizedTimeNames>> {
     }
 
     let locale_time = crate::setup::locale_time_value();
+    elog::elog(
+        types_error::DEBUG3,
+        format!("cache_locale_time() executed; locale: \"{locale_time}\""),
+    )?;
     let loc = crate::libc_locale::newlocale_all(&locale_time)?;
 
     // Times close to current time as data for strftime().

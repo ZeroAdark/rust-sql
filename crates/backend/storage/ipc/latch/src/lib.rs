@@ -437,6 +437,16 @@ pub fn SetLatch(latch: LatchHandle) {
     set_latch(latch_ref(latch));
 }
 
+/// SetLatch from ASYNC-SIGNAL context — the postmaster's sigaction handlers
+/// (SIGHUP/SIGINT/SIGQUIT/SIGTERM/SIGUSR1). Same protocol as `set_latch`;
+/// the wake goes through the waiter's non-blocking signal route so a signal
+/// landing while the interrupted thread holds its own slot mutex cannot
+/// self-deadlock (C latch.c:290-343: SetLatch is handler-safe, its wake is
+/// a self-pipe byte).
+pub fn SetLatchFromSignalHandler(latch: LatchHandle) {
+    set_latch_with(latch_ref(latch), true);
+}
+
 // Signal-handler-reachable: no allocation, no unbounded locks, no errors
 // (waiter::unpark takes one uncontended per-slot mutex, the same class of
 // section the old registry mutex was).
@@ -447,6 +457,11 @@ pub fn SetLatch(latch: LatchHandle) {
 // REAL function loom-modelable (tests/loom.rs; dialect rationale at the
 // method docs + waiter/tests/loom_litmus.rs).
 pub fn set_latch(latch: &Latch) {
+    set_latch_with(latch, false);
+}
+
+#[inline]
+fn set_latch_with(latch: &Latch, from_signal_handler: bool) {
     // pg_memory_barrier(): flag stores by this backend must be globally
     // visible before is_set is checked/set. Full fence, matching C — the
     // store->load edge is beyond Release/Acquire (notes/latch-atomics.md).
@@ -472,7 +487,37 @@ pub fn set_latch(latch: &Latch) {
     // The wake route is the waker handle the owner published at wait entry;
     // a stale/retired handle is a token-validated no-op (waiters recheck at
     // the bottom of their loops, as with C's own/disown race tolerance).
-    waiter::unpark_word(latch.waker.load(Acquire));
+    let word = latch.waker.load(Acquire);
+    if from_signal_handler {
+        waiter::unpark_word_from_signal(word);
+    } else {
+        waiter::unpark_word(word);
+    }
+}
+
+/// Bounded `pgsync` mailbox send parked on MyLatch — the thread-model form
+/// of pqmq.c:184-187 (`WaitLatch(MyLatch, ...)`, `ResetLatch`,
+/// `CHECK_FOR_INTERRUPTS()` while shm_mq_sendv would block). The receiver's
+/// pop and its disconnect set this latch (shm_mq.c's SetLatch on the
+/// sender's procLatch), and any interrupt delivery sets it too, so
+/// `interrupted` (the caller's CHECK_FOR_INTERRUPTS) runs after every wake:
+/// `Err` from it abandons the send with the value dropped — C's longjmp out
+/// of the wait. `Ok(Err(value))` is the receiver-gone leg (mq detached).
+pub fn mailbox_send_on_my_latch<T>(
+    tx: &pgsync::MailboxSender<T>,
+    value: T,
+    wait_event_info: u32,
+    mut interrupted: impl FnMut() -> PgResult<()>,
+) -> PgResult<Result<(), T>> {
+    let my = MyLatch().expect("mailbox_send_on_my_latch: MyLatch is not set");
+    fn wake(raw: usize) {
+        SetLatch(LatchHandle::from_raw(raw));
+    }
+    tx.send_interruptible(value, (wake, my.as_usize()), || {
+        WaitLatch(Some(my), WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0, wait_event_info)?;
+        ResetLatch(my);
+        interrupted()
+    })
 }
 
 pub fn ResetLatch(latch: LatchHandle) {

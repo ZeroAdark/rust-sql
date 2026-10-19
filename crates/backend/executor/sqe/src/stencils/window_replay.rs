@@ -1504,12 +1504,18 @@ fn sort_count_rows(rows: &mut Vec<GRow>, limit: usize) {
     rows.truncate(limit);
 }
 
+fn count_answer(node: &PlanNode, n: u64) -> AnswerSet {
+    assert!(node.agg.iter().all(|a| a.op == AggOp::CountStar), "window count shape over a non-count agg");
+    let cols = (0..node.agg.len().max(1)).map(|_| AnswerCol::i64s(TypMeta::INT8, vec![n as i64])).collect();
+    AnswerSet::from_cols(cols)
+}
+
 fn render_var(ctx: &SqeCtx, node: &PlanNode, shape: &Shape, states: Vec<WState>) -> AnswerSet {
     let bank = ctx.bank;
     match shape {
         Shape::Count => {
             let n: u64 = states.iter().map(|s| s.nmatch).sum();
-            AnswerSet::from_cols(vec![AnswerCol::i64s(TypMeta::INT8, vec![n as i64])])
+            count_answer(node, n)
         }
         Shape::RowTopK { .. } => {
             let mut winners: Vec<Winner> = Vec::new();
@@ -2179,10 +2185,7 @@ fn replay_var(
     // (no residues exist in the var lane by construction) — the floor's
     // 12us hot-shape replay never touches data, and neither should this.
     if matches!(shape, Shape::Count) {
-        return AnswerSet::from_cols(vec![AnswerCol::i64s(
-            TypMeta::INT8,
-            vec![cache.survivors as i64],
-        )]);
+        return count_answer(node, cache.survivors);
     }
     let pred = node.pred.as_ref().unwrap();
     let driving = pred.var_terms[0].col;

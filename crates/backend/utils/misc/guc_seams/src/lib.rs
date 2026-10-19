@@ -75,7 +75,7 @@ seam_core::seam!(
     // get_explain_guc_options (guc.c): (name, GetConfigOptionByName value)
     // for GUC_EXPLAIN vars modified from boot; EXPLAIN (SETTINGS) reads it
     // (installed by guc_funcs, which owns the ConfigOptionIsVisible deps).
-    pub fn get_explain_guc_options() -> PgResult<Vec<(&'static str, Option<String>)>>
+    pub fn get_explain_guc_options() -> PgResult<Vec<(String, Option<String>)>>
 );
 
 seam_core::seam!(

@@ -409,7 +409,9 @@ pub fn StartupXLOG() -> PgResult<()> {
         commit_ts_seams::startup_commit_ts::call()?;
     }
 
-    if state == DB_SHUTDOWNED {
+    // xlog.c:5678 reads ControlFile->state after InitWalRecovery moved it
+    // (archive recovery requested on a cleanly shut-down cluster resets it).
+    if control_file().state == DB_SHUTDOWNED {
         ctl.unloggedLSN.store(control_file().unloggedLSN, SeqCst);
     } else {
         ctl.unloggedLSN.store(control_file::FirstNormalUnloggedLSN, SeqCst);

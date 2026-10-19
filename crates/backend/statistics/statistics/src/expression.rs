@@ -122,13 +122,14 @@ pub(crate) fn expr_col_stats(expr: Node<'_>, stattarget: i32) -> PgResult<ColSta
     })
 }
 
-// make_build_data's expression evaluation (extended_stats.c): results land in
-// the build context, as C's non-switching ExecEvalExpr does.
+// make_build_data's expression evaluation (extended_stats.c): each by-ref
+// result is datumCopy'd into the build context before the next row.
 pub(crate) fn eval_exprs<'mcx, 'b>(
     mcx: Mcx<'mcx>,
     bmcx: Mcx<'b>,
     onerel: &Relation<'mcx>,
     exprs: &[Node<'mcx>],
+    expr_stats: &[ColStats],
     rows: &[HeapTupleData<'_>],
     values: &mut PgVec<'b, PgVec<'b, Datum>>,
     nulls: &mut PgVec<'b, PgVec<'b, bool>>,
@@ -171,7 +172,13 @@ pub(crate) fn eval_exprs<'mcx, 'b>(
                     execexpr::EvalSlots { scan: Some(&mut slot), inner: None, outer: None };
                 execexpr::exec_eval_expr(&mut **st, &mut slots)?
             };
-            values[base + j].push(if nd.isnull { Datum::null() } else { nd.value });
+            let v = if nd.isnull {
+                Datum::null()
+            } else {
+                let c = &expr_stats[j];
+                adt_scalar::datum_copy(bmcx, nd.value, c.typbyval, c.typlen)?
+            };
+            values[base + j].push(v);
             nulls[base + j].push(nd.isnull);
         }
     }

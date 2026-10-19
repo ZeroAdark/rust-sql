@@ -159,6 +159,12 @@ pub(crate) fn type_name_to_string<'mcx>(mcx: Mcx<'mcx>, tn: &TypeName<'_>) -> Pg
         }
         s.try_push_str(n.as_string().expect("TypeName names").sval)?;
     }
+    if tn.pct_type {
+        s.try_push_str("%TYPE")?;
+    }
+    if !tn.arrayBounds.is_nil() {
+        s.try_push_str("[]")?;
+    }
     Ok(s)
 }
 
@@ -1379,18 +1385,20 @@ fn constraint_name<'mcx>(
     domain_name: &str,
     constr: &Constraint<'_>,
     label: &str,
-) -> PgResult<mcx::PgString<'mcx>> {
+) -> PgResult<mcx::PgVec<'mcx, u8>> {
     match constr.conname {
         Some(name) => {
             if pg_constraint::ConstraintNameIsUsed(
                 mcx,
                 pg_constraint::ConstraintCategory::Domain,
                 domain_oid,
-                name,
+                name.as_bytes(),
             )? {
                 return Err(constraint_already_exists(name, domain_name));
             }
-            mcx::PgString::from_str_in(name, mcx)
+            let mut v: mcx::PgVec<'mcx, u8> = mcx::vec_with_capacity_in(mcx, name.len())?;
+            mcx::vec_append_bytes(&mut v, name.as_bytes())?;
+            Ok(v)
         }
         None => {
             pg_constraint::ChooseConstraintName(mcx, domain_name, None, label, domain_namespace, &[])
@@ -1454,7 +1462,7 @@ pub(crate) fn domainAddCheckConstraint<'mcx>(
 
     let ccbin = outfuncs::nodeToString(mcx, expr)?;
     let mut entry = pg_constraint::ConstraintEntry::base(
-        conname.as_str(),
+        &conname,
         domain_namespace,
         pg_constraint::CONSTRAINT_CHECK,
         InvalidOid,
@@ -1482,7 +1490,7 @@ pub(crate) fn domainAddNotNullConstraint<'mcx>(
     let conname =
         constraint_name(mcx, domain_oid, domain_namespace, domain_name, constr, "not_null")?;
     let mut entry = pg_constraint::ConstraintEntry::base(
-        conname.as_str(),
+        &conname,
         domain_namespace,
         pg_constraint::CONSTRAINT_NOTNULL,
         InvalidOid,

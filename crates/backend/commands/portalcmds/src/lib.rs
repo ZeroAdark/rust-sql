@@ -234,12 +234,18 @@ pub fn PortalCleanup(portal: &Portal<'static>) -> PgResult<()> {
         execmain_seams::release_query_desc::call(query_desc);
         Ok(())
     } else {
-        (|| -> PgResult<()> {
+        let r = (|| -> PgResult<()> {
             execmain_seams::executor_finish::call(query_desc)?;
             execmain_seams::executor_end::call(query_desc)?;
             execmain_seams::free_query_desc::call(query_desc);
             Ok(())
-        })()
+        })();
+        // C's abort cleanup reclaims the portal-owned QueryDesc after a
+        // shutdown error (portalcmds.c:297); the registry entry is ours.
+        if r.is_err() {
+            execmain_seams::release_query_desc::call(query_desc);
+        }
+        r
     };
     resowner_seams::set_current_resource_owner::call(save_owner);
     result

@@ -801,7 +801,7 @@ impl Runtime {
         }
     }
 
-    /// POOL-QOS (GL-POOLDB-1 mitigation): [`Runtime::drive_pinned`] for a
+    /// POOL-QOS (regression mitigation): [`Runtime::drive_pinned`] for a
     /// POOL SERVE's nested drive — identical STEP-V2 loop plus the three
     /// class-aware moves, all inert when `PGRUST_RUNTIME_POOL_QOS=0` or no
     /// interactive demand exists:
@@ -861,7 +861,7 @@ impl Runtime {
                 Step::Ran => {
                     retries = 0;
                     if !interactive {
-                        // Memory governor (GL-CONCMEM-1): both QoS moves
+                        // Memory governor (regression): both QoS moves
                         // below multiply concurrently-live engagement
                         // working sets (round-robin progress keeps every
                         // partial state resident). Over the bar, hold them
@@ -1066,7 +1066,7 @@ impl Runtime {
         &self.sched.permits
     }
 
-    /// GL-STMTTASK-2 change 3 (inline-execute, the Cilk work-first / Go
+    /// regression change 3 (inline-execute, the Cilk work-first / Go
     /// run-on-arrival doctrine): borrow one execution seat WITHOUT waiting
     /// — the session thread is about to execute an admitted statement
     /// ITSELF instead of enqueuing it to the pool. None = no seat free
@@ -1082,7 +1082,7 @@ impl Runtime {
         }
     }
 
-    /// GL-STMTTASK-2 (wake elision): true ⇔ PGRUST_POOL_WAKE_SPINNER armed
+    /// regression (wake elision): true ⇔ PGRUST_POOL_WAKE_SPINNER armed
     /// (and the step-v2 loop is live).
     pub fn wake_spinner_armed(&self) -> bool {
         sched::wake_spinner_enabled()
@@ -1094,7 +1094,7 @@ impl Runtime {
         self.sched.park.unparks()
     }
 
-    /// GL-STMTTASK-2 (wake elision): mark this pool worker as a SEARCHER
+    /// regression (wake elision): mark this pool worker as a SEARCHER
     /// (spin_enter). The pool loop arms it at loop start and re-arms after
     /// each Ran step; worker_step's claim points and the directed park
     /// consume it.
@@ -1104,7 +1104,7 @@ impl Runtime {
         local.spinning = true;
     }
 
-    /// GL-STMTTASK flip fix: drop the searcher mark before a BLOCKING
+    /// regression flip fix: drop the searcher mark before a BLOCKING
     /// loop-top permit acquire (a blocked thread is not searching — an
     /// elided wake against it strands work behind the block). Pairs with a
     /// spin_enter_worker re-arm after the acquire.
@@ -1115,7 +1115,7 @@ impl Runtime {
         }
     }
 
-    /// GL-STMTTASK-2 (wake elision): directed park for the step-v2 pool
+    /// regression (wake elision): directed park for the step-v2 pool
     /// loop — registers on the LIFO idle stack and consumes the worker's
     /// search-phase mark; on return the worker re-enters the search phase
     /// (mark re-armed here so the elision window never gaps).
@@ -1203,7 +1203,7 @@ impl Runtime {
     }
 }
 
-/// GL-STMTTASK-2 quantum yield: is THIS thread inside a declared blocking
+/// regression quantum yield: is THIS thread inside a declared blocking
 /// section (permit donated)? The yield governor's double-release guard;
 /// one TLS load.
 #[cfg(not(loom))]
@@ -1329,7 +1329,7 @@ impl Drop for ParallelWidthLease {
 
 /// RAII lease of one external pin-board lane (see
 /// [`Runtime::acquire_external_lane`]).
-/// GL-STMTTASK-2 change 3: an inline-execute seat — one execution permit
+/// regression change 3: an inline-execute seat — one execution permit
 /// borrowed by a SESSION thread for the span of a statement it runs itself
 /// (see [`Runtime::try_borrow_seat`]). RAII: the permit returns on drop,
 /// on every exit path (completion, error, cancel unwind).

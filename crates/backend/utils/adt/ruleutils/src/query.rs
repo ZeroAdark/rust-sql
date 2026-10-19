@@ -846,14 +846,19 @@ fn get_with_clause<'mcx>(query: &'mcx Query<'mcx>, ctx: &mut DeparseContext<'mcx
             ));
             let mark_value = cc.cycle_mark_value.expect("cycle_mark_value");
             let mark_default = cc.cycle_mark_default.expect("cycle_mark_default");
-            let cmv = mark_value.as_const().expect("cycle_mark_value is a Const");
-            let cmd = mark_default.as_const().expect("cycle_mark_default is a Const");
-            let default_marks = cmv.consttype == types_core::BOOLOID
-                && !cmv.constisnull
-                && cmv.constvalue.as_bool()
-                && cmd.consttype == types_core::BOOLOID
-                && !cmd.constisnull
-                && !cmd.constvalue.as_bool();
+            // ruleutils.c:5875 castNode(Const, ...) is a plain cast in release
+            // builds: a coerced (non-Const) mark takes the TO/DEFAULT arm.
+            let default_marks = match (mark_value.as_const(), mark_default.as_const()) {
+                (Some(cmv), Some(cmd)) => {
+                    cmv.consttype == types_core::BOOLOID
+                        && !cmv.constisnull
+                        && cmv.constvalue.as_bool()
+                        && cmd.consttype == types_core::BOOLOID
+                        && !cmd.constisnull
+                        && !cmd.constvalue.as_bool()
+                }
+                _ => false,
+            };
             if !default_marks {
                 ctx.buf.push_str(" TO ");
                 get_rule_expr(mark_value, ctx, false)?;

@@ -1272,7 +1272,7 @@ fn groupingset_content_list_marker_divergence_is_recorded() {
     );
 }
 
-/// DEFECT FIXED IN-LANE (found by the FLEET CONFIRM at 2.09M execs): float
+/// DEFECT FIXED IN-LANE (found by the CI CONFIRM at 2.09M execs): float
 /// fields printed with Rust `{}` Display where C's WRITE_FLOAT_FIELD goes
 /// through Ryu shortest-decimal — different NOTATION for large exponents
 /// (Display: 115 expanded digits; Ryu: "4.4444444444444444e+113"), so catalog

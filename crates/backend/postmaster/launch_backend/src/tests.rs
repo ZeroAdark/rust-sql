@@ -24,6 +24,7 @@ struct ChildSnapshot {
     client_sock: Option<i32>,
     sigterm_blocked: bool,
     sigquit_in_blocksig: bool,
+    sigabrt_disposition: bool,
 }
 
 static SNAPSHOT_TX: Mutex<Option<Sender<ChildSnapshot>>> = Mutex::new(None);
@@ -76,6 +77,7 @@ fn install() {
                 client_sock: init_small::globals::MyClientSocket().map(|c| c.sock),
                 sigterm_blocked: unsafe { libc::sigismember(&cur, libc::SIGTERM) == 1 },
                 sigquit_in_blocksig: masks.block_sig_contains(libc::SIGQUIT),
+                sigabrt_disposition: procsignal::thread_signal_disposition_installed(libc::SIGABRT),
             };
             SNAPSHOT_TX.lock().unwrap().as_ref().unwrap().send(snap).unwrap();
             panic!("test capture complete");
@@ -172,9 +174,24 @@ fn launch_backend_thread_runs_child_init_in_order() {
     assert_eq!(snap.client_sock, Some(33));
     assert!(snap.sigterm_blocked);
     assert!(!snap.sigquit_in_blocksig);
+    assert!(snap.sigabrt_disposition, "a SIGABRT broadcast must find a disposition, not pend forever");
 }
 
-// The Main::Unported class is empty since GL-AIO-1 ported IoWorkerMain (its
+// send_abort_for_crash / send_abort_for_kill: the SIGABRT broadcast has to
+// kill the child (C's default action), announced as WTERMSIG(SIGABRT).
+#[test]
+fn sigabrt_disposition_kills_the_child_thread() {
+    let status = std::thread::spawn(|| {
+        let payload = std::panic::catch_unwind(default_sigabrt_handler)
+            .expect_err("the SIGABRT rendering must unwind, not return");
+        panic_payload_to_exit_status(payload.as_ref())
+    })
+    .join()
+    .expect("the SIGABRT rendering must stay contained in its own thread");
+    assert_eq!(status, procsignal::signums::SIGABRT);
+}
+
+// The Main::Unported class is empty since regression ported IoWorkerMain (its
 // loud-panic arms stay for future kinds); the None-kind test below keeps the
 // loud-refusal class pinned.
 #[test]
@@ -187,7 +204,7 @@ fn null_main_fn_kind_panics_loudly() {
 }
 
 // ---------------------------------------------------------------------------
-// GL-FDLIMIT-1: a connection whose child thread cannot start must be REFUSED
+// regression: a connection whose child thread cannot start must be REFUSED
 // on the wire and its socket closed. Before this, child-init failure panicked
 // the thread: the accepted socket stayed open with no owner, so the client sat
 // waiting forever (it deadlocked a benchmark driver for 55 minutes).
@@ -346,4 +363,19 @@ fn every_child_thread_arms_its_stack_ceiling() {
     let ceilings = src.matches("stack_depth::set_thread_stack_ceiling(").count();
     assert!(bases >= 5, "{bases}");
     assert_eq!(bases, ceilings);
+}
+
+/// A standby leaving standby_loop on a parked-announce path (pool flushed
+/// or crash-fenced under it) drops its own CHILD_THREADS entry and pid
+/// reservation: the reaper skips a park's announce, so nothing else would.
+#[test]
+fn retired_standby_leaves_no_child_thread_or_reserved_pid() {
+    let pid = reserve_child_pid().expect("a synthetic pid");
+    let handle = std::thread::spawn(|| {});
+    CHILD_THREADS.lock().unwrap_or_else(|e| e.into_inner()).push((pid, handle));
+    assert!(RESERVED_PIDS.lock().unwrap_or_else(|e| e.into_inner()).contains(&pid));
+    wpool::retire_child_thread(pid);
+    assert!(!CHILD_THREADS.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(p, _)| *p == pid));
+    assert!(!RESERVED_PIDS.lock().unwrap_or_else(|e| e.into_inner()).contains(&pid));
+    wpool::retire_child_thread(pid);
 }

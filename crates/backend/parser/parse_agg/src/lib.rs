@@ -476,14 +476,14 @@ fn check_agg_arguments_walker<'mcx>(
         NodeTag::T_FuncExpr => {
             let f = node.as_func_expr().unwrap();
             if f.funcretset && ctx.sublevels_up == 0 {
-                return Err(srf_in_agg_error(pstate, f.location));
+                return Err(srf_in_agg_error(pstate, nodes_core::expr_location(node)));
             }
             caa_descend(pstate, node, ctx)
         }
         NodeTag::T_OpExpr => {
             let o = node.as_op_expr().unwrap();
             if o.opretset && ctx.sublevels_up == 0 {
-                return Err(srf_in_agg_error(pstate, o.location));
+                return Err(srf_in_agg_error(pstate, nodes_core::expr_location(node)));
             }
             caa_descend(pstate, node, ctx)
         }
@@ -1628,12 +1628,6 @@ fn sgc_query_news<'mcx>(
 ) -> PgResult<QueryNews<'mcx>> {
     let mcx = ctx.mcx;
     let new_target = sgc_list(ctx, &q.targetList)?;
-    let new_returning = sgc_list(ctx, &q.returningList)?;
-    let new_having = sgc_mutate_opt(ctx, q.havingQual)?;
-    let new_limit_off = sgc_mutate_opt(ctx, q.limitOffset)?;
-    let new_limit_cnt = sgc_mutate_opt(ctx, q.limitCount)?;
-    let new_setops = sgc_mutate_opt(ctx, q.setOperations)?;
-    let new_merge_join_cond = sgc_mutate_opt(ctx, q.mergeJoinCondition)?;
     for wco_node in &q.withCheckOptions {
         let wco = wco_node
             .as_with_check_option()
@@ -1646,25 +1640,6 @@ fn sgc_query_news<'mcx>(
                 })
             }
             .expect("WithCheckOption");
-        }
-    }
-    for action_node in &q.mergeActionList {
-        let action = action_node.as_merge_action().expect("mergeActionList cell");
-        let new_qual = sgc_mutate_opt(ctx, action.qual)?;
-        let new_tlist = sgc_list(ctx, &action.targetList)?;
-        if new_qual.is_some() || new_tlist.is_some() {
-            // SAFETY: as above.
-            unsafe {
-                action_node.with_mut::<types_nodes::primnodes::MergeAction, _>(|a| {
-                    if new_qual.is_some() {
-                        a.qual = new_qual;
-                    }
-                    if let Some(t) = new_tlist {
-                        a.targetList = t;
-                    }
-                })
-            }
-            .expect("MergeAction");
         }
     }
     if let Some(oc_node) = q.onConflict {
@@ -1707,25 +1682,27 @@ fn sgc_query_news<'mcx>(
     // mutated even without QTW_EXAMINE_SORTGROUP — a subquery's frame offset
     // may reference a grouped outer Var (level-0 Vars are rejected by
     // transformFrameOffset, outer ones are not).
-    for wc_node in &q.windowClause {
-        let wc = wc_node.as_window_clause().expect("windowClause cell");
-        let new_start = sgc_mutate_opt(ctx, wc.startOffset)?;
-        let new_end = sgc_mutate_opt(ctx, wc.endOffset)?;
-        if new_start.is_some() || new_end.is_some() {
-            // SAFETY: exclusive parse tree; no derived refs live.
+    for action_node in &q.mergeActionList {
+        let action = action_node.as_merge_action().expect("mergeActionList cell");
+        let new_qual = sgc_mutate_opt(ctx, action.qual)?;
+        let new_tlist = sgc_list(ctx, &action.targetList)?;
+        if new_qual.is_some() || new_tlist.is_some() {
+            // SAFETY: as above.
             unsafe {
-                wc_node.with_mut::<types_nodes::parsenodes::WindowClause, _>(|w| {
-                    if new_start.is_some() {
-                        w.startOffset = new_start;
+                action_node.with_mut::<types_nodes::primnodes::MergeAction, _>(|a| {
+                    if new_qual.is_some() {
+                        a.qual = new_qual;
                     }
-                    if new_end.is_some() {
-                        w.endOffset = new_end;
+                    if let Some(t) = new_tlist {
+                        a.targetList = t;
                     }
                 })
             }
-            .expect("WindowClause");
+            .expect("MergeAction");
         }
     }
+    let new_merge_join_cond = sgc_mutate_opt(ctx, q.mergeJoinCondition)?;
+    let new_returning = sgc_list(ctx, &q.returningList)?;
     let new_jointree = match q.jointree {
         None => None,
         Some(jt) => {
@@ -1750,6 +1727,29 @@ fn sgc_query_news<'mcx>(
             }
         }
     };
+    let new_setops = sgc_mutate_opt(ctx, q.setOperations)?;
+    let new_having = sgc_mutate_opt(ctx, q.havingQual)?;
+    let new_limit_off = sgc_mutate_opt(ctx, q.limitOffset)?;
+    let new_limit_cnt = sgc_mutate_opt(ctx, q.limitCount)?;
+    for wc_node in &q.windowClause {
+        let wc = wc_node.as_window_clause().expect("windowClause cell");
+        let new_start = sgc_mutate_opt(ctx, wc.startOffset)?;
+        let new_end = sgc_mutate_opt(ctx, wc.endOffset)?;
+        if new_start.is_some() || new_end.is_some() {
+            // SAFETY: exclusive parse tree; no derived refs live.
+            unsafe {
+                wc_node.with_mut::<types_nodes::parsenodes::WindowClause, _>(|w| {
+                    if new_start.is_some() {
+                        w.startOffset = new_start;
+                    }
+                    if new_end.is_some() {
+                        w.endOffset = new_end;
+                    }
+                })
+            }
+            .expect("WindowClause");
+        }
+    }
     for cte_node in &q.cteList {
         let cte = cte_node.as_common_table_expr().expect("cteList cell");
         if let Some(cq) = cte.ctequery {

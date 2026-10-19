@@ -475,7 +475,11 @@ pub fn fc_pg_stat_reset_slru(_fl: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) ->
     if fcinfo.argisnull(0) {
         pgstat::pgstat_reset_of_kind(PGSTAT_KIND_SLRU);
     } else {
-        pgstat::slru::pgstat_reset_slru(arg_text_str(fcinfo, 0)?);
+        // SAFETY: catalog arg type text — non-null (checked above).
+        let name = unsafe { fcinfo.arg_varlena_packed(0)? };
+        // No SLRU name has non-ASCII bytes: any such name selects "other"
+        // (pgstat_slru.c:132), so a lossy decode chooses the same counter.
+        pgstat::slru::pgstat_reset_slru(&String::from_utf8_lossy(name.data()));
     }
     Ok(Datum::from_usize(0))
 }

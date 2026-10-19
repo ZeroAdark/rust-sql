@@ -33,7 +33,7 @@ pub fn init_seams() {
         hash_mem_multiplier: hash_mem_multiplier / set_hash_mem_multiplier;
         enableFsync: enableFsync / set_enableFsync;
         allowSystemTableMods: allowSystemTableMods / set_allowSystemTableMods;
-        data_directory_mode: data_directory_mode / set_data_directory_mode;
+        data_directory_mode: data_directory_mode / guc_ignores_data_directory_mode;
         IntervalStyle: IntervalStyle / SetIntervalStyle;
         VacuumBufferUsageLimit: VacuumBufferUsageLimit / SetVacuumBufferUsageLimit;
         VacuumCostPageHit: VacuumCostPageHit / SetVacuumCostPageHit;

@@ -173,7 +173,7 @@ nbtree_xlog = { path = "../../nbtree/nbtree_xlog" }
 pruneheap = { path = "../../heap/pruneheap" }
 arrayfuncs = { path = "../../../utils/adt/arrayfuncs" }
 execindexing = { path = "../../../executor/execindexing" }
-# GL-FLUSHSIM-1 (tests/sim_flushsim.rs): the multi-session commit-path
+# regression (tests/sim_flushsim.rs): the multi-session commit-path
 # trajectory sim needs the REAL park/wake stack (the crash-sweep rig stubs
 # it — correct single-threaded, wrong for concurrent committers).
 pg_sema = { path = "../../../port/pg_sema" }

@@ -316,6 +316,11 @@ pub fn set_default_locale_c_for_tests() {
     DEFAULT_LOCALE.with(|d| d.set(Some(&C_LOCALE)));
 }
 
+// Test-only: a named libc collation without a catalog.
+pub fn libc_locale_for_tests(collate: &str) -> PgResult<PgLocale> {
+    create_pg_locale_libc(collate, collate)
+}
+
 // Test-only: builtin-provider C.UTF-8 default without a catalog (what
 // `initdb --locale-provider=builtin --builtin-locale=C.UTF-8` records:
 // collate C, ctype NOT C, simple casemap — pg_locale_builtin.c:160 gives
@@ -485,7 +490,7 @@ fn warn_collation_version_mismatch(
 ) -> PgResult<()> {
     let ctx = MemoryContext::new("collation version warning");
     let nspname = lsyscache::get_namespace_name(ctx.mcx(), collnamespace)?;
-    let qualified = quote_qualified_identifier(nspname.as_ref().map(|s| s.as_str()), collname);
+    let qualified = version_mismatch_target(nspname.as_deref(), collname);
     elog::ereport(WARNING)
         .errmsg(format!("collation \"{collname}\" has version mismatch"))
         .errdetail(format!(
@@ -500,28 +505,13 @@ fn warn_collation_version_mismatch(
         .finish(loc(1134, "create_pg_locale"))
 }
 
-// quote_qualified_identifier (ruleutils.c) reduced to quote-when-not-plain,
-// postinit precedent; the keyword-aware owner supersedes it.
-fn quote_qualified_identifier(namespace: Option<&str>, ident: &str) -> String {
+// quote_qualified_identifier(get_namespace_name(nsp), collname) of the
+// pg_locale.c:1141 hint (keyword-aware, quote_all_identifiers).
+pub(crate) fn version_mismatch_target(namespace: Option<&str>, ident: &str) -> String {
+    let ident = format_type::quote_identifier(ident);
     match namespace {
-        Some(n) => format!("{}.{}", quote_identifier(n), quote_identifier(ident)),
-        None => quote_identifier(ident),
-    }
-}
-
-fn quote_identifier(ident: &str) -> String {
-    let plain = !ident.is_empty()
-        && ident
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
-        && ident
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-    if plain {
-        ident.to_owned()
-    } else {
-        format!("\"{}\"", ident.replace('"', "\"\""))
+        Some(n) => format!("{}.{}", format_type::quote_identifier(n), ident),
+        None => ident.into_owned(),
     }
 }
 
@@ -728,14 +718,10 @@ pub fn builtin_validate_locale(encoding: i32, locale: &str) -> PgResult<&'static
     Ok(canonical_name)
 }
 
-// pg_encoding_to_char rendering for the one mismatch message; the name-table
-// owner is mb (only the database encoding reaches this in the create paths).
+// pg_encoding_to_char rendering for the mismatch message (CREATE DATABASE
+// names any encoding here, pg_locale.c:1598).
 fn encoding_name(encoding: i32) -> String {
-    if encoding == mbutils::GetDatabaseEncoding() {
-        mbutils::GetDatabaseEncodingName().to_owned()
-    } else {
-        format!("encoding {encoding}")
-    }
+    mbutils::pg_encoding_to_char(encoding).to_owned()
 }
 
 fn varstr_cmp_locale(collid: Oid, arg1: &[u8], arg2: &[u8]) -> PgResult<i32> {

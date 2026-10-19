@@ -285,3 +285,37 @@ fn ultostr_and_zeropad() {
     pos += pg_ultostr_zeropad(&mut buf[pos..], 42, 2);
     assert_eq!(&buf[..pos], b"09:05:42");
 }
+
+#[test]
+fn uint_subr_errors_carry_numutils_c_locations() {
+    for (err, line, func) in [
+        (uint32in_subr("x", false, "oid", None).unwrap_err(), 918, "uint32in_subr"),
+        (uint32in_subr("99999999999", false, "oid", None).unwrap_err(), 963, "uint32in_subr"),
+        (uint64in_subr("x", false, "xid8", None).unwrap_err(), 1004, "uint64in_subr"),
+        (uint64in_subr("99999999999999999999999", false, "xid8", None).unwrap_err(), 1010, "uint64in_subr"),
+    ] {
+        let loc = err.location().expect("C location");
+        assert_eq!(loc.filename.as_deref(), Some("numutils.c"));
+        assert_eq!(loc.lineno, line);
+        assert_eq!(loc.funcname.as_deref(), Some(func));
+    }
+}
+
+#[test]
+fn strtoint_bytes_quote_the_raw_input() {
+    let err = pg_strtoint32_safe_bytes(b"1\xff", None).unwrap_err();
+    assert_eq!(err.sqlstate(), ERRCODE_INVALID_TEXT_REPRESENTATION);
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"invalid input syntax for type integer: \"1\xff\"".as_slice())
+    );
+    let err = pg_strtoint16_safe_bytes(b"99999\xff", None).unwrap_err();
+    assert_eq!(err.sqlstate(), ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"value \"99999\xff\" is out of range for type smallint".as_slice())
+    );
+    let err = pg_strtoint64_safe_bytes(b"x", None).unwrap_err();
+    assert!(err.message_raw.is_none());
+    assert_eq!(err.message(), "invalid input syntax for type bigint: \"x\"");
+}

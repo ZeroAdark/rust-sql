@@ -36,7 +36,7 @@ pglz = { path = "../../../../common/pglz" }
 # under --cfg pgrust_sim the same calls hit SimVfs, composing M3-K's crash
 # batteries under this writer unchanged).
 vfs = { path = "../../../../backend/storage/file/vfs" }
-# GL-BULKWRITE-1 (#686): the bulk-write dirty-page governor. Hooked ONLY in
+# regression (#686): the bulk-write dirty-page governor. Hooked ONLY in
 # RealVfs (production); MemVfs and the sim harness never see governor ops
 # (the governor self-disarms under --cfg pgrust_sim).
 write_governor = { path = "../../../../backend/storage/file/write_governor" }

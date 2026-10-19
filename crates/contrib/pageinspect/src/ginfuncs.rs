@@ -66,7 +66,7 @@ pub(crate) fn fc_gin_metapage_info(
 
     // SAFETY: the arming context outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
-    let tupdesc = composite_tupdesc(mcx, flinfo)?;
+    let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
 
     // GinMetaPageData at PageGetContents.
     let m = SizeOfPageHeaderData;
@@ -103,7 +103,7 @@ pub(crate) fn fc_gin_page_opaque_info(
 
     // SAFETY: the arming context outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
-    let tupdesc = composite_tupdesc(mcx, flinfo)?;
+    let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
 
     let mut flags: Vec<Datum> = Vec::new();
     let mut flagbits = opaq.flags;
@@ -172,7 +172,7 @@ pub(crate) fn fc_gin_leafpage_items(
             ));
         }
 
-        let tupdesc = composite_tupdesc(mcx, flinfo)?;
+        let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
 
         // GinDataLeafPageGetPostingList / ...Size.
         let start = SizeOfPageHeaderData + maxalign(6);

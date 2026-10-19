@@ -1054,7 +1054,11 @@ impl<'mcx> Vars<'mcx> {
         if e_is_err {
             return lastresort;
         }
-        let c = elem.unwrap().code;
+        let er = elem.unwrap();
+        if er.note_ulocale {
+            self.NOTE(REG_ULOCALE);
+        }
+        let c = er.code;
 
         match range(self.mcx, c, c, 0) {
             Ok(cvec) => {
@@ -1708,16 +1712,6 @@ pub fn newlacon(v: &mut Vars, begin: StateId, end: StateId, latype: u8) -> RegRe
         v.lacons.push(blank_subre());
     }
     v.nlacons = n + 1;
-    // The lookaround index is later packed into the i16 color space (LACON arcs
-    // use color = ncolors + index at compaction). Reject before the caller's
-    // `n as color` cast can truncate a pathological count, with the code
-    // compact()'s LACON fit check reports for this overflow class (C has no
-    // guard here; its cast wraps silently).
-    // upstream f3cee4dc4330 (18.4): Harden our regex engine against integer overflow in size calculations.
-    if n > crate::regguts::MAX_COLOR as i32 {
-        v.seterr(REG_ECOLORS);
-        return Err(RegError(REG_ECOLORS));
-    }
     let sub = &mut v.lacons[n as usize];
     sub.begin = Some(begin);
     sub.end = Some(end);
@@ -2620,6 +2614,15 @@ fn empty_colormap() -> ColorMap {
         hicolormap: Vec::new(),
         hiarrayrows: 0,
         hiarraycols: 0,
+        maxarrayrows: 0,
+    }
+}
+
+pub fn check_cflags(cflags: i32) -> RegResult<()> {
+    if ::regex::cflags_valid(cflags) {
+        Ok(())
+    } else {
+        Err(RegError(REG_INVARG))
     }
 }
 
@@ -2629,13 +2632,7 @@ pub fn pg_regcomp<'mcx>(
     cflags: i32,
     collation: Oid,
 ) -> RegResult<RegexT> {
-    if (cflags & REG_QUOTE) != 0 && (cflags & (REG_ADVANCED | REG_EXPANDED | REG_NEWLINE)) != 0 {
-        return Err(RegError(REG_INVARG));
-    }
-    if (cflags & REG_EXTENDED) == 0 && (cflags & REG_ADVF) != 0 {
-        return Err(RegError(REG_INVARG));
-    }
-
+    check_cflags(cflags)?;
 
     let mut cm = empty_colormap();
     crate::regex_foundation::initcm(mcx, &mut cm)?;

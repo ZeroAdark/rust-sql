@@ -57,7 +57,7 @@ pub(crate) fn fc_gist_page_opaque_info(
 
     // SAFETY: the arming context outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
-    let tupdesc = composite_tupdesc(mcx, flinfo)?;
+    let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
 
     let opaq = types_gist::page_opaque(&page.page_ref());
 
@@ -116,9 +116,6 @@ pub(crate) fn fc_gist_page_items_bytea(
 
     for offnum in 1..=maxoff {
         let id = page_item_id(b, offnum);
-        if !id.is_valid() {
-            return Err(Box::new(PgError::error("invalid ItemId")));
-        }
         let pos = id.off as usize;
         if pos + 8 > b.len() {
             return Err(Box::new(PgError::error("invalid ItemId")));
@@ -316,29 +313,19 @@ pub(crate) fn fc_gist_page_items(
 
     for offnum in 1..=maxoff {
         let id = page_item_id(b, offnum);
-        if !id.is_valid() {
-            return Err(Box::new(PgError::error("invalid ItemId")));
-        }
         let pos = id.off as usize;
-        let lp_len = id.len as usize;
-        // Validate the line pointer against the page image before trusting any
-        // tuple field: index_deform_tuple's C contract assumes a well-formed
-        // tuple, but the page bytes here are attacker-supplied. The header
-        // (8 bytes) must fit, and the whole item must lie within the page.
-        if lp_len < INDEX_TUPLE_HEADER_SIZE || pos + lp_len > b.len() {
+        // C (gistfuncs.c:279) deforms whatever lp_off points at without
+        // consulting lp_len or IndexTupleSize; only the page image bounds the
+        // reads here. The 8-byte header must fit in the page.
+        if pos + INDEX_TUPLE_HEADER_SIZE > b.len() {
             return Err(Box::new(PgError::error("invalid ItemId")));
         }
-        // SAFETY: the 8-byte header is in bounds (lp_len >= 8, checked above).
+        // SAFETY: the 8-byte header is in bounds (checked above).
         let itup = unsafe { b.as_ptr().add(pos) };
         let tuple_len = unsafe { nbtree::itup::index_tuple_size(itup) };
-        // IndexTupleSize must be consistent with the line pointer's declared
-        // length; this bounds pos+tuple_len within the page (tuple_len <= lp_len).
-        if tuple_len < INDEX_TUPLE_HEADER_SIZE || tuple_len > lp_len {
-            return Err(Box::new(PgError::error("invalid ItemId")));
-        }
-        // Bounds-check every per-attribute offset/length against the tuple image
+        // Bounds-check every per-attribute offset/length against the page tail
         // before index_getattr walks it (idx 154).
-        verify_index_tuple_attrs(&b[pos..pos + tuple_len], &tupdesc)?;
+        verify_index_tuple_attrs(&b[pos..], &tupdesc)?;
 
         let mut values = [Datum::null(); 5];
         let mut nulls = [false; 5];
@@ -356,10 +343,9 @@ pub(crate) fn fc_gist_page_items(
             // Mostly copied from record_out().
             for i in 0..natts {
                 let mut isnull = false;
-                // SAFETY: itup points at a tuple_len-byte in-bounds image whose
-                // per-attribute offsets were bounds-checked by
-                // verify_index_tuple_attrs above, so each attribute read stays
-                // inside the tuple.
+                // SAFETY: itup points into the page image and every
+                // per-attribute offset was bounds-checked against the page
+                // tail by verify_index_tuple_attrs above.
                 let val_datum =
                     unsafe { nbtree::itup::index_getattr(itup, (i + 1) as i16, &tupdesc, &mut isnull) };
                 let value = if isnull {

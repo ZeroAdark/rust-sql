@@ -8,7 +8,7 @@
 //! memcmp key order == datum comparator order == the frozen-bank GNU
 //! `LC_ALL=C` recipe order.
 //!
-//! GL-LOADDET-1 CORRECTION: this header used to claim "zero datum ties" as
+//! regression CORRECTION: this header used to claim "zero datum ties" as
 //! part of that measured chain. It is FALSE on the analytics key set, and it
 //! was load-bearing for the wrong reason — a tie-free key pins the output
 //! permutation all by itself, so every byte-identity gate built on a tie-free

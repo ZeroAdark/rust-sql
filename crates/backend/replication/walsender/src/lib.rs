@@ -268,6 +268,9 @@ pub fn WalSndShmemResetAfterCrash() {
         // SAFETY: crash restart, no walsender or backend thread is live.
         unsafe { q.set(types_storage::storage::proclist_head::default()) };
     }
+    for cv in [&c.wal_flush_cv, &c.wal_replay_cv, &c.wal_confirm_rcv_cv] {
+        condition_variable::cv_reset_after_crash(cv);
+    }
     for m in shared.uploaded_manifests.iter() {
         *m.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
@@ -615,9 +618,6 @@ pub fn WalSndErrorCleanup() -> PgResult<()> {
 
 // exec_replication_command (walsender.c:1983).
 pub fn exec_replication_command(cmd_string: &str) -> PgResult<bool> {
-    // C: `debug_query_string = cmd_string;` (walsender.c:2113); the scope's
-    // drop is the tail reset, retiring the text for the error report.
-    let _debug_query = elog::debug_query_string_scope(cmd_string);
     if GOT_STOPPING.get() {
         WalSndSetState(WalSndState::Stopping);
     }
@@ -652,6 +652,11 @@ pub fn exec_replication_command(cmd_string: &str) -> PgResult<bool> {
     }
 
     let cmd = repl_gram::replication_parse(cmd_string)?;
+
+    // C: `debug_query_string = cmd_string;` (walsender.c:2113) only after the
+    // parse succeeded, so a parse error carries no STATEMENT line; the scope's
+    // drop is the tail reset, retiring the text for the error report.
+    let _debug_query = elog::debug_query_string_scope(cmd_string);
 
     backend_status_seams::pgstat_report_activity::call(
         backend_status_seams::BackendState::STATE_RUNNING,
@@ -961,11 +966,12 @@ fn conflicting_or_redundant(func: &'static str, line: i32) -> PgResult<()> {
         .finish(loc(line, func))
 }
 
-// parse_bool (bool.c): case-insensitive true/false/yes/no/on/off/1/0/t/f/y/n.
+// defGetBoolean's string arm (define.c:127): only true/false/on/off, the
+// grammar's opt_boolean_or_string set, not bool.c's parse_bool.
 fn parse_bool(s: &str) -> Option<bool> {
     match s.to_ascii_lowercase().as_str() {
-        "true" | "yes" | "on" | "1" | "t" | "y" => Some(true),
-        "false" | "no" | "off" | "0" | "f" | "n" => Some(false),
+        "true" | "on" => Some(true),
+        "false" | "off" => Some(false),
         _ => None,
     }
 }
@@ -1126,6 +1132,15 @@ fn CreateReplicationSlot(mcx: mcx::Mcx<'_>, cmd: CreateReplicationSlotCmd) -> Pg
     } else {
         logical::CheckLogicalDecodingRequirements()?;
 
+        slot::ReplicationSlotCreate(
+            slotname,
+            true,
+            if cmd.temporary { slot::RS_TEMPORARY } else { slot::RS_EPHEMERAL },
+            opts.two_phase,
+            opts.failover,
+            false,
+        )?;
+
         match opts.snapshot_action {
             CrsSnapshotAction::UseSnapshot => {
                 // walsender.c:1262: USE_SNAPSHOT preconditions.
@@ -1168,15 +1183,6 @@ fn CreateReplicationSlot(mcx: mcx::Mcx<'_>, cmd: CreateReplicationSlotCmd) -> Pg
             CrsSnapshotAction::NoExportSnapshot => {}
         }
 
-        slot::ReplicationSlotCreate(
-            slotname,
-            true,
-            if cmd.temporary { slot::RS_TEMPORARY } else { slot::RS_EPHEMERAL },
-            opts.two_phase,
-            opts.failover,
-            false,
-        )?;
-
         // Build the initial decoding context and find the decoding start
         // point (the reported consistent_point). No output writer: nothing is
         // sent to the client during slot creation (walsender.c:1285 passes
@@ -1196,6 +1202,10 @@ fn CreateReplicationSlot(mcx: mcx::Mcx<'_>, cmd: CreateReplicationSlotCmd) -> Pg
             None,
             None,
         )?;
+
+        // walsender.c:1333: no feedback or keepalives while the slot is
+        // created, so a possibly long wait for WAL must not time out.
+        LAST_REPLY_TIMESTAMP.with(|c| c.set(0));
 
         // walsender.c:1320: logical_read_xlog_page, so a client that hangs
         // up during the wait is noticed (WalSndWaitForWal's reply
@@ -1327,7 +1337,7 @@ fn UploadManifest(mcx: mcx::Mcx<'_>) -> PgResult<()> {
 
     // Receive packets from client until done.
     let mut buf = stringinfo::StringInfo::new_in(mcx)?;
-    while HandleUploadManifestPacket(&mut buf, &mut ib)? {}
+    while HandleUploadManifestPacket(mcx, &mut buf, &mut ib)? {}
 
     // Finish up manifest processing.
     ib.FinalizeIncrementalManifest()?;
@@ -1348,6 +1358,7 @@ fn UploadManifest(mcx: mcx::Mcx<'_>) -> PgResult<()> {
 // space. Returns true if the caller should continue processing additional
 // packets, false if the UPLOAD_MANIFEST operation is complete.
 fn HandleUploadManifestPacket(
+    mcx: mcx::Mcx<'_>,
     buf: &mut stringinfo::StringInfo<'_>,
     ib: &mut basebackup_incremental::IncrementalBackupInfo,
 ) -> PgResult<bool> {
@@ -1408,9 +1419,8 @@ fn HandleUploadManifestPacket(
         b'H' | b'S' => Ok(true), /* Sync/Flush: ignore, as elsewhere in CopyOut */
         b'f' => {
             /* CopyFail */
-            let body = buf.as_bytes();
-            let nul = body.iter().position(|&b| b == 0).unwrap_or(body.len());
-            let msg = String::from_utf8_lossy(&body[..nul]);
+            let msg = pqformat::pq_getmsgstring(mcx, buf)?;
+            let msg = String::from_utf8_lossy(msg.as_bytes());
             ereport(ERROR)
                 .errcode(types_error::ERRCODE_QUERY_CANCELED)
                 .errmsg(format!("COPY from stdin failed: {msg}"))
@@ -1460,8 +1470,8 @@ fn AlterReplicationSlot(cmd: AlterReplicationSlotCmd) -> PgResult<()> {
 }
 
 // SendTimeLineHistory (walsender.c:577). One-row, two-column result set: the
-// timeline-history file name and its raw contents. RowDescription + DataRow go
-// through DestRemoteSimple (byte-identical to C's manual framing for text).
+// timeline-history file name and its raw contents. The RowDescription goes
+// through DestRemoteSimple; the DataRow is framed by hand as in C.
 fn SendTimeLineHistory(mcx: mcx::Mcx<'_>, cmd: TimeLineHistoryCmd) -> PgResult<()> {
     let mut dest = tcop_dest::CreateDestReceiver(types_dest::CommandDest::RemoteSimple);
 
@@ -1514,8 +1524,7 @@ fn SendTimeLineHistory(mcx: mcx::Mcx<'_>, cmd: TimeLineHistoryCmd) -> PgResult<(
     let mut rbuf = [0u8; 8192];
     let mut bytesleft = histfilelen as i64;
     while bytesleft > 0 {
-        // SAFETY: rbuf is a live writable buffer.
-        let nread = unsafe { libc::read(fd, rbuf.as_mut_ptr().cast(), rbuf.len()) };
+        let nread = timeline_history_read(fd, &mut rbuf);
         if nread < 0 {
             let en = current_errno();
             fd::CloseTransientFile(fd);
@@ -1545,17 +1554,36 @@ fn SendTimeLineHistory(mcx: mcx::Mcx<'_>, cmd: TimeLineHistoryCmd) -> PgResult<(
             .finish(loc(658, "SendTimeLineHistory"));
     }
 
-    let fname_v = varlena::cstring_to_text(mcx, histfname.as_bytes())?;
-    let content_v = varlena::cstring_to_text(mcx, &content)?;
-    let values = [
-        Datum::from_usize(fname_v.as_bytes().as_ptr() as usize),
-        Datum::from_usize(content_v.as_bytes().as_ptr() as usize),
-    ];
-    let nulls = [false, false];
-    exectuples_output::do_tup_output(&mut tstate, mcx, &values, &nulls)?;
+    // walsender.c:606-660 frames the DataRow by hand with pq_sendbytes: the
+    // file bytes go out verbatim, bypassing the client-encoding conversion
+    // that pq_sendcountedtext (do_tup_output) would apply.
+    let mut buf = pqformat::pq_beginmessage(mcx, b'D')?;
+    pqformat::pq_sendint16(&mut buf, 2)?;
+    pqformat::pq_sendint32(&mut buf, histfname.len() as u32)?;
+    pqformat::pq_sendbytes(&mut buf, histfname.as_bytes())?;
+    pqformat::pq_sendint32(&mut buf, content.len() as u32)?;
+    pqformat::pq_sendbytes(&mut buf, &content)?;
+    pqformat::pq_endmessage(buf)?;
     exectuples_output::end_tup_output(tstate)?;
-    let _ = (fname_v, content_v);
     Ok(())
+}
+
+// wait_event_names.txt IO section index 67 (TimelineHistoryRead is 59 in the
+// timeline crate; WALSENDER_TIMELINE_HISTORY_READ sits eight rows below it).
+pub(crate) const WAIT_EVENT_WALSENDER_TIMELINE_HISTORY_READ: u32 = 0x0A00_0000 | 67;
+
+// walsender.c:636-638: one read(2) of the history file, bracketed by the
+// WalsenderTimelineHistoryRead wait event.
+fn timeline_history_read(fd: i32, rbuf: &mut [u8]) -> isize {
+    if waitevent_seams::pgstat_report_wait_start::is_installed() {
+        waitevent_seams::pgstat_report_wait_start::call(WAIT_EVENT_WALSENDER_TIMELINE_HISTORY_READ);
+    }
+    // SAFETY: rbuf is a live writable buffer.
+    let nread = unsafe { libc::read(fd, rbuf.as_mut_ptr().cast(), rbuf.len()) };
+    if waitevent_seams::pgstat_report_wait_end::is_installed() {
+        waitevent_seams::pgstat_report_wait_end::call();
+    }
+    nread
 }
 
 // WaitForStandbyConfirmation's wait loop (slot.c:2843, hosted here because
@@ -1915,6 +1943,104 @@ mod tests {
 
     // CopyFail ('f') aborts UPLOAD_MANIFEST with C's query-canceled error and
     // leaves no manifest behind.
+    // defGetBoolean (define.c:127) takes only true/false/on/off for a string
+    // argument; bool.c's yes/no/t/f/y/n/'1'/'0' are 42601 "requires a
+    // Boolean value" (audit regression / regression).
+    #[test]
+    fn option_booleans_take_only_define_c_strings() {
+        let s = |v: &str| Some(ReplOptionArg::Str(v.to_string()));
+        for v in ["true", "TRUE", "on", "On"] {
+            assert_eq!(def_get_boolean("reserve_wal", &s(v), "t").unwrap(), true, "{v}");
+        }
+        for v in ["false", "off", "OFF"] {
+            assert_eq!(def_get_boolean("reserve_wal", &s(v), "t").unwrap(), false, "{v}");
+        }
+        assert!(def_get_boolean("reserve_wal", &None, "t").unwrap());
+        assert!(!def_get_boolean("reserve_wal", &Some(ReplOptionArg::Int(0)), "t").unwrap());
+        assert!(def_get_boolean("reserve_wal", &Some(ReplOptionArg::Int(1)), "t").unwrap());
+        for v in ["yes", "no", "t", "f", "y", "n", "1", "0", ""] {
+            let err = def_get_boolean("reserve_wal", &s(v), "t").unwrap_err();
+            assert_eq!(err.sqlstate(), ERRCODE_SYNTAX_ERROR, "{v}");
+            assert_eq!(err.message(), "reserve_wal requires a Boolean value", "{v}");
+        }
+        let err = def_get_boolean("two_phase", &Some(ReplOptionArg::Int(2)), "t").unwrap_err();
+        assert_eq!(err.message(), "two_phase requires a Boolean value");
+    }
+
+    // pqcomm.h PQ_LARGE_MESSAGE_LIMIT is MaxAllocSize - 1: a CopyData of
+    // exactly 0x3fffffff bytes is "invalid message length" in C, not a body
+    // read the walsender blocks on (audit regression).
+    #[test]
+    fn streaming_reply_message_limit_is_max_alloc_size_minus_one() {
+        assert_eq!(crate::replies::PQ_LARGE_MESSAGE_LIMIT, 0x3fff_ffff - 1);
+        assert_eq!(crate::replies::PQ_LARGE_MESSAGE_LIMIT, PQ_LARGE_MESSAGE_LIMIT);
+    }
+
+    // walsender.c:794 reads the CopyFail text with pq_getmsgstring: a body
+    // without a NUL terminator is 08P01 "invalid string in message", not a
+    // 57014 cancel (audit regression).
+    #[test]
+    fn upload_manifest_copyfail_without_nul_is_a_protocol_violation() {
+        let _g = slot_lock();
+        upload_setup();
+
+        assert_eq!(MY_WAL_SND.get(), -1);
+        InitWalSenderSlot();
+
+        feed_msg(b'd', &C_FIXTURE[..128]);
+        feed_msg(b'f', b"bad");
+
+        let err = exec_replication_command("UPLOAD_MANIFEST").err().unwrap();
+        assert_eq!(err.sqlstate(), types_error::ERRCODE_PROTOCOL_VIOLATION);
+        assert_eq!(err.message(), "invalid string in message");
+        assert!(!uploaded_manifest_exists());
+
+        WalSndKill(0, 0);
+    }
+
+    // walsender.c:636-638 brackets each history-file read(2) with the
+    // WalsenderTimelineHistoryRead IO wait event (audit
+    // regression).
+    #[test]
+    fn timeline_history_read_reports_the_walsender_wait_event() {
+        static STARTS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+        static ENDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        if !waitevent_seams::pgstat_report_wait_start::is_installed() {
+            waitevent_seams::pgstat_report_wait_start::set(|info| {
+                STARTS.lock().unwrap().push(info);
+            });
+            waitevent_seams::pgstat_report_wait_end::set(|| {
+                ENDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            });
+        }
+        let dir = std::env::temp_dir().join(format!("wsthr-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("00000002.history");
+        let body = b"1\t0/1000000\tno recovery target specified\n";
+        std::fs::write(&path, body).unwrap();
+        let cpath = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        // SAFETY: a valid NUL-terminated path.
+        let fd = unsafe { libc::open(cpath.as_ptr(), libc::O_RDONLY) };
+        assert!(fd >= 0);
+        let mut rbuf = [0u8; 64];
+        STARTS.lock().unwrap().clear();
+        ENDS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let n = timeline_history_read(fd, &mut rbuf);
+        // SAFETY: fd is the descriptor opened above.
+        unsafe { libc::close(fd) };
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(n as usize, body.len());
+        assert_eq!(&rbuf[..2], b"1\t");
+        assert_eq!(WAIT_EVENT_WALSENDER_TIMELINE_HISTORY_READ, 0x0A00_0000 | 67);
+        if waitevent_seams::pgstat_report_wait_start::is_installed() {
+            let starts = STARTS.lock().unwrap();
+            if !starts.is_empty() || ENDS.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                assert_eq!(*starts, vec![WAIT_EVENT_WALSENDER_TIMELINE_HISTORY_READ]);
+                assert_eq!(ENDS.load(std::sync::atomic::Ordering::SeqCst), 1);
+            }
+        }
+    }
+
     #[test]
     fn upload_manifest_copyfail_cancels_c_exact() {
         let _g = slot_lock();

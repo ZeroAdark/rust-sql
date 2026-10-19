@@ -4,7 +4,7 @@
 -- marked "deliberate divergence" (C 18.6 is wrong there; see UPSTREAM-BUGS).
 \set VERBOSITY verbose
 
--- fp-contrib-lo-b1#1: INSTEAD OF UPDATE hands lo_manage a NULL
+-- regression: INSTEAD OF UPDATE hands lo_manage a NULL
 -- tg_updatedcols (ExecIRUpdateTriggers never sets it), so the old large
 -- object survives; the view's row is unchanged and still references it.
 CREATE EXTENSION lo;
@@ -23,7 +23,7 @@ CREATE TRIGGER b143_lo_manage BEFORE UPDATE ON b143_lo
 UPDATE b143_lo SET img = 901002 WHERE id = 1;
 SELECT oid FROM pg_largeobject_metadata WHERE oid IN (901001, 901002) ORDER BY 1;
 
--- fp-commands-trigger-p3#1: the root's cross-partition UPDATE event runs
+-- regression: the root's cross-partition UPDATE event runs
 -- TriggerEnabled with ExecGetAllUpdatedCols(root): an UPDATE OF <col>
 -- trigger's WHEN clause is evaluated (its side effect shows) even though
 -- the event itself is then dropped for the partitioned root.
@@ -42,7 +42,7 @@ UPDATE b143_cp SET b = 11 WHERE b = 10;
 UPDATE b143_cp SET a = 1, b = 12 WHERE b = 11;
 SELECT * FROM b143_cp;
 
--- fp-executor-nodeModifyTable-p2#2: a generic plan prunes result relations
+-- regression: a generic plan prunes result relations
 -- at executor start; a row then routed into a pruned partition whose
 -- columns are reordered must still RETURN its own values and check its
 -- own WITH CHECK OPTION columns.
@@ -77,7 +77,7 @@ EXECUTE b143_upv2(2, 3);
 RESET plan_cache_mode;
 SELECT tableoid::regclass, * FROM b143_pr ORDER BY a;
 
--- fp-executor-nodeModifyTable-p2#1: the NEW TABLE transition row of a
+-- regression: the NEW TABLE transition row of a
 -- routed INSERT carries the stored generated value the leaf computed.
 -- DELIBERATE DIVERGENCE: C 18.6 captures the pre-routing root slot
 -- (ExecPrepareTupleRouting, nodeModifyTable.c:4148) when the leaf has no
@@ -99,7 +99,7 @@ CREATE TRIGGER b143_tp_ins AFTER INSERT ON b143_tp REFERENCING NEW TABLE AS newt
 INSERT INTO b143_tp VALUES (1), (2);
 SELECT * FROM b143_tp ORDER BY a;
 
--- fp-executor-nodeModifyTable-p2#3 / fp-executor-execUtils#1: RETURNING
+-- regression / regression: RETURNING
 -- projections and the root cross-partition event over many rows (the
 -- per-row memory is measured out of band; this pins the results).
 CREATE TABLE b143_rt AS SELECT i, repeat('x', 20) AS t FROM generate_series(1, 2000) i;

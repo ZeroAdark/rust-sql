@@ -7,7 +7,7 @@ use mcx::{vec_from_elem_in, PgVec};
 use types_core::{InvalidOid, Oid};
 use types_error::{PgError, PgResult, ERRCODE_DATATYPE_MISMATCH};
 use types_fmgr::{function_call1_coll_in, input_function_call, FmgrInfo, FunctionCallInfoBaseData as Fcinfo};
-use types_tuple::{HeapTupleData, HeapTupleHeaderData, ItemPointerData};
+use types_tuple::{HeapTupleData, HeapTupleHeaderData, ItemPointerData, TupleDescData};
 
 use crate::repr::{build_hstore, find_key, unique_pairs, Pair};
 use crate::{check_key_len, check_val_len, ret_null};
@@ -26,11 +26,19 @@ struct RecordIOData {
     columns: Vec<Option<ColumnIOData>>,
 }
 
-fn type_is_rowtype(typid: Oid) -> PgResult<bool> {
-    if typid == RECORDOID {
-        return Ok(true);
-    }
-    Ok(lsyscache::typ::get_typtype(typid)? == b'c' as i8)
+// lookup_rowtype_tupdesc_domain (typcache.c): a domain over composite
+// resolves through its base type.
+fn rowtype_tupdesc<'m>(mcx: mcx::Mcx<'m>, type_id: Oid, typmod: i32) -> PgResult<TupleDescData<'m>> {
+    let (type_id, typmod) = if type_id != RECORDOID
+        && lsyscache::typ::get_typtype(type_id)? == lsyscache::typ::TYPTYPE_DOMAIN
+    {
+        let mut base_typmod = -1;
+        let base = lsyscache::getBaseTypeAndTypmod(type_id, &mut base_typmod)?;
+        (base, base_typmod)
+    } else {
+        (type_id, typmod)
+    };
+    typcache::lookup_rowtype_tupdesc_copy(mcx, type_id, typmod)
 }
 
 #[track_caller]
@@ -103,7 +111,7 @@ pub fn fc_hstore_from_record(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo)
         (ra.tup_type, ra.tup_typmod, Some(ra))
     };
 
-    let tupdesc = typcache::lookup_rowtype_tupdesc_copy(mcx, tup_type, tup_typmod)?;
+    let tupdesc = rowtype_tupdesc(mcx, tup_type, tup_typmod)?;
     let ncolumns = tupdesc.natts as usize;
     refresh_extra(flinfo, tup_type, tup_typmod, ncolumns);
 
@@ -158,7 +166,7 @@ pub fn fc_hstore_populate_record(
     let flinfo = flinfo.expect("hstore_populate_record: resolved FmgrInfo required");
     let mcx = fcinfo.result_mcx();
     let argtype = funcapi::get_fn_expr_argtype(Some(flinfo), 0);
-    if !type_is_rowtype(argtype)? {
+    if !lsyscache::type_is_rowtype(argtype)? {
         return Err(not_rowtype());
     }
     let [a, b] = fcinfo.args_n::<2>();
@@ -186,7 +194,7 @@ pub fn fc_hstore_populate_record(
         }
     }
 
-    let tupdesc = typcache::lookup_rowtype_tupdesc_copy(mcx, tup_type, tup_typmod)?;
+    let tupdesc = rowtype_tupdesc(mcx, tup_type, tup_typmod)?;
     let ncolumns = tupdesc.natts as usize;
     refresh_extra(flinfo, tup_type, tup_typmod, ncolumns);
 

@@ -17,8 +17,8 @@ use types_core::{
     CommandId, InvalidOid, Oid, ProcNumber, SubTransactionId, TimestampTz, XLogRecPtr,
 };
 use types_error::{
-    ErrorLocation, PgError, PgResult, ERRCODE_ADMIN_SHUTDOWN, ERRCODE_FEATURE_NOT_SUPPORTED,
-    ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE, ERROR, FATAL, WARNING,
+    ErrorLevel, ErrorLocation, PgError, PgResult, DEBUG1, ERRCODE_ADMIN_SHUTDOWN,
+    ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE, ERROR, FATAL, WARNING,
 };
 use types_storage::RelFileLocator;
 
@@ -49,6 +49,7 @@ fn loc(line: i32, func: &'static str) -> ErrorLocation {
 // C's error rings are PARALLEL_ERROR_QUEUE_SIZE (16384) bytes; the typed
 // channel bounds by message count instead.
 const PARALLEL_ERROR_QUEUE_MSGS: usize = 64;
+const WAIT_EVENT_MESSAGE_QUEUE_PUT_MESSAGE: u32 = 0x0800_0000 + 34;
 
 pub type ParallelWorkerEntry = fn(&ParallelShared) -> PgResult<()>;
 
@@ -264,7 +265,7 @@ thread_local! {
     static NEXT_PCXT_ID: Cell<u64> = const { Cell::new(1) };
     static MY_WORKER_SHARED: RefCell<Option<Arc<ParallelShared>>> =
         const { RefCell::new(None) };
-    // GL-SYNCWEDGE-1: the leader park loop's stall clock, kept across quanta
+    // regression: the leader park loop's stall clock, kept across quanta
     // (see wait_on_my_latch). NON-SESSION TLS, and declared inside this block
     // rather than as its own so the TLS census gains no new row — the
     // eoxact_parts.rs/lanetable precedent recorded in session/src/tests.rs.
@@ -549,7 +550,7 @@ pub fn shared_for(id: ParallelContextId) -> Arc<ParallelShared> {
     with_pcxt(id, |p| p.shared.clone().expect("InitializeParallelDSM not run"))
 }
 
-/// GL-STMTTASK-2 change 2 (pointer-passing, not DSM ritual): build the
+/// regression change 2 (pointer-passing, not DSM ritual): build the
 /// query-task binder target for ONE dop-1 statement task WITHOUT the
 /// parallel-context ceremony — no pcxt-list entry, no error mailboxes, no
 /// worker bookkeeping, no SHARED_REGISTRY key, no DestroyParallelContext
@@ -681,7 +682,7 @@ pub fn set_private_shared(shared: &Arc<ParallelShared>, private: Arc<dyn Any + S
     *shared.private.lock().unwrap_or_else(|e| e.into_inner()) = Some(private);
 }
 
-/// GL-SIMPLEWEDGE-1: sever the engagement's back-edges at teardown. The
+/// regression: sever the engagement's back-edges at teardown. The
 /// arm payload (`set_private*`) holds the shared by Arc and the shared's
 /// `private` holds the payload back — a strong cycle that outlives the
 /// engagement (C has no analog: the DSM segment dies at
@@ -783,7 +784,7 @@ pub fn wait_parallel_finish_quantum() -> PgResult<()> {
 /// source (an absent or fully-mismatched worker set may never touch the
 /// board), so the leader's park must not outlive the claim deadline its
 /// loop enforces — an unbounded quantum turned the deadline into "one full
-/// MQ-recheck period" (GL-ZSTALL-1). Same Err propagation contract as the
+/// MQ-recheck period" (regression). Same Err propagation contract as the
 /// unbounded quantum (a raised cancel disposition surfaces from the latch
 /// sleep and must abort the ceremony).
 pub fn wait_parallel_finish_quantum_bounded(max_ms: i64) -> PgResult<()> {
@@ -1000,12 +1001,12 @@ const WAIT_EVENT_BGWORKER_STARTUP: u32 = PG_WAIT_IPC + 6;
 // PARALLEL_FINISH's index in wait_event_names.txt's IPC section. It is 40:
 // index 32 is LOGICAL_SYNC_STATE_CHANGE, and every leader parked here used to
 // publish itself in pg_stat_activity as a logical-replication sync wait
-// (GL-SYNCWEDGE-1). scripts/lint-waitevent-tags.sh pins the whole family.
+// (regression). scripts/lint-waitevent-tags.sh pins the whole family.
 pub const WAIT_EVENT_PARALLEL_FINISH: u32 = PG_WAIT_IPC + 40;
 
 /// One LOG line describing why this leader is still parked: the same evidence
 /// the Gather leader's report carries, for the parallel-finish/attach loops.
-/// The 12m53s production wedge (GL-SYNCWEDGE-1) produced none of this.
+/// The 12m53s production wedge (regression) produced none of this.
 fn report_park_stall(wait_event: u32, waited_ms: i64) {
     let mut msg = format!(
         "parallel leader park stall self-report: wait_event={} waited_ms={waited_ms} \
@@ -1062,7 +1063,7 @@ fn wait_on_my_latch(wait_event: u32) -> PgResult<()> {
     // raise aborts the ceremony, and a leftover set latch only costs one
     // spurious wake on the next wait.
     //
-    // GL-SYNCWEDGE-1: the clock is kept ACROSS quanta and the report closure
+    // regression: the clock is kept ACROSS quanta and the report closure
     // actually says something. Building a fresh StallDetector here re-armed
     // its 60 s deadline once per 1000 ms recheck, so the deadline could never
     // mature; the closure was `|_| {}`, so nothing would have been printed if
@@ -1214,7 +1215,7 @@ pub fn DestroyParallelContext(id: ParallelContextId) -> PgResult<()> {
     g::HoldInterrupts();
     let result = wait_for_workers_to_exit(handles);
     g::ResumeInterrupts();
-    // GL-SIMPLEWEDGE-1: the arm payload stored by set_private holds this
+    // regression: the arm payload stored by set_private holds this
     // shared by Arc while `private` holds the payload back — sever the
     // cycle now that every worker has exited (C-exact lifetime: the DSM
     // segment dies at DestroyParallelContext).
@@ -1312,10 +1313,7 @@ fn process_parallel_messages_guts() -> PgResult<()> {
                                 append_parallel_worker_context(&mut e);
                                 return Err(e);
                             }
-                            WorkerMessage::Notice(mut e) => {
-                                append_parallel_worker_context(&mut e);
-                                elog::emit_error_report_for(&e);
-                            }
+                            WorkerMessage::Notice(e) => emit_relayed_worker_notice(e),
                             WorkerMessage::Progress { index, incr } => {
                                 backend_progress::pgstat_progress_incr_param(
                                     index as usize,
@@ -1343,6 +1341,18 @@ fn process_parallel_messages_guts() -> PgResult<()> {
 }
 
 const DEBUG_PARALLEL_REGRESS: i32 = 2;
+
+// pqmq.c:242-250: the wire form carries only "DEBUG", so every relayed
+// DEBUG report reaches the leader's thresholds as DEBUG1.
+fn relayed_notice_level(level: ErrorLevel) -> ErrorLevel {
+    if level <= DEBUG1 { DEBUG1 } else { level }
+}
+
+pub fn emit_relayed_worker_notice(mut e: Box<PgError>) {
+    e.level = relayed_notice_level(e.level);
+    append_parallel_worker_context(&mut e);
+    elog::emit_error_report_for(&e);
+}
 
 fn append_parallel_worker_context(e: &mut PgError) {
     if guc_tables::vars::debug_parallel_query.read() != DEBUG_PARALLEL_REGRESS {
@@ -1380,7 +1390,7 @@ pub fn parallel_worker_report_progress(index: i32, incr: i64) {
         let Some(sender) = slot.as_ref() else {
             return None;
         };
-        let _ = sender.send(WorkerMessage::Progress { index, incr });
+        send_to_leader(sender, WorkerMessage::Progress { index, incr });
         MY_WORKER_SHARED.with(|s| {
             s.borrow().as_ref().map(|sh| {
                 (sh.parallel_leader_pid, sh.parallel_leader_proc_number)
@@ -1397,6 +1407,19 @@ pub fn parallel_worker_report_progress(index: i32, incr: i64) {
     );
 }
 
+// pqmq.c:184-187: a full leader queue is waited out on MyLatch with
+// CHECK_FOR_INTERRUPTS after each wake. These sites cannot return an error,
+// so the wait probes what ProcessInterrupts would act on, drops the message
+// (C's longjmp loses it too) and leaves the bits for the next CFI to raise.
+fn send_to_leader(sender: &MailboxSender<WorkerMessage>, msg: WorkerMessage) {
+    let _ = latch::mailbox_send_on_my_latch(sender, msg, WAIT_EVENT_MESSAGE_QUEUE_PUT_MESSAGE, || {
+        if g::InterruptPending() && g::InterruptHoldoffCount() == 0 && g::CritSectionCount() == 0 {
+            return Err(Box::new(PgError::error("interrupt pending during parallel message send")));
+        }
+        Ok(())
+    });
+}
+
 fn take_my_error_sender(shared: &ParallelShared, worker_number: i32) -> MailboxSender<WorkerMessage> {
     let mut slot = shared.error_senders[worker_number as usize]
         .lock()
@@ -1410,23 +1433,37 @@ fn parallel_worker_main_thunk(main_arg: u64) -> PgResult<()> {
 
 // parallel.c:115/121: ParallelWorkerNumber and InitializingParallelWorker
 // are process globals that die with the worker process. A pgrust worker
-// thread outlives its task (wretain / standing pools), so ParallelWorkerMain
-// holds one of these and both are restored on EVERY exit of it — return,
-// Err, and the proc_exit / FATAL unwinds — or the next task on this thread
-// would still answer IsParallelWorker() / InitializingParallelWorker().
+// thread outlives its task (wretain / standing pools), so both are restored
+// when the task ends: on a clean return by the guard, and on an Err or exit
+// unwind by an on_proc_exit callback, after the exit callbacks have aborted
+// the transaction under the worker's identity (ReleasePredicateLocks must
+// take the worker arm, or it dooms the leader's SERIALIZABLEXACT).
 // (Module-level, not nested in the fn: scripts/check-unwind-policy.sh keys
 // its catch_unwind allowlist on the innermost enclosing `fn`.)
-struct WorkerIdentityReset;
+struct WorkerIdentityReset {
+    armed: bool,
+}
 impl Drop for WorkerIdentityReset {
     fn drop(&mut self) {
-        PARALLEL_WORKER_NUMBER.with(|c| c.set(-1));
-        init_small::globals::SetParallelLeaderProcNumber(types_core::INVALID_PROC_NUMBER);
-        INITIALIZING_PARALLEL_WORKER.with(|c| c.set(false));
+        if self.armed {
+            reset_worker_identity();
+        }
     }
 }
 
+fn reset_worker_identity() {
+    PARALLEL_WORKER_NUMBER.with(|c| c.set(-1));
+    init_small::globals::SetParallelLeaderProcNumber(types_core::INVALID_PROC_NUMBER);
+    INITIALIZING_PARALLEL_WORKER.with(|c| c.set(false));
+}
+
+fn reset_worker_identity_at_exit(_code: i32, _arg: usize) {
+    reset_worker_identity();
+}
+
 pub fn ParallelWorkerMain(main_arg: u64) -> PgResult<()> {
-    let _identity_reset = WorkerIdentityReset;
+    let mut identity_reset = WorkerIdentityReset { armed: true };
+    ipc::on_proc_exit(reset_worker_identity_at_exit, 0);
     INITIALIZING_PARALLEL_WORKER.with(|c| c.set(true));
 
     let entry = bgworker::MyBgworkerEntry().expect("ParallelWorkerMain without bgworker entry");
@@ -1479,7 +1516,7 @@ pub fn ParallelWorkerMain(main_arg: u64) -> PgResult<()> {
         } else {
             WorkerMessage::Notice(Box::new(e.clone()))
         };
-        let _ = notice_sender.send(msg);
+        send_to_leader(&notice_sender, msg);
         procsignal::SendProcSignal(
             leader_pid,
             types_storage::storage::ProcSignalReason::PROCSIG_PARALLEL_MESSAGE,
@@ -1516,6 +1553,7 @@ pub fn ParallelWorkerMain(main_arg: u64) -> PgResult<()> {
                 shared.parallel_leader_proc_number,
             );
             MY_WORKER_SHARED.with(|s| *s.borrow_mut() = None);
+            identity_reset.armed = false;
             std::panic::resume_unwind(payload);
         }
         Err(payload) => match types_error::pg_error_from_panic(payload) {
@@ -1539,6 +1577,7 @@ pub fn ParallelWorkerMain(main_arg: u64) -> PgResult<()> {
         }
         Err(e) => {
             let _ = sender.send(WorkerMessage::Error(Box::new((*e).clone())));
+            identity_reset.armed = false;
             Err(e)
         }
     };

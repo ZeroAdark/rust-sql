@@ -20,7 +20,7 @@
 //!     NOT a correctness crutch): the park returns `ParkResult::Recheck` and
 //!     the caller re-tests its predicate, so even an injected lost wake
 //!     costs one cadence period. Timed parks sleep min(timeout, cadence) per
-//!     lap (GL-RECWAKE-1: a minutes-class caller timeout — the checkpointer
+//!     lap (regression: a minutes-class caller timeout — the checkpointer
 //!     main lap — is no lost-wake backstop; recovery boot and shutdown both
 //!     wedged on it). `sleep` alone is exempt: time is its own predicate.
 //!   * fd-park (`begin_fd_park` / `end_fd_park`) — for waits that must block
@@ -60,6 +60,7 @@ pub mod clock;
 pub mod io;
 
 use sync::MutexGuard;
+use sync::atomic::Ordering::SeqCst;
 #[cfg(not(loom))]
 use sync::atomic::{AtomicU64, Ordering};
 #[cfg(not(loom))]
@@ -154,6 +155,12 @@ pub struct SlotInner {
 pub struct Slot {
     inner: sync::Mutex<SlotInner>,
     cv: sync::Condvar,
+    // Lock-free mirrors for the async-signal wake route
+    // (`unpark_token_from_signal`): `token` and `wake_wfd` as last written
+    // under the mutex, plus the flag a lock-free wake leaves for the owner.
+    token_mirror: sync::atomic::AtomicU32,
+    wake_wfd_mirror: sync::atomic::AtomicI32,
+    signal_wake: sync::atomic::AtomicBool,
 }
 
 impl Slot {
@@ -167,6 +174,9 @@ impl Slot {
                 wake_wfd: -1,
             }),
             cv: sync::Condvar::new(),
+            token_mirror: sync::atomic::AtomicU32::new(0),
+            wake_wfd_mirror: sync::atomic::AtomicI32::new(-1),
+            signal_wake: sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -181,6 +191,9 @@ impl Slot {
                 wake_wfd: -1,
             }),
             cv: sync::Condvar::new(),
+            token_mirror: sync::atomic::AtomicU32::new(0),
+            wake_wfd_mirror: sync::atomic::AtomicI32::new(-1),
+            signal_wake: sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -221,6 +234,11 @@ impl Slot {
         debug_assert!(g.mode != Mode::Free, "waiter slot retired twice");
         g.token = g.token.wrapping_add(1);
         g.mode = Mode::Free;
+        self.token_mirror.store(g.token, SeqCst);
+        // Unpublish the write end BEFORE the guard drops and the owner closes
+        // it: a signal-route write racing the close targets -1 (a no-op).
+        self.wake_wfd_mirror.store(-1, SeqCst);
+        self.signal_wake.store(false, SeqCst);
         (
             std::mem::replace(&mut g.wake_rfd, -1),
             std::mem::replace(&mut g.wake_wfd, -1),
@@ -238,6 +256,8 @@ impl Slot {
         );
         g.token = g.token.wrapping_add(1);
         g.mode = Mode::Idle;
+        self.token_mirror.store(g.token, SeqCst);
+        self.signal_wake.store(false, SeqCst);
         g.token
     }
 
@@ -245,7 +265,42 @@ impl Slot {
     /// allocation-free; the slot mutex is uncontended and never held across
     /// blocking.
     pub fn unpark_token(&self, token: u32) -> Unparked {
-        let mut g = self.lock();
+        let g = self.lock();
+        self.unpark_locked(g, token)
+    }
+
+    /// `unpark_token` for ASYNC-SIGNAL context (the postmaster's sigaction
+    /// handlers: SIGHUP/SIGINT/SIGQUIT/SIGTERM/SIGUSR1 -> SetLatch). C's
+    /// SetLatch is handler-safe by construction (latch.c:290: atomics, then
+    /// `WakeupMyProc` = one self-pipe byte, waiteventset.c:2020/1904); the
+    /// blocking `unpark_token` is not — a signal landing while THIS thread
+    /// holds the slot mutex (`begin_fd_park`, `end_fd_park`, `issue_token`,
+    /// `ensure_wake_pipe`) would re-take it and self-deadlock. So: never
+    /// block. `try_lock` succeeding runs the ordinary transition; a held
+    /// mutex falls back to C's route exactly — leave the `signal_wake` flag
+    /// (consumed by `park_core`/`begin_fd_park`), write the wake byte through
+    /// the fd mirror (durable across a kernel block the owner is entering),
+    /// and notify the condvar (lock-free in every pgsync world). A condvar
+    /// park entered after the notify is bounded by the recheck cadence, the
+    /// same backstop every other lost wake has; the postmaster's ServerLoop
+    /// is an fd-park, where the byte makes the wake exact.
+    pub fn unpark_token_from_signal(&self, token: u32) -> Unparked {
+        if self.token_mirror.load(SeqCst) != token {
+            return Unparked::Stale;
+        }
+        if let Ok(g) = self.inner.try_lock() {
+            return self.unpark_locked(g, token);
+        }
+        self.signal_wake.store(true, SeqCst);
+        let wfd = self.wake_wfd_mirror.load(SeqCst);
+        if wfd >= 0 {
+            send_wake_byte(wfd);
+        }
+        self.cv.notify_all();
+        Unparked::Delivered
+    }
+
+    fn unpark_locked(&self, mut g: MutexGuard<'_, SlotInner>, token: u32) -> Unparked {
         if g.token != token || g.mode == Mode::Free {
             return Unparked::Stale;
         }
@@ -290,7 +345,7 @@ impl Slot {
     /// TimedOut); `cadence_ms` = the lost-wake recheck backstop (returns
     /// Recheck). Both None = park until a real unpark.
     ///
-    /// The cadence bounds TIMED parks too (GL-RECWAKE-1): a dropped
+    /// The cadence bounds TIMED parks too (regression): a dropped
     /// cross-thread unpark leaves the caller's predicate flagged but this
     /// slot un-notified, and a caller deadline of minutes-class (checkpointer
     /// main lap = checkpoint_timeout) is no backstop inside a 90s boot window
@@ -309,7 +364,7 @@ impl Slot {
             matches!(g.mode, Mode::Idle | Mode::Notified),
             "park while already parked"
         );
-        if g.mode == Mode::Notified {
+        if g.mode == Mode::Notified || self.signal_wake.swap(false, SeqCst) {
             g.mode = Mode::Idle;
             return ParkResult::Notified;
         }
@@ -335,13 +390,18 @@ impl Slot {
             }
             let (g2, _timed_out) = clk.wait(self, g, remaining);
             g = g2;
-            if g.mode == Mode::Notified {
+            if g.mode == Mode::Notified || self.signal_wake.swap(false, SeqCst) {
                 g.mode = Mode::Idle;
                 return ParkResult::Notified;
             }
             // Spurious condvar wake or timeout: re-evaluate the deadline.
         }
     }
+}
+
+// Consume a signal-route wake under the slot lock (the guard proves it).
+fn slot_signal_wake(_locked: &SlotInner, s: &Slot) -> bool {
+    s.signal_wake.swap(false, SeqCst)
 }
 
 fn send_wake_byte(write_fd: i32) {
@@ -545,6 +605,27 @@ mod global {
         }
     }
 
+    /// `unpark_word` for async-signal context: never blocks on the slot
+    /// mutex (`Slot::unpark_token_from_signal`). No fault injection — the
+    /// signal route is C's self-pipe byte, which the injector never modeled.
+    pub fn unpark_word_from_signal(word: u64) -> Unparked {
+        let Some(h) = WakerHandle::from_u64(word) else {
+            return Unparked::Stale;
+        };
+        let (idx, token) = h.unpack();
+        if idx >= WAITER_CAP {
+            return Unparked::Stale;
+        }
+        slot(idx).unpark_token_from_signal(token)
+    }
+
+    /// Test hook: hold the current thread's slot mutex — the window the
+    /// signal-route tests deliver into.
+    #[cfg(test)]
+    pub(super) fn lock_current_slot_for_test() -> MutexGuard<'static, SlotInner> {
+        slot(current_slot()).lock()
+    }
+
     // -- park -----------------------------------------------------------------
 
     /// Park until unparked. With the recheck cadence enabled the sleep is
@@ -557,7 +638,7 @@ mod global {
     }
 
     /// Park until unparked or `timeout` elapses. The sleep is additionally
-    /// bounded by the recheck cadence (GL-RECWAKE-1): when the cadence is
+    /// bounded by the recheck cadence (regression): when the cadence is
     /// shorter than the remaining timeout the park returns `Recheck` and the
     /// caller re-tests its predicate — a lost wake costs one cadence period,
     /// never the full caller timeout (the recovery-boot wedge shape: a
@@ -636,6 +717,7 @@ mod global {
         }
         g.wake_rfd = pipefd[0];
         g.wake_wfd = pipefd[1];
+        s.wake_wfd_mirror.store(pipefd[1], SeqCst);
         Ok(pipefd[0])
     }
 
@@ -652,7 +734,8 @@ mod global {
     /// poll its event set with a zero timeout instead of blocking.
     pub fn begin_fd_park() -> bool {
         let idx = current_slot();
-        let mut g = slot(idx).lock();
+        let s = slot(idx);
+        let mut g = s.lock();
         // wasm32: no wake pipe can exist (no pipe(2)); "parked" is pure mode
         // bookkeeping — the wasm wait backend blocks on time alone.
         #[cfg(not(target_family = "wasm"))]
@@ -662,6 +745,9 @@ mod global {
                 g.mode = Mode::Idle;
                 false
             }
+            // A signal-route wake that found the mutex held is a latched
+            // notification too (see `unpark_token_from_signal`).
+            Mode::Idle if slot_signal_wake(&*g, s) => false,
             Mode::Idle => {
                 g.mode = Mode::ParkedFd;
                 true
@@ -675,11 +761,15 @@ mod global {
     /// predicates (latch is_set etc.) as it always did.
     pub fn end_fd_park() {
         let idx = current_slot();
-        let mut g = slot(idx).lock();
+        let s = slot(idx);
+        let mut g = s.lock();
         match g.mode {
             Mode::ParkedFd | Mode::Notified => g.mode = Mode::Idle,
             m => panic!("end_fd_park in mode {m:?}"),
         }
+        // A byte the signal route wrote already ended this kernel block; the
+        // caller's loop re-tests its predicates next, so the flag is spent.
+        s.signal_wake.store(false, SeqCst);
     }
 
     /// Drain the wake pipe (all pending bytes). Call on wake-fd readability.
@@ -740,7 +830,7 @@ mod global {
 pub use global::{
     begin_fd_park, current_handle, describe_word, drain_wake_fd, end_fd_park, ensure_wake_pipe,
     now_ms, park, park_timeout, recheck_cadence_ms, reissue_current_token, sleep, unpark,
-    unpark_word, wake_read_fd,
+    unpark_word, unpark_word_from_signal, wake_read_fd,
 };
 
 // ===========================================================================
@@ -868,6 +958,18 @@ mod model_global {
         }
     }
 
+    /// Signal-route unpark over the model slab (same slot-core entry).
+    pub fn unpark_word_from_signal(word: u64) -> Unparked {
+        let Some(h) = WakerHandle::from_u64(word) else {
+            return Unparked::Stale;
+        };
+        let (idx, token) = h.unpack();
+        if idx >= MODEL_WAITER_CAP {
+            return Unparked::Stale;
+        }
+        SLOTS[idx].unpark_token_from_signal(token)
+    }
+
     /// Pooled-thread reuse boundary, real semantics over the model slab
     /// (outstanding handles go Stale).
     pub fn reissue_current_token() {
@@ -894,12 +996,16 @@ mod model_global {
     /// the state machine); there is no pipe to register.
     pub fn begin_fd_park() -> bool {
         let idx = current_slot();
-        let mut g = SLOTS[idx].lock();
+        let s = &SLOTS[idx];
+        let mut g = s.lock();
         match g.mode {
             Mode::Notified => {
                 g.mode = Mode::Idle;
                 false
             }
+            // A signal-route wake that found the mutex held is a latched
+            // notification too (see `unpark_token_from_signal`).
+            Mode::Idle if slot_signal_wake(&*g, s) => false,
             Mode::Idle => {
                 g.mode = Mode::ParkedFd;
                 true
@@ -910,11 +1016,15 @@ mod model_global {
 
     pub fn end_fd_park() {
         let idx = current_slot();
-        let mut g = SLOTS[idx].lock();
+        let s = &SLOTS[idx];
+        let mut g = s.lock();
         match g.mode {
             Mode::ParkedFd | Mode::Notified => g.mode = Mode::Idle,
             m => panic!("end_fd_park in mode {m:?}"),
         }
+        // A byte the signal route wrote already ended this kernel block; the
+        // caller's loop re-tests its predicates next, so the flag is spent.
+        s.signal_wake.store(false, SeqCst);
     }
 
     /// Nothing can be queued on a pipe that does not exist.
@@ -944,7 +1054,7 @@ mod model_global {
 pub use model_global::{
     begin_fd_park, current_handle, describe_word, drain_wake_fd, end_fd_park, ensure_wake_pipe,
     now_ms, park, park_timeout, recheck_cadence_ms, reissue_current_token, sleep, unpark,
-    unpark_word, wake_read_fd,
+    unpark_word, unpark_word_from_signal, wake_read_fd,
 };
 
 #[cfg(all(test, not(loom)))]

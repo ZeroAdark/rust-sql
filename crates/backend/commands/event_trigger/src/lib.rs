@@ -195,6 +195,9 @@ fn EventTriggerInvoke(fn_oid_list: &[Oid], event: &'static str, tag: CommandTag)
     stack_depth_core::check_stack_depth()?;
     let mut first = true;
     for &fnoid in fn_oid_list {
+        elog::ereport(types_error::DEBUG1)
+            .errmsg(format!("EventTriggerInvoke {fnoid}"))
+            .finish(types_error::ErrorLocation::new("event_trigger.c", 1103, "EventTriggerInvoke"))?;
         if first {
             first = false;
         } else {

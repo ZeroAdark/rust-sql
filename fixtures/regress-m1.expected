@@ -1,4 +1,4 @@
--- pgrust-fast M1/M2 differential-regress corpus.
+-- pgrust M1/M2 differential-regress corpus.
 -- Curated from PostgreSQL 18.3 src/test/regress idioms (select, int4, text,
 -- errors, guc, prepare, transactions, limit) down to the M1 surface:
 -- constants through the tcop/parse/analyze/plan/execute/printtup spine.

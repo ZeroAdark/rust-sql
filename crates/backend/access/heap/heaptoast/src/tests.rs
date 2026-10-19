@@ -439,6 +439,7 @@ fn new_btpage(flags: u16, level: u32) -> Box<TestPage> {
     put_u16(&mut p, 12, 24);
     put_u16(&mut p, 14, special as u16);
     put_u16(&mut p, 16, special as u16);
+    put_u16(&mut p, 18, BLCKSZ as u16 | 4); // pd_pagesize_version
     let opaque = BTPageOpaqueData {
         btpo_prev: P_NONE,
         btpo_next: P_NONE,

@@ -1,7 +1,7 @@
 use alloc::boxed::Box;
 
 use ::datum::Datum;
-use ::mcx::{vec_with_capacity_in, Mcx};
+use ::mcx::{check_alloc_size, vec_with_capacity_in, Mcx};
 use ::types_core::InvalidOid;
 use ::types_error::{PgError, PgResult, ERRCODE_INTERNAL_ERROR, ERRCODE_TOO_MANY_COLUMNS};
 use ::types_tuple::tupmacs::{att_addlength_datum, att_datum_alignby};
@@ -36,6 +36,9 @@ fn invalid_column_number(attnum: i32) -> Box<PgError> {
     )
 }
 
+// htup.h: MAXALIGN(sizeof(HeapTupleData)).
+const HEAPTUPLESIZE: usize = 24;
+
 pub fn heap_form_tuple<'mcx>(
     mcx: Mcx<'mcx>,
     tupleDescriptor: &TupleDescData<'_>,
@@ -57,6 +60,8 @@ pub fn heap_form_tuple<'mcx>(
     let data_len = heap_compute_data_size(tupleDescriptor, values, isnull);
     let len = hoff + data_len;
 
+    // C palloc0's HEAPTUPLESIZE + len in one chunk; MaxAllocSize applies to that.
+    check_alloc_size(HEAPTUPLESIZE + len)?;
     let image = alloc_image(mcx, len, true)?;
 
     // SAFETY: fresh zeroed MAXALIGN'd image of len >= SizeofHeapTupleHeader bytes.

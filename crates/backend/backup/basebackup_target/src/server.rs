@@ -13,12 +13,11 @@ use ::sink::{
 use ::types_core::primitive::Size;
 use ::types_core::{Oid, TimeLineID, XLogRecPtr};
 use ::types_error::{
-    PgResult, ERRCODE_DISK_FULL, ERRCODE_DUPLICATE_FILE, ERRCODE_INSUFFICIENT_PRIVILEGE,
-    ERRCODE_INVALID_NAME, ERROR,
+    ErrorLocation, PgResult, ERRCODE_DISK_FULL, ERRCODE_DUPLICATE_FILE,
+    ERRCODE_INSUFFICIENT_PRIVILEGE, ERRCODE_INVALID_NAME, ERROR,
 };
 use ::types_storage::File;
 
-use crate::loc;
 
 // pg_authid.dat: pg_write_server_files.
 const ROLE_PG_WRITE_SERVER_FILES: Oid = 4570;
@@ -37,6 +36,12 @@ struct ServerOps {
     file: Option<File>,
     /// Current file position.
     filepos: i64,
+}
+
+// This file ports basebackup_server.c, not the crate's basebackup_target.c:
+// name the C unit (and its report line) for the wire F/L fields.
+pub(crate) fn report_location(func: &'static str, line: i32) -> ErrorLocation {
+    ErrorLocation::new("basebackup_server.c", line, func)
 }
 
 /// bbsink_server_new: permission check, pathname validation, directory
@@ -58,7 +63,7 @@ pub fn bbsink_server_new<'mcx>(
             .errdetail(
                 "Only roles with privileges of the \"pg_write_server_files\" role may create a backup stored on the server.",
             )
-            .finish(loc("bbsink_server_new"))?;
+            .finish(report_location("bbsink_server_new", 75))?;
     }
     xact_seams::commit_transaction_command::call()?;
 
@@ -68,7 +73,7 @@ pub fn bbsink_server_new<'mcx>(
         ereport(ERROR)
             .errcode(ERRCODE_INVALID_NAME)
             .errmsg("relative path not allowed for backup stored on server")
-            .finish(loc("bbsink_server_new"))?;
+            .finish(report_location("bbsink_server_new", 89))?;
     }
 
     match pg_check_dir(pathname) {
@@ -76,11 +81,11 @@ pub fn bbsink_server_new<'mcx>(
             // Does not exist: create it with the same permissions we'd use
             // for a new subdirectory of the data directory itself.
             if fd::MakePGDirectory(pathname) < 0 {
-                let e = std::io::Error::last_os_error();
+                let e = ::elog::errno::strerror(fd::get_errno());
                 ereport(ERROR)
                     .errcode_for_file_access()
                     .errmsg(format!("could not create directory \"{pathname}\": {e}"))
-                    .finish(loc("bbsink_server_new"))?;
+                    .finish(report_location("bbsink_server_new", 102))?;
             }
         }
         1 => {} // Exists, empty.
@@ -89,15 +94,15 @@ pub fn bbsink_server_new<'mcx>(
             ereport(ERROR)
                 .errcode(ERRCODE_DUPLICATE_FILE)
                 .errmsg(format!("directory \"{pathname}\" exists but is not empty"))
-                .finish(loc("bbsink_server_new"))?;
+                .finish(report_location("bbsink_server_new", 116))?;
         }
         _ => {
             // Access problem.
-            let e = std::io::Error::last_os_error();
+            let e = ::elog::errno::strerror(fd::get_errno());
             ereport(ERROR)
                 .errcode_for_file_access()
                 .errmsg(format!("could not access directory \"{pathname}\": {e}"))
-                .finish(loc("bbsink_server_new"))?;
+                .finish(report_location("bbsink_server_new", 124))?;
         }
     }
 
@@ -154,7 +159,13 @@ fn pg_check_dir(dir: &str) -> i32 {
 }
 
 impl ServerOps {
-    fn write_chunk(&mut self, sink: &Bbsink<'_>, len: Size, func: &'static str) -> PgResult<()> {
+    fn write_chunk(
+        &mut self,
+        sink: &Bbsink<'_>,
+        len: Size,
+        func: &'static str,
+        line: i32,
+    ) -> PgResult<()> {
         let file = self.file.expect("server sink file must be open");
         let nbytes = fd::FileWrite(
             file,
@@ -165,12 +176,12 @@ impl ServerOps {
         if nbytes < 0 || nbytes as usize != len {
             let path = fd::FilePathName(file);
             if nbytes < 0 {
-                let e = std::io::Error::last_os_error();
+                let e = ::elog::errno::strerror(fd::get_errno());
                 return ereport(ERROR)
                     .errcode_for_file_access()
                     .errmsg(format!("could not write file \"{path}\": {e}"))
                     .errhint("Check free disk space.")
-                    .finish(loc(func));
+                    .finish(report_location(func, line));
             }
             // Short write: complain appropriately.
             return ereport(ERROR)
@@ -180,24 +191,24 @@ impl ServerOps {
                     self.filepos
                 ))
                 .errhint("Check free disk space.")
-                .finish(loc(func));
+                .finish(report_location(func, line + 7));
         }
         self.filepos += nbytes as i64;
         Ok(())
     }
 
-    fn open_exclusive(&mut self, filename: &str, func: &'static str) -> PgResult<()> {
+    fn open_exclusive(&mut self, filename: &str, func: &'static str, line: i32) -> PgResult<()> {
         debug_assert!(self.file.is_none());
         let file = fd::PathNameOpenFile(
             filename,
             libc::O_CREAT | libc::O_EXCL | libc::O_WRONLY,
         )?;
         if file.0 <= 0 {
-            let e = std::io::Error::last_os_error();
+            let e = ::elog::errno::strerror(fd::get_errno());
             return ereport(ERROR)
                 .errcode_for_file_access()
                 .errmsg(format!("could not create file \"{filename}\": {e}"))
-                .finish(loc(func));
+                .finish(report_location(func, line));
         }
         self.file = Some(file);
         Ok(())
@@ -217,7 +228,7 @@ impl<'mcx> BbsinkOps<'mcx> for ServerOps {
     ) -> PgResult<()> {
         debug_assert!(self.filepos == 0);
         let filename = format!("{}/{archive_name}", self.pathname);
-        self.open_exclusive(&filename, "bbsink_server_begin_archive")?;
+        self.open_exclusive(&filename, "bbsink_server_begin_archive", 149)?;
         bbsink_forward_begin_archive(sink, state, archive_name)
     }
 
@@ -227,7 +238,7 @@ impl<'mcx> BbsinkOps<'mcx> for ServerOps {
         state: &mut BbsinkState,
         len: Size,
     ) -> PgResult<()> {
-        self.write_chunk(sink, len, "bbsink_server_archive_contents")?;
+        self.write_chunk(sink, len, "bbsink_server_archive_contents", 175)?;
         bbsink_forward_archive_contents(sink, state, len)
     }
 
@@ -237,11 +248,11 @@ impl<'mcx> BbsinkOps<'mcx> for ServerOps {
         let file = self.file.expect("server sink file must be open");
         if fd::FileSync(file, WAIT_EVENT_BASEBACKUP_SYNC)? < 0 {
             let path = fd::FilePathName(file);
-            let e = std::io::Error::last_os_error();
+            let e = ::elog::errno::strerror(fd::get_errno());
             ereport(ERROR)
                 .errcode_for_file_access()
                 .errmsg(format!("could not fsync file \"{path}\": {e}"))
-                .finish(loc("bbsink_server_end_archive"))?;
+                .finish(report_location("bbsink_server_end_archive", 208))?;
         }
         fd::FileClose(file)?;
         self.file = None;
@@ -253,7 +264,7 @@ impl<'mcx> BbsinkOps<'mcx> for ServerOps {
         // Written under a temporary name, renamed into place after fsync, so
         // a manifest under the correct name implies a complete backup.
         let tmp_filename = format!("{}/backup_manifest.tmp", self.pathname);
-        self.open_exclusive(&tmp_filename, "bbsink_server_begin_manifest")?;
+        self.open_exclusive(&tmp_filename, "bbsink_server_begin_manifest", 242)?;
         bbsink_forward_begin_manifest(sink, state)
     }
 
@@ -263,7 +274,7 @@ impl<'mcx> BbsinkOps<'mcx> for ServerOps {
         state: &mut BbsinkState,
         len: Size,
     ) -> PgResult<()> {
-        self.write_chunk(sink, len, "bbsink_server_manifest_contents")?;
+        self.write_chunk(sink, len, "bbsink_server_manifest_contents", 268)?;
         bbsink_forward_manifest_contents(sink, state, len)
     }
 

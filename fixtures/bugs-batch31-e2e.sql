@@ -1,5 +1,5 @@
 -- bugs/batch-31-backend-commands-tablecmds: expected captured from C 18.6.
--- fp-commands-tablecmds-p1#1: CREATE TABLE .. PARTITION OF checks USAGE on
+-- regression: CREATE TABLE .. PARTITION OF checks USAGE on
 -- every inherited column type (BuildDescForRelation, tablecmds.c:1425).
 CREATE ROLE b31_u;
 CREATE SCHEMA b31_s AUTHORIZATION b31_u;
@@ -19,7 +19,7 @@ SELECT relname FROM pg_class WHERE relnamespace = 'b31_s'::regnamespace ORDER BY
 DROP SCHEMA b31_s CASCADE;
 DROP DOMAIN b31_d;
 DROP ROLE b31_u;
--- fp-fmgr-fmgr#2: ALTER TABLE .. INHERIT decompiles a compressed conbin
+-- regression: ALTER TABLE .. INHERIT decompiles a compressed conbin
 -- (pg_get_expr through fmgr needs a result context for the detoast).
 CREATE TABLE b31_pa (a text);
 CREATE TABLE b31_ch (a text);

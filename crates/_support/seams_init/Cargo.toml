@@ -191,7 +191,7 @@ utility = { path = "../../backend/tcop/utility" }
 backend_status = { path = "../../backend/utils/activity/backend_status" }
 backend_progress = { path = "../../backend/utils/activity/backend_progress" }
 waitevent = { path = "../../backend/utils/activity/waitevent" }
-# Serial-lease v2 boot posture (GL-SLEASE-2): the armed wait-seam wrappers +
+# Serial-lease v2 boot posture (regression): the armed wait-seam wrappers +
 # admission-tap install need the seam decl crates directly.
 waitevent_seams = { path = "../../backend/utils/activity/waitevent_seams" }
 postgres_seams = { path = "../../backend/tcop/postgres_seams" }

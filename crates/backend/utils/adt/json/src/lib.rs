@@ -44,8 +44,8 @@ pub fn errsave_parse_error(
             .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
     };
     let err = err
-        .with_detail(lex.errdetail(error))
-        .with_context(lex.errcontext());
+        .with_detail_raw(lex.errdetail_bytes(error))
+        .with_context_raw(lex.errcontext());
     ereturn(escontext, (), err)
 }
 

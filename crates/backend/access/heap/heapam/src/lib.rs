@@ -1632,8 +1632,20 @@ pub fn heap_rescan(
     if let Some(pin) = scan.rs_cbuf.take() {
         pin.release();
     }
+    forget_batch_credit(scan);
 
     initscan(scan, key, true)
+}
+
+// heapam.c:1291/1316 read_stream_reset/read_stream_end: the batched read's
+// unconsumed tail belongs to this scan alone.
+fn forget_batch_credit(scan: &HeapScanDescData<'_>) {
+    if bufmgr_seams::forget_batch_credit::is_installed() {
+        bufmgr_seams::forget_batch_credit::call(
+            scan.rs_base.rs_rd.rd_locator.get(),
+            ForkNumber::MAIN_FORKNUM,
+        );
+    }
 }
 
 pub fn heap_endscan(mut scan: HeapScanDescData<'_>) -> PgResult<()> {
@@ -1642,6 +1654,7 @@ pub fn heap_endscan(mut scan: HeapScanDescData<'_>) -> PgResult<()> {
     if let Some(pin) = scan.rs_cbuf.take() {
         pin.release();
     }
+    forget_batch_credit(&scan);
 
     if scan.rs_strategy.is_some() {
         bufmgr_seams::free_access_strategy::call(scan.rs_strategy.take());

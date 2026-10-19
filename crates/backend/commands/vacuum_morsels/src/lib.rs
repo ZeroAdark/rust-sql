@@ -274,15 +274,45 @@ impl runtime::MorselSource for VacuumBlockSource {
     }
 }
 
-/// Shared eager-scan caps for morsel workers (doc §3.4). Fail budget is
-/// per-region; success cap is global. Both decrement after prune, never at
-/// skip-map admission.
+/// Shared eager-scan caps for morsel workers (doc §3.4), the order-free
+/// form of vacuumlazy.c's cursor bookkeeping (:1715-1719 region reset,
+/// :1768-1771 admission, :1425-1463 accounting).
+///
+/// C admits an all-visible-not-frozen block while the region's failure
+/// budget is open and stops admitting once `eager_scan_remaining_successes`
+/// hits 0 after a freeze; its read stream decides block N+1 before block N
+/// is accounted, so on a cached scan exactly S+1 eager blocks are admitted
+/// (S = the success cap). Workers scan claims concurrently, so the serial
+/// "decide after the previous prune" form is not reproducible; instead the
+/// success cap is a CREDIT pool of S+1 consumed at admission (refunded when
+/// the page turns out not to need freezing, which C charges to the region's
+/// failure budget instead). Any claim schedule then admits exactly S+1
+/// eager blocks when every one freezes — C's cached-scan count — and the
+/// per-region failure budget is shared by region exactly as C resets it at
+/// each region start.
 pub struct EagerScanShared {
-    remaining_successes: AtomicU32,
+    /// S+1 admission credits (see the type doc); 0 = the success cap closed.
+    credits: AtomicU32,
+    /// Set when the success cap closes: C :1456-1458 zeroes the fail budget,
+    /// the region cursor and the per-region maximum together.
+    disabled: AtomicBool,
     max_fails_per_region: AtomicU32,
     first_region_start: u32,
     region_fails: Vec<AtomicU32>,
     orig_success_limit: u32,
+}
+
+/// One admission verdict for an eager candidate block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EagerAdmit {
+    /// Skip the block (cap closed, region failure budget spent).
+    Deny,
+    /// Scan the block as eagerly scanned.
+    Admit,
+    /// Scan it, and this admission closed the success cap: emit C's
+    /// "disabling eager scanning after freezing %u eagerly scanned blocks"
+    /// report once (:1444-1449) with the carried original limit.
+    AdmitAndClose(u32),
 }
 
 fn eager_region_id(first_start: u32, block: u32) -> usize {
@@ -315,8 +345,13 @@ impl EagerScanShared {
                 })
             })
             .collect();
+        // heap_vacuum_eager_scan_setup disables eager scanning outright when
+        // the cap is 0 (:570), so an enabled state always carries S >= 1;
+        // a disabled state (max_fails == 0) never admits regardless.
+        let disabled = max_fails_per_region == 0;
         EagerScanShared {
-            remaining_successes: AtomicU32::new(remaining_successes),
+            credits: AtomicU32::new(if disabled { 0 } else { remaining_successes.saturating_add(1) }),
+            disabled: AtomicBool::new(disabled),
             max_fails_per_region: AtomicU32::new(max_fails_per_region),
             first_region_start,
             region_fails,
@@ -324,12 +359,22 @@ impl EagerScanShared {
         }
     }
 
+    /// C's `eager_scan_remaining_successes` view of the credit pool: the
+    /// look-ahead credit is not a success.
     pub fn remaining_successes(&self) -> u32 {
-        self.remaining_successes.load(Ordering::Relaxed)
+        if self.disabled.load(Ordering::Relaxed) {
+            0
+        } else {
+            self.credits.load(Ordering::Relaxed).saturating_sub(1)
+        }
     }
 
     pub fn max_fails_per_region(&self) -> u32 {
         self.max_fails_per_region.load(Ordering::Relaxed)
+    }
+
+    pub fn disabled(&self) -> bool {
+        self.disabled.load(Ordering::Relaxed)
     }
 
     pub fn fails_at(&self, block: u32) -> u32 {
@@ -339,50 +384,70 @@ impl EagerScanShared {
             .unwrap_or(0)
     }
 
-    /// `Some(orig_success_limit)` means the success cap just closed and the
-    /// caller must emit the disable ereport.
-    pub fn account(&self, block: u32, vm_page_frozen: bool) -> Option<u32> {
-        if vm_page_frozen {
-            let prev = self
-                .remaining_successes
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                    Some(n.saturating_sub(1))
-                })
-                .unwrap_or(0);
-            if prev.saturating_sub(1) == 0 {
-                let max = self.max_fails_per_region.swap(0, Ordering::Relaxed);
-                for a in &self.region_fails {
-                    a.store(0, Ordering::Relaxed);
-                }
-                if max > 0 {
-                    return Some(self.orig_success_limit);
-                }
-            }
-            None
-        } else if let Some(a) = self
+    /// Would `block` be admitted right now (no credit consumed)? The
+    /// worker's run walk (SKIP_PAGES_THRESHOLD, C :1636) peeks with this.
+    pub fn would_admit(&self, block: u32) -> bool {
+        !self.disabled.load(Ordering::Relaxed)
+            && self.fails_at(block) > 0
+            && self.credits.load(Ordering::Relaxed) > 0
+    }
+
+    /// Admit `block` (an all-visible-not-frozen candidate the skip map
+    /// carried as eager) at scan time: C :1768-1771 gated on the region's
+    /// open failure budget, the success cap as the credit pool.
+    pub fn try_admit(&self, block: u32) -> EagerAdmit {
+        if self.disabled.load(Ordering::Relaxed) || self.fails_at(block) == 0 {
+            return EagerAdmit::Deny;
+        }
+        let Ok(prev) = self
+            .credits
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| (n > 0).then_some(n - 1))
+        else {
+            return EagerAdmit::Deny;
+        };
+        if prev - 1 == 0 {
+            self.close();
+            EagerAdmit::AdmitAndClose(self.orig_success_limit)
+        } else {
+            EagerAdmit::Admit
+        }
+    }
+
+    /// C :1456-1458 — permanently disable eager scanning.
+    fn close(&self) {
+        self.disabled.store(true, Ordering::Relaxed);
+        self.max_fails_per_region.store(0, Ordering::Relaxed);
+        for a in &self.region_fails {
+            a.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Post-prune accounting of an admitted block (C :1425-1463): a freeze
+    /// keeps its credit; a page that did not need freezing refunds it and
+    /// spends one of the region's failures instead (:1461-1462).
+    pub fn account(&self, block: u32, vm_page_frozen: bool) {
+        if vm_page_frozen || self.disabled.load(Ordering::Relaxed) {
+            return;
+        }
+        let _ = self.credits.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n + 1));
+        if let Some(a) = self
             .region_fails
             .get(eager_region_id(self.first_region_start, block))
         {
             let _ = a.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                 (n > 0).then_some(n - 1)
             });
-            None
-        } else {
-            None
         }
     }
 
     /// Leader fold-back after a morsel round: `(successes, fails, max_fails,
-    /// next_region_start)` at `at_block`.
+    /// next_region_start)` at `at_block`, in C's field terms — the serial
+    /// arm resuming from here re-applies its own read-stream look-ahead, so
+    /// the look-ahead credit is not handed over twice.
     pub fn snapshot(&self, at_block: u32) -> (u32, u32, u32, u32) {
         let max = self.max_fails_per_region.load(Ordering::Relaxed);
-        if max == 0 {
-            return (
-                self.remaining_successes.load(Ordering::Relaxed),
-                0,
-                0,
-                InvalidBlockNumber,
-            );
+        if max == 0 || self.disabled.load(Ordering::Relaxed) {
+            return (0, 0, 0, InvalidBlockNumber);
         }
         let next = if self.first_region_start == InvalidBlockNumber {
             InvalidBlockNumber
@@ -393,12 +458,7 @@ impl EagerScanShared {
                 + ((at_block - self.first_region_start) / EAGER_SCAN_REGION_SIZE + 1)
                     * EAGER_SCAN_REGION_SIZE
         };
-        (
-            self.remaining_successes.load(Ordering::Relaxed),
-            self.fails_at(at_block),
-            max,
-            next,
-        )
+        (self.remaining_successes(), self.fails_at(at_block), max, next)
     }
 }
 
@@ -527,6 +587,14 @@ pub struct VacScanLocal {
     /// noprune ladder could not satisfy (aggressive-must-freeze); processed
     /// serially by the leader between SCAN and INDEX.
     pub deferred_cleanup: Vec<u32>,
+    /// Blocks this Local scanned as eagerly scanned (C's
+    /// `eager_scanned_pages`, :1336-1337) — a SUM fold.
+    pub eager_scanned_pages: u64,
+    /// Granules whose eager admission was denied at scan time and whose
+    /// skip run reached SKIP_PAGES_THRESHOLD (C :1636-1641): each is an
+    /// all-visible-not-frozen page left unscanned, so the leader folds
+    /// `skippedallvis` for every one below the round's resume point.
+    pub eager_skipped_granules: Vec<u64>,
 }
 
 impl VacScanLocal {
@@ -537,6 +605,8 @@ impl VacScanLocal {
             runs: Vec::new(),
             claims: Vec::new(),
             deferred_cleanup: Vec::new(),
+            eager_scanned_pages: 0,
+            eager_skipped_granules: Vec::new(),
         }
     }
 

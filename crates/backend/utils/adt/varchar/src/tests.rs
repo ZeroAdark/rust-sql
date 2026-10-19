@@ -289,7 +289,7 @@ fn cstring_array_1d(elems: &[&[u8]]) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// SE-BPCHAR (the GL-BPCHAR-1 lane) — the tie law of record, proven against
+// SE-BPCHAR (the regression lane) — the tie law of record, proven against
 // THE REAL vendored functions (not a model): for values stored under ONE
 // typmod (a bare-Var char(n) key column shares its atttypmod by
 // construction), bpchareq's verdict coincides with BYTE EQUALITY of the
@@ -543,7 +543,7 @@ fn fc_ceiling_fires_on_huge_input_arm() {
     }
 }
 
-// audit-18.6 fp-adt-b1#4: arrayutils.c:259 hands the raw cstring bytes to
+// audit-18.6 regression: arrayutils.c:259 hands the raw cstring bytes to
 // pg_strtoint32, so a non-UTF-8 modifier (SQL_ASCII) is 22P02, not 22023.
 #[test]
 fn typmod_non_utf8_element_is_invalid_integer() {

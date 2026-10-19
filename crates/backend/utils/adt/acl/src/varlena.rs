@@ -17,6 +17,12 @@ pub fn check_acl_payload(payload: &[u8]) -> PgResult<usize> {
         b.copy_from_slice(&payload[off..off + 4]);
         i32::from_le_bytes(b)
     };
+    if payload.len() >= 12 && rd(8) as u32 != ACLITEMOID {
+        return Err(acl_shape_error(
+            "ACL array contains wrong data type",
+            ERRCODE_INVALID_PARAMETER_VALUE,
+        ));
+    }
     if payload.len() < ARR_HDR {
         return Err(acl_shape_error(
             "ACL arrays must be one-dimensional",
@@ -25,13 +31,6 @@ pub fn check_acl_payload(payload: &[u8]) -> PgResult<usize> {
     }
     let ndim = rd(0);
     let dataoffset = rd(4);
-    let elemtype = rd(8) as u32;
-    if elemtype != ACLITEMOID {
-        return Err(acl_shape_error(
-            "ACL array contains wrong data type",
-            ERRCODE_INVALID_PARAMETER_VALUE,
-        ));
-    }
     if ndim != 1 {
         return Err(acl_shape_error(
             "ACL arrays must be one-dimensional",

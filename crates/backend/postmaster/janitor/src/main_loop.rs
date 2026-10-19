@@ -28,7 +28,7 @@ const TICK_MS: i64 = 500;
 /// pg_stat_activity wait tag for the idle tick: the Extension class, exactly
 /// what a C extension bgworker (worker_spi) reports. The class has no name
 /// table (runtime-tagged in C), so no wait_event_names.txt index to mis-pin
-/// (GL-SYNCWEDGE-1 / scripts/lint-waitevent-tags.sh applies only to indexed
+/// (regression / scripts/lint-waitevent-tags.sh applies only to indexed
 /// classes).
 const PG_WAIT_EXTENSION: u32 = 0x0700_0000;
 

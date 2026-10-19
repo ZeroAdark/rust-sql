@@ -9,11 +9,20 @@ use ::types_fmgr::{
     byref_result, varlena_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo,
     PGFunction,
 };
-use ::types_tuple::NameData;
+use ::types_tuple::{NameData, TupleDescData};
 
 use slot::{RS_INVAL_HORIZON, RS_INVAL_NONE, RS_INVAL_WAL_LEVEL, RS_TEMPORARY};
 
 use crate::{get_wal_availability, WALAvailability, PG_GET_REPLICATION_SLOTS_COLS};
+
+// slotfuncs.c get_call_result_type(fcinfo, ...): a RETURNS record alias
+// resolves through ReturnSetInfo.expectedDesc (funcapi.c:519).
+fn call_expected_desc<'a>(fcinfo: &mut Fcinfo) -> Option<&'a TupleDescData<'a>> {
+    let p = fcinfo.rsinfo_mut().and_then(|rsi| rsi.expectedDesc)?;
+    // SAFETY: expectedDesc contract — the executor armed it with the scan
+    // tupdesc, live for the duration of this call.
+    Some(unsafe { p.cast::<TupleDescData<'a>>().as_ref() })
+}
 
 fn arg_name(fcinfo: &Fcinfo, i: usize) -> String {
     // SAFETY: catalog arg i of these strict fns is a non-null name.
@@ -38,8 +47,9 @@ pub fn fc_pg_create_physical_replication_slot(
     let immediately_reserve = fcinfo.arg_bool(1);
     let temporary = fcinfo.arg_bool(2);
 
+    let expected = call_expected_desc(fcinfo);
     let mcx = fcinfo.result_mcx();
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
+    let resolved = funcapi::get_call_result_type(mcx, flinfo, expected)?;
     if resolved.class != funcapi::TypeFuncClass::Composite {
         return Err(not_row_type());
     }
@@ -81,8 +91,9 @@ pub fn fc_pg_create_logical_replication_slot(
     let two_phase = fcinfo.arg_bool(3);
     let failover = fcinfo.arg_bool(4);
 
+    let expected = call_expected_desc(fcinfo);
     let mcx = fcinfo.result_mcx();
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
+    let resolved = funcapi::get_call_result_type(mcx, flinfo, expected)?;
     if resolved.class != funcapi::TypeFuncClass::Composite {
         return Err(not_row_type());
     }
@@ -358,8 +369,9 @@ pub fn fc_pg_replication_slot_advance(
         unreachable!("ereport(ERROR) returns Err");
     }
 
+    let expected = call_expected_desc(fcinfo);
     let mcx = fcinfo.result_mcx();
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
+    let resolved = funcapi::get_call_result_type(mcx, flinfo, expected)?;
     if resolved.class != funcapi::TypeFuncClass::Composite {
         return Err(not_row_type());
     }
@@ -420,21 +432,23 @@ pub fn fc_pg_replication_slot_advance(
 }
 
 // Shared core of the pg_copy_{physical,logical}_replication_slot opr_sanity
-// wrappers (slotfuncs.c copy_replication_slot): each wrapper differs only in
-// which optional (temporary, plugin) args it exposes.
+// wrappers (slotfuncs.c copy_replication_slot): the optional (temporary,
+// plugin) overrides come from PG_NARGS(), not from the wrapper identity, so a
+// LANGUAGE internal alias declaring more arguments honors them as C does.
 fn fc_copy_replication_slot(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
     logical_slot: bool,
-    temporary: Option<bool>,
-    plugin: Option<String>,
 ) -> PgResult<Datum> {
     let flinfo = flinfo.expect("copy_replication_slot: resolved FmgrInfo required");
     let src_name = arg_name(fcinfo, 0);
     let dst_name = arg_name(fcinfo, 1);
+    let temporary = (fcinfo.nargs() >= 3).then(|| fcinfo.arg_bool(2));
+    let plugin = (fcinfo.nargs() >= 4).then(|| arg_name(fcinfo, 3));
 
+    let expected = call_expected_desc(fcinfo);
     let mcx = fcinfo.result_mcx();
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
+    let resolved = funcapi::get_call_result_type(mcx, flinfo, expected)?;
     if resolved.class != funcapi::TypeFuncClass::Composite {
         return Err(not_row_type());
     }
@@ -490,39 +504,35 @@ pub fn fc_pg_copy_physical_replication_slot_a(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    let temporary = fcinfo.arg_bool(2);
-    fc_copy_replication_slot(flinfo, fcinfo, false, Some(temporary), None)
+    fc_copy_replication_slot(flinfo, fcinfo, false)
 }
 
 pub fn fc_pg_copy_physical_replication_slot_b(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    fc_copy_replication_slot(flinfo, fcinfo, false, None, None)
+    fc_copy_replication_slot(flinfo, fcinfo, false)
 }
 
 pub fn fc_pg_copy_logical_replication_slot_a(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    let temporary = fcinfo.arg_bool(2);
-    let plugin = arg_name(fcinfo, 3);
-    fc_copy_replication_slot(flinfo, fcinfo, true, Some(temporary), Some(plugin))
+    fc_copy_replication_slot(flinfo, fcinfo, true)
 }
 
 pub fn fc_pg_copy_logical_replication_slot_b(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    let temporary = fcinfo.arg_bool(2);
-    fc_copy_replication_slot(flinfo, fcinfo, true, Some(temporary), None)
+    fc_copy_replication_slot(flinfo, fcinfo, true)
 }
 
 pub fn fc_pg_copy_logical_replication_slot_c(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    fc_copy_replication_slot(flinfo, fcinfo, true, None, None)
+    fc_copy_replication_slot(flinfo, fcinfo, true)
 }
 
 // pg_sync_replication_slots (slotfuncs.c): pre-checks here, everything past

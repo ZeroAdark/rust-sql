@@ -14,12 +14,12 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // get_replslot_index + SlotIsLogical (slot.c) for pgstat_replslot.c;
-    // (index, is_logical), index -1 when no in-use slot has the name.
-    pub fn named_replication_slot_info(
+    // get_replslot_index + SlotIsLogical for pgstat_replslot.c, with
+    // ReplicationSlotControlLock held across lookup and body; index -1 = none.
+    pub fn with_named_replication_slot_info(
         name: &str,
-        need_lock: bool,
-    ) -> types_error::PgResult<(i32, bool)>
+        body: &mut dyn FnMut(i32, bool) -> types_error::PgResult<()>,
+    ) -> types_error::PgResult<()>
 );
 
 seam_core::seam!(

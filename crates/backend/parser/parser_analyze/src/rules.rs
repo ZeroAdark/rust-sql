@@ -216,8 +216,12 @@ pub fn transformRuleStmt<'mcx>(
             }
 
             actions.lappend(mcx, top_node)?;
+
+            parser_small1::free_parsestate(sub_pstate)?;
         }
     }
+
+    parser_small1::free_parsestate(pstate)?;
 
     table::table_close(rel, NoLock)?;
     Ok((actions, where_clause))

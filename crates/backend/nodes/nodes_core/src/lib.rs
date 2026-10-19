@@ -1618,8 +1618,8 @@ pub fn expression_tree_mutator_dyn<'mcx>(
         }
         NodeTag::T_Aggref => {
             let a = node.as_variant::<Aggref>().unwrap();
-            let args = mutate_list_dyn(mcx, &a.args, m)?;
             let directargs = mutate_list_dyn(mcx, &a.aggdirectargs, m)?;
+            let args = mutate_list_dyn(mcx, &a.args, m)?;
             let aggorder = mutate_list_dyn(mcx, &a.aggorder, m)?;
             let aggdistinct = mutate_list_dyn(mcx, &a.aggdistinct, m)?;
             let aggfilter = match a.aggfilter {

@@ -68,17 +68,24 @@ fn eq_key(attno: AttrNumber, func: RegProcedure, arg: Datum) -> ScanKeyData {
     key
 }
 
-fn name_arg<'mcx>(mcx: Mcx<'mcx>, name: &str) -> PgResult<PgVec<'mcx, u8>> {
+// A name of NAMEDATALEN+ bytes keeps its first NAMEDATALEN bytes, no NUL, so
+// nameeq's strncmp never matches it (C passes CStringGetDatum(conname)).
+fn name_arg<'mcx>(mcx: Mcx<'mcx>, name: impl AsRef<[u8]>) -> PgResult<PgVec<'mcx, u8>> {
+    let name = name.as_ref();
     let n = NAMEDATALEN as usize;
-    assert!(name.len() < n, "makeObjectName truncation unported: {name:?}");
+    let len = name.len().min(n);
     let mut buf: PgVec<'mcx, u8> = mcx::vec_with_capacity_in(mcx, n)?;
-    mcx::vec_append_bytes(&mut buf, name.as_bytes())?;
-    mcx::vec_append_bytes(&mut buf, &[0u8; 64][..n - name.len()])?;
+    mcx::vec_append_bytes(&mut buf, &name[..len])?;
+    mcx::vec_append_bytes(&mut buf, &[0u8; 64][..n - len])?;
     Ok(buf)
 }
 
 pub struct ConstraintEntry<'a> {
-    pub name: &'a str,
+    /// conname as C carries it: bytes, not text. A generated name
+    /// (makeObjectName) can be clipped inside a multibyte character in a
+    /// SQL_ASCII database and is still stored verbatim (pg_constraint.c
+    /// namestrcpy).
+    pub name: &'a [u8],
     pub namespace_id: Oid,
     pub contype: u8,
     pub deferrable: bool,
@@ -113,7 +120,7 @@ pub struct ConstraintEntry<'a> {
 }
 
 impl<'a> ConstraintEntry<'a> {
-    pub fn base(name: &'a str, namespace_id: Oid, contype: u8, relid: Oid) -> Self {
+    pub fn base(name: &'a [u8], namespace_id: Oid, contype: u8, relid: Oid) -> Self {
         ConstraintEntry {
             name,
             namespace_id,
@@ -603,7 +610,7 @@ pub fn RenameConstraintById<'mcx>(mcx: Mcx<'mcx>, con_id: Oid, newname: &str) ->
     }
     .as_oid();
     if conrelid != InvalidOid
-        && ConstraintNameIsUsed(mcx, ConstraintCategory::Relation, conrelid, newname)?
+        && ConstraintNameIsUsed(mcx, ConstraintCategory::Relation, conrelid, newname.as_bytes())?
     {
         let relname = rel_name_for_error(mcx, conrelid)?;
         return Err(Box::new(
@@ -615,7 +622,7 @@ pub fn RenameConstraintById<'mcx>(mcx: Mcx<'mcx>, con_id: Oid, newname: &str) ->
         ));
     }
     if contypid != InvalidOid
-        && ConstraintNameIsUsed(mcx, ConstraintCategory::Domain, contypid, newname)?
+        && ConstraintNameIsUsed(mcx, ConstraintCategory::Domain, contypid, newname.as_bytes())?
     {
         let typname = format_type::format_type_be(contypid)?;
         return Err(Box::new(
@@ -809,7 +816,7 @@ pub fn ConstraintNameIsUsed<'mcx>(
     mcx: Mcx<'mcx>,
     con_cat: ConstraintCategory,
     obj_id: Oid,
-    conname: &str,
+    conname: &[u8],
 ) -> PgResult<bool> {
     let con_rel = table::table_open(mcx, CONSTRAINT_RELATION_ID, AccessShareLock)?;
     let cname = name_arg(mcx, conname)?;
@@ -951,8 +958,8 @@ pub fn ChooseConstraintName<'mcx>(
     name2: Option<&str>,
     label: &str,
     namespace_id: Oid,
-    others: &[&str],
-) -> PgResult<mcx::PgString<'mcx>> {
+    others: &[&[u8]],
+) -> PgResult<PgVec<'mcx, u8>> {
     let con_rel = table::table_open(mcx, CONSTRAINT_RELATION_ID, AccessShareLock)?;
     let mut pass = 0;
     // C tries the unmodified label first UNLESS it's empty; an empty label
@@ -968,10 +975,11 @@ pub fn ChooseConstraintName<'mcx>(
         mcx::PgString::from_str_in(label, mcx)?
     };
     let conname = loop {
-        let conname = make_object_name(mcx, name1, name2, modlabel.as_str())?;
-        let mut found = others.iter().any(|&o| o == conname.as_str());
+        let conname =
+            make_object_name(mcx, name1.as_bytes(), name2.map(str::as_bytes), modlabel.as_str())?;
+        let mut found = others.iter().any(|&o| o == &conname[..]);
         if !found {
-            let cname = name_arg(mcx, conname.as_str())?;
+            let cname = name_arg(mcx, &conname[..])?;
             let keys = [
                 eq_key(Anum_pg_constraint_conname, F_NAMEEQ, Datum::from_usize(cname.as_ptr() as usize)),
                 eq_key(Anum_pg_constraint_connamespace, F_OIDEQ, Datum::from_oid(namespace_id)),
@@ -1000,13 +1008,34 @@ pub fn ChooseConstraintName<'mcx>(
 }
 
 // makeObjectName (indexcmds.c:2518-2577): truncate the longer of name1/name2
-// (multibyte-aware) until "name1[_name2]_label" fits in NAMEDATALEN-1 bytes.
-fn make_object_name<'mcx>(
+// until "name1[_name2]_label" fits in NAMEDATALEN-1 bytes. The budget is
+// BYTES: pg_mbcliplen backs each piece off to a character boundary under
+// the database encoding, and under SQL_ASCII (single-byte) that boundary is
+// wherever the byte budget lands -- inside a multibyte character when the
+// input carries one. C stores those bytes as-is (the name is a NameData,
+// not text), so the result is a byte string, never a `&str`. This is the
+// ONE makeObjectName of the port: indexcmds (ChooseRelationName,
+// ChooseIndexName) and ChooseConstraintName both call it.
+pub fn make_object_name<'mcx>(
     mcx: Mcx<'mcx>,
-    name1: &str,
-    name2: Option<&str>,
+    name1: &[u8],
+    name2: Option<&[u8]>,
     label: &str,
-) -> PgResult<mcx::PgString<'mcx>> {
+) -> PgResult<PgVec<'mcx, u8>> {
+    make_object_name_with(mcx, name1, name2, label, |s, n| {
+        mbutils_seams::pg_mbcliplen::call(s, n as i32, n as i32) as usize
+    })
+}
+
+/// makeObjectName over an explicit `pg_mbcliplen(s, n, n)`; the unit tests
+/// pin the byte arithmetic without the encoding seam.
+pub fn make_object_name_with<'mcx>(
+    mcx: Mcx<'mcx>,
+    name1: &[u8],
+    name2: Option<&[u8]>,
+    label: &str,
+    clip: impl Fn(&[u8], usize) -> usize,
+) -> PgResult<PgVec<'mcx, u8>> {
     let mut overhead = label.len() + 1;
     if name2.is_some() {
         overhead += 1;
@@ -1014,7 +1043,7 @@ fn make_object_name<'mcx>(
     assert!(NAMEDATALEN as usize - 1 > overhead, "makeObjectName label too long ({label:?})");
     let availchars = NAMEDATALEN as usize - 1 - overhead;
     let mut name1chars = name1.len();
-    let mut name2chars = name2.map_or(0, str::len);
+    let mut name2chars = name2.map_or(0, <[u8]>::len);
     while name1chars + name2chars > availchars {
         if name1chars > name2chars {
             name1chars -= 1;
@@ -1022,24 +1051,45 @@ fn make_object_name<'mcx>(
             name2chars -= 1;
         }
     }
-    name1chars = mbutils_seams::pg_mbcliplen::call(
-        name1.as_bytes(),
-        name1chars as i32,
-        name1chars as i32,
-    ) as usize;
-    let mut s = mcx::PgString::from_str_in(&name1[..name1chars], mcx)?;
+    name1chars = clip(name1, name1chars);
+    let mut s: PgVec<'mcx, u8> =
+        mcx::vec_with_capacity_in(mcx, name1chars + name2chars + overhead)?;
+    mcx::vec_append_bytes(&mut s, &name1[..name1chars])?;
     if let Some(n2) = name2 {
-        name2chars = mbutils_seams::pg_mbcliplen::call(
-            n2.as_bytes(),
-            name2chars as i32,
-            name2chars as i32,
-        ) as usize;
-        s.try_push_str("_")?;
-        s.try_push_str(&n2[..name2chars])?;
+        name2chars = clip(n2, name2chars);
+        mcx::vec_append_bytes(&mut s, b"_")?;
+        mcx::vec_append_bytes(&mut s, &n2[..name2chars])?;
     }
-    s.try_push_str("_")?;
-    s.try_push_str(label)?;
+    mcx::vec_append_bytes(&mut s, b"_")?;
+    mcx::vec_append_bytes(&mut s, label.as_bytes())?;
     Ok(s)
+}
+
+/// The str-typed consumers of a generated name (a serial sequence's
+/// RangeVar, a foreign-key or CHECK constraint whose name rides the
+/// parse-tree / trigger machinery as `&str`): a byte-clipped name that is
+/// not UTF-8 -- only reachable in a SQL_ASCII database with a multibyte
+/// identifier at the clip -- is a typed refusal there, never a panic. The
+/// index/constraint catalog writes carry the bytes verbatim like C.
+pub fn generated_name_utf8<'a>(name: &'a [u8], what: &str) -> PgResult<&'a str> {
+    core::str::from_utf8(name).map_err(|_| {
+        Box::new(
+            PgError::new(
+                ERROR,
+                format!(
+                    "generated {what} name \"{}\" is not valid UTF-8",
+                    String::from_utf8_lossy(name)
+                ),
+            )
+            .with_sqlstate(types_error::ERRCODE_FEATURE_NOT_SUPPORTED)
+            .with_detail(
+                "pgrust carries this name as text (UTF-8-only carve, \
+                 docs/design/carve-ratifications.md); PostgreSQL would truncate the \
+                 generated name inside a multibyte character.",
+            )
+            .with_hint("Use a shorter name so that the generated name ends on a character boundary, or name the object explicitly."),
+        )
+    })
 }
 
 fn conrelid_scan_keys(relid: Oid) -> [ScanKeyData; 1] {
@@ -2027,9 +2077,47 @@ mod truncation_tests {
             (a_long.as_str(), "fkey", "fktable2_a_very_very_long_column_name_to_exceed_63_charact_fkey"),
             (a_long.as_str(), "fkey1", "fktable2_a_very_very_long_column_name_to_exceed_63_charac_fkey1"),
         ] {
-            let got = super::make_object_name(ctx.mcx(), "fktable2", Some(name2), label).unwrap();
-            assert_eq!(got.as_str(), want);
+            let got =
+                super::make_object_name(ctx.mcx(), b"fktable2", Some(name2.as_bytes()), label)
+                    .unwrap();
+            assert_eq!(&got[..], want.as_bytes());
             assert!(got.len() < super::NAMEDATALEN as usize);
         }
+    }
+
+    // regression: the budget is bytes. With a
+    // single-byte database encoding (SQL_ASCII: pg_mbcliplen is cliplen,
+    // no back-off) the clip lands inside the multibyte character and C
+    // keeps the partial byte -- oracle (PostgreSQL 18.6, SQL_ASCII
+    // database): CREATE TABLE "<57 a's>éé"(id int PRIMARY KEY) names the
+    // constraint <57 a's> 0xC3 "_pkey" (63 bytes).
+    #[test]
+    fn make_object_name_clips_bytes_under_single_byte_encoding() {
+        // SQL_ASCII pg_mbcliplen: cliplen, byte-exact.
+        let sb = |_: &[u8], n: usize| n;
+        let ctx = mcx::MemoryContext::new("t");
+        let name1 = format!("{}éé", "a".repeat(57));
+        assert_eq!(name1.len(), 61);
+        let got =
+            super::make_object_name_with(ctx.mcx(), name1.as_bytes(), None, "pkey", sb).unwrap();
+        let mut want = "a".repeat(57).into_bytes();
+        want.push(0xC3);
+        want.extend_from_slice(b"_pkey");
+        assert_eq!(&got[..], &want[..]);
+        assert_eq!(got.len(), super::NAMEDATALEN as usize - 1);
+        assert!(core::str::from_utf8(&got).is_err(), "the C name is not UTF-8");
+        // 56 a's + éé: the clip lands after the first é (58 bytes of name1).
+        let name1 = format!("{}éé", "a".repeat(56));
+        let got =
+            super::make_object_name_with(ctx.mcx(), name1.as_bytes(), None, "pkey", sb).unwrap();
+        assert_eq!(&got[..], format!("{}é_pkey", "a".repeat(56)).as_bytes());
+        // name2 is clipped the same way (the longer piece loses first).
+        let name2 = format!("{}é", "b".repeat(61));
+        let got =
+            super::make_object_name_with(ctx.mcx(), b"t", Some(name2.as_bytes()), "key", sb)
+                .unwrap();
+        assert_eq!(&got[..2], b"t_");
+        assert_eq!(got.len(), super::NAMEDATALEN as usize - 1);
+        assert!(got.ends_with(b"_key"));
     }
 }

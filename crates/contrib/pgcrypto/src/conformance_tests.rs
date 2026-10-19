@@ -417,6 +417,15 @@ fn key_id_hashes_mpi_header_bits() {
     assert_eq!(pgp::key_id(&unhex(K1_LEADZERO_PUB)), Ok("CE9583A4E37FD157".to_string()));
 }
 
+// pgp-info.c:77 read_pubenc_keyid: a PKESK whose version byte is not 3
+// returns -1, the unused PXE slot, so px_strerror falls through to its
+// "Bad error code" text (C oracle: ERROR 39000 Bad error code).
+#[test]
+fn key_id_pubenc_non_v3_version_is_bad_error_code() {
+    assert_eq!(pgp::key_id(&unhex("c109040000000000000000")).unwrap_err(), "Bad error code");
+    assert_eq!(pgp::key_id(&unhex("c109030102030405060708")), Ok("0102030405060708".to_string()));
+}
+
 // pgp-info.c:156 pgp_get_keyid: a subkey that _pgp_read_public_key rejects
 // aborts with that error; pgp-info.c:151/205: several keys is
 // PXE_PGP_MULTIPLE_KEYS.
@@ -443,11 +452,11 @@ fn key_id_propagates_subkey_errors() {
 #[test]
 fn v4_check_precedes_packet_length_check() {
     assert_eq!(
-        pgp::pub_encrypt(b"msg", &unhex(K3_V3_TRUNC_PUB), None, true).unwrap_err(),
+        pgp::pub_encrypt(b"msg", &unhex(K3_V3_TRUNC_PUB), None, true).unwrap_err().message,
         "Only V4 key packets are supported"
     );
     assert_eq!(
-        pgp::pub_encrypt(b"msg", &unhex(K2_UNKNOWN_ALGO_PUB), None, true).unwrap_err(),
+        pgp::pub_encrypt(b"msg", &unhex(K2_UNKNOWN_ALGO_PUB), None, true).unwrap_err().message,
         "Unknown public-key encryption algorithm"
     );
 }
@@ -459,7 +468,7 @@ fn v4_check_precedes_packet_length_check() {
 fn indeterminate_length_packets_are_rejected_in_keys() {
     assert!(pgp::pub_encrypt(b"msg", &ctl_pub(), None, true).is_ok());
     assert_eq!(
-        pgp::pub_encrypt(b"msg", &unhex(K7_LENTYPE3_PUB), None, true).unwrap_err(),
+        pgp::pub_encrypt(b"msg", &unhex(K7_LENTYPE3_PUB), None, true).unwrap_err().message,
         "Wrong key or corrupt data"
     );
     assert_eq!(
@@ -504,6 +513,25 @@ fn signing_subkeys_are_parsed_in_full_then_skipped() {
     }
 }
 
+// pgp-decrypt.c:185 pktreader_pull: the zero-byte pull of a zero-bit final
+// MPI at a partial-chunk boundary runs the length loop, so C consumes the
+// terminal length octet of this signing subkey (8 + 2 + 1 chunks, then 0)
+// and the key still encrypts.
+const SIGNSUB_ZERO_E_PARTIAL: &str = "cee30400000000030008e1ff00e00000";
+
+#[test]
+fn zero_bit_mpi_at_a_chunk_boundary_consumes_the_next_length_octet() {
+    let body = pgp::packet::Body { data: Vec::new(), chunks: vec![(1, 8), (10, 2), (13, 1), (15, 0)], truncated: false };
+    assert_eq!(body.pos_after_read(11, 0), 15);
+    assert_eq!(body.pos_after_read(11, 1), 14);
+    assert_eq!(body.pos_after_read(5, 0), 6);
+    let mut key = ctl_pub();
+    key.extend_from_slice(&unhex(SIGNSUB_ZERO_E_PARTIAL));
+    let msg = pgp::pub_encrypt(b"x", &key, None, false).unwrap_or_else(|e| panic!("{}", e.message));
+    let out = pgp::pub_decrypt(&msg, &ctl_sec(), None, None, false).unwrap_or_else(|e| panic!("{}", e.message));
+    assert_eq!(out.plaintext, b"x");
+}
+
 struct ForceRandomFailure;
 impl ForceRandomFailure {
     fn arm() -> ForceRandomFailure {
@@ -529,7 +557,7 @@ fn rng_failures_report_pxe_no_random() {
     assert_eq!(pgp::sym_encrypt(b"x", b"k", Some(b"s2k-mode=3"), true).unwrap_err(), want);
     assert_eq!(pgp::sym_encrypt(b"x", b"k", Some(b"s2k-mode=0, sess-key=1"), true).unwrap_err(), want);
     assert_eq!(pgp::sym_encrypt(b"x", b"k", Some(b"s2k-mode=0"), true).unwrap_err(), want);
-    assert_eq!(pgp::pub_encrypt(b"x", &ctl_pub(), None, true).unwrap_err(), want);
+    assert_eq!(pgp::pub_encrypt(b"x", &ctl_pub(), None, true).unwrap_err().message, want);
     let e = random_bytes(16).unwrap_err();
     assert_eq!(e.message, want);
     assert_eq!(e.sqlstate, ERRCODE_INTERNAL_ERROR);
@@ -580,7 +608,7 @@ fn builtin_crypto_mode_off_and_fips_arms() {
 }
 
 // openssl.c:168 px_find_digest resolves every EVP_get_digestbyname name, not
-// a fixed six (batch-19 fp-contrib-pgcrypto-openssl#3 / pgcrypto#1 / b3#3).
+// a fixed six (batch-19 regression / pgcrypto#1 / b3#3).
 // Values: live C 18.6 pgcrypto, 2026-09-13.
 #[test]
 fn digest_and_hmac_resolve_every_openssl_name() {
@@ -714,8 +742,8 @@ fn every_literal_packet_is_appended() {
 fn zero_modulus_keys_fail_like_openssl() {
     let rsa_pub = unhex("ce0d04000000000100000011010001");
     let elg_pub = unhex("ce0e0400000000100000000101000101");
-    assert_eq!(pgp::pub_encrypt(b"x", &rsa_pub, None, false).unwrap_err(), consts::PGCRYPTO_BUG);
-    assert_eq!(pgp::pub_encrypt(b"x", &elg_pub, None, false).unwrap_err(), consts::PGCRYPTO_BUG);
+    assert_eq!(pgp::pub_encrypt(b"x", &rsa_pub, None, false).unwrap_err().message, consts::PGCRYPTO_BUG);
+    assert_eq!(pgp::pub_encrypt(b"x", &elg_pub, None, false).unwrap_err().message, consts::PGCRYPTO_BUG);
     let rsa_sec = unhex("c71c04000000000100000011010001000001010001010001010001010008");
     let rsa_msg = unhex("c10d030000000000000000010008ff");
     let elg_sec = unhex("c7140400000000100000000101000101000001010002");
@@ -725,5 +753,351 @@ fn zero_modulus_keys_fail_like_openssl() {
             Ok(_) => panic!("decrypt succeeded"),
             Err(e) => assert_eq!(e.message, consts::MATH_FAILED),
         }
+    }
+}
+
+// ===== batch-76 (2026-09-14): pgp_decrypt walks the whole message =====
+
+// A symmetric AES-128 / s2k-mode=0 / passphrase "k" MDC message around
+// `inner`, with the MDC packet header spelled `mdc_hdr` (pgp-decrypt.c:1015
+// parse_symenc_mdc_data: CFB without resync, SHA1 over prefix..header).
+fn sym_mdc_message(inner: &[u8], mdc_hdr: &[u8]) -> Vec<u8> {
+    use pgp::packet::write_packet;
+    let mut s2k = pgp::s2k::S2k::fill(consts::PGP_S2K_SIMPLE, consts::PGP_DIGEST_SHA1, -1).unwrap();
+    s2k.process(consts::PGP_SYM_AES_128, b"k").unwrap();
+    let mut msg = Vec::new();
+    write_packet(&mut msg, consts::PGP_PKT_SYMENC_SESSKEY, &[4, consts::PGP_SYM_AES_128 as u8, 0, consts::PGP_DIGEST_SHA1 as u8]);
+    let mut plain: Vec<u8> = (1..=16).collect();
+    plain.extend_from_slice(&[15, 16]);
+    plain.extend_from_slice(inner);
+    plain.extend_from_slice(mdc_hdr);
+    let mut md = consts::Digest::new(consts::PGP_DIGEST_SHA1).unwrap();
+    md.update(&plain);
+    plain.extend_from_slice(&md.finish());
+    let mut cfb = pgp::cfb::PgpCfb::create(consts::PGP_SYM_AES_128, &s2k.key, false, None, false).unwrap();
+    let mut body = vec![1u8];
+    body.extend_from_slice(&cfb.encrypt(&plain));
+    write_packet(&mut msg, consts::PGP_PKT_SYMENC_DATA_MDC, &body);
+    msg
+}
+
+fn literal_packet(payload: &[u8]) -> Vec<u8> {
+    let mut body = vec![b'b', 0, 0, 0, 0, 0];
+    body.extend_from_slice(payload);
+    let mut pkt = Vec::new();
+    pgp::packet::write_packet(&mut pkt, consts::PGP_PKT_LITERAL_DATA, &body);
+    pkt
+}
+
+fn sym_dbg(msg: &[u8]) -> Result<Vec<u8>, (String, Vec<String>)> {
+    pgp::sym_decrypt(msg, b"k", Some(b"debug=1"), false)
+        .map(|o| o.plaintext)
+        .map_err(|e| (e.message, e.notices))
+}
+
+fn corrupt(notices: &[&str]) -> Result<Vec<u8>, (String, Vec<String>)> {
+    Err((consts::CORRUPT_DATA.to_string(), notices.iter().map(|s| s.to_string()).collect()))
+}
+
+// pgp-decrypt.c:84 parse_new_len / :112 parse_old_len: a chunk over
+// MAX_CHUNK (16 MiB) is "weird length" (batch-76 b1#4 / pgp-decrypt#7).
+#[test]
+fn packet_lengths_are_capped_at_max_chunk() {
+    assert_eq!(pgp::key_id(&unhex("c300d2ff01000001")).unwrap_err(), consts::CORRUPT_DATA);
+    let mut msg = pgp::sym_encrypt(b"x", b"k", None, true).unwrap();
+    msg.extend_from_slice(&unhex("c3ff01000001"));
+    assert_eq!(sym_dbg(&msg), corrupt(&["dbg: parse_new_len: weird length"]));
+}
+
+// pgp-decrypt.c:201 pktreader_pull returns the source EOF as a short read,
+// so pgp_skip_packet (pgp-info.c:179) accepts a truncated body; a stream's
+// next length octet at EOF is still a GETBYTE failure (batch-76 b1#5 /
+// pgp-decrypt#8 / mbuf#2).
+#[test]
+fn skip_packet_accepts_truncated_bodies() {
+    assert_eq!(pgp::key_id(&unhex("c301")).unwrap(), "SYMKEY");
+    assert_eq!(pgp::key_id(&unhex("c3e1")).unwrap(), "SYMKEY");
+    assert_eq!(pgp::key_id(&unhex("c3e100")).unwrap(), "SYMKEY");
+    assert_eq!(pgp::key_id(&unhex("c3e10000")).unwrap_err(), consts::CORRUPT_DATA);
+    assert_eq!(pgp::key_id(&unhex("c40a")).unwrap_err(), consts::CORRUPT_DATA);
+}
+
+// pgp-decrypt.c:1108 pgp_decrypt keeps walking after the data packet,
+// dispatches session-key packets by tag and diagnoses repeats (batch-76
+// pgp-decrypt#3 / #4 / #5 / #6).
+#[test]
+fn message_walk_follows_pgp_decrypt() {
+    let msg = pgp::sym_encrypt(b"x", b"k", Some(b"s2k-mode=0"), true).unwrap();
+    let cat = |a: &[u8], b: &[u8]| [a, b].concat();
+    assert_eq!(sym_dbg(&cat(&msg, &[0])), corrupt(&["dbg: pgp_parse_pkt_hdr: not pkt hdr"]));
+    assert_eq!(sym_dbg(&cat(&msg, &[0xca, 0])).unwrap(), b"x");
+    assert_eq!(sym_dbg(&cat(&msg, &[0xc3])), corrupt(&["dbg: pullf_read_fixed: need=1 got=0"]));
+    assert_eq!(sym_dbg(&cat(&msg, &msg)), corrupt(&["dbg: pgp_decrypt: using first of several keys"]));
+    assert_eq!(sym_dbg(&cat(&msg[..6], &msg)), corrupt(&["dbg: pgp_decrypt: using first of several keys"]));
+    assert_eq!(sym_dbg(&cat(&[0xc2, 0], &msg)), corrupt(&["dbg: pgp_decrypt: unknown tag: 0x02"]));
+    assert_eq!(sym_dbg(&msg[6..]), corrupt(&["dbg: pgp_decrypt: have data but no key"]));
+    assert_eq!(sym_dbg(&cat(&msg, &msg[6..])), corrupt(&["dbg: pgp_decrypt: several data pkts not supported"]));
+    let nomdc = pgp::sym_encrypt(b"x", b"k", Some(b"s2k-mode=0,disable-mdc=1"), true).unwrap();
+    assert_eq!(sym_dbg(&cat(&nomdc, &nomdc[6..])), corrupt(&["dbg: pgp_decrypt: got second data packet"]));
+    let mut pubtag = msg.clone();
+    pubtag[0] = 0xc1;
+    assert_eq!(sym_dbg(&pubtag), Err((consts::PGCRYPTO_BUG.to_string(), vec!["dbg: no pubkey?".to_string()])));
+    let mut symtag = msg1();
+    symtag[0] = 0x8d;
+    let err = pgp::pub_decrypt(&symtag, &ctl_sec(), None, Some(b"debug=1"), false).unwrap_err();
+    assert_eq!((err.message.as_str(), &err.notices[..]), (consts::CORRUPT_DATA, &["dbg: bad key pkt ver".to_string()][..]));
+}
+
+// pgp-decrypt.c:873 process_data_packets under NEED_MDC: the MDC packet is
+// parsed by pgp_parse_pkt_hdr (any encoding of length 20), every byte read
+// is hashed, and the MDC filter's EOF / a short MDC body carry mdc_read's
+// and mdc_finish's px_debug (batch-76 pgp-decrypt#9).
+#[test]
+fn mdc_packet_is_walked_like_any_packet() {
+    assert_eq!(sym_dbg(&sym_mdc_message(&literal_packet(b"x"), &[0xd3, 0x14])).unwrap(), b"x");
+    assert_eq!(sym_dbg(&sym_mdc_message(&literal_packet(b"x"), &[0xd3, 0xff, 0, 0, 0, 0x14])).unwrap(), b"x");
+    let msg = pgp::sym_encrypt(b"x", b"k", Some(b"s2k-mode=0"), true).unwrap();
+    assert_eq!(sym_dbg(&msg[..msg.len() - 5]), corrupt(&["dbg: mdc_finish: read failed, res=15"]));
+    assert_eq!(sym_dbg(&msg[..msg.len() - 30]), corrupt(&["dbg: mdc_read: unexpected eof"]));
+    assert_eq!(sym_dbg(&msg[..9]), corrupt(&["dbg: mdc_read: unexpected eof"]));
+}
+
+// pgp-decrypt.c:788 parse_literal_data reads the payload until the packet
+// reader's EOF, so without an MDC a truncated payload is returned as is
+// while a truncated header is "unexpected eof".
+#[test]
+fn no_mdc_literal_accepts_a_truncated_payload() {
+    let msg = pgp::sym_encrypt(b"hello", b"k", Some(b"s2k-mode=0,disable-mdc=1,compress-algo=0"), true).unwrap();
+    assert_eq!(sym_dbg(&msg[..msg.len() - 2]).unwrap(), b"hel");
+    assert_eq!(sym_dbg(&msg[..msg.len() - 7]), corrupt(&["dbg: parse_literal_data: unexpected eof"]));
+    assert_eq!(sym_dbg(&msg[..26]), corrupt(&["dbg: process_data_packets: no data"]));
+}
+
+// pgp-compress.c:298 decompress_read: after Z_STREAM_END one more source
+// read must be empty; the decompressor's input arrives in reads the decrypt
+// filter cuts at 4096 bytes, so bytes in the read that ended the stream are
+// not "extra" (batch-76 b1#3 / bug_36a6958c).
+#[test]
+fn compressed_stream_extra_bytes_follow_the_read_window() {
+    let comp = pgp::compress::deflate_raw(&literal_packet(b"x"), 6);
+    let packet = |total: usize| {
+        let mut body = vec![consts::PGP_COMPR_ZIP as u8];
+        body.extend_from_slice(&comp);
+        body.resize(total, 0);
+        let mut pkt = Vec::new();
+        pgp::packet::write_packet(&mut pkt, consts::PGP_PKT_COMPRESSED_DATA, &body);
+        sym_mdc_message(&pkt, &[0xd3, 0x14])
+    };
+    assert_eq!(sym_dbg(&packet(1 + comp.len())).unwrap(), b"x");
+    assert_eq!(sym_dbg(&packet(1 + comp.len() + 100)).unwrap(), b"x");
+    assert_eq!(sym_dbg(&packet(4097)).unwrap(), b"x");
+    let extra = corrupt(&["dbg: decompress_read: extra bytes after end of stream"]);
+    assert_eq!(sym_dbg(&packet(4098)), extra);
+    assert_eq!(sym_dbg(&packet(8193)), extra);
+}
+
+// pgp-pubdec.c:243 pgp_expect_packet_end after the session-key MPI(s)
+// (batch-76 b2#5 / pgp-decrypt#10 / bug_094e1212).
+#[test]
+fn pubenc_sesskey_trailing_bytes_are_rejected() {
+    let raw = msg1();
+    let mut rdr = pgp::packet::PktReader::new(&raw);
+    let hdr = rdr.read_hdr().unwrap().unwrap();
+    assert_eq!(hdr.tag, consts::PGP_PKT_PUBENC_SESSKEY);
+    let body = rdr.read_body_avail(&hdr).unwrap().data;
+    let rest = &raw[rdr.pos..];
+    let mut extended = body.clone();
+    extended.push(0);
+    let mut msg = Vec::new();
+    pgp::packet::write_packet(&mut msg, consts::PGP_PKT_PUBENC_SESSKEY, &extended);
+    msg.extend_from_slice(rest);
+    let err = pgp::pub_decrypt(&msg, &ctl_sec(), None, Some(b"debug=1"), false).unwrap_err();
+    assert_eq!(err.message, consts::CORRUPT_DATA);
+    assert_eq!(err.notices, ["dbg: pgp_expect_packet_end: got data"]);
+    assert_eq!(pgp::pub_decrypt(&raw, &ctl_sec(), None, None, false).unwrap().plaintext, b"Secret msg");
+}
+
+// pgp-mpi-openssl.c:45 mpi_to_bn: the declared bit count must equal
+// BN_num_bits of the value (batch-76 b2#4).
+#[test]
+fn mpi_declared_bits_must_match_the_value() {
+    let mut msg = msg1();
+    let bits = ((msg[13] as usize) << 8) | msg[14] as usize;
+    let declared = if bits % 8 != 1 { bits - 1 } else { bits + 1 };
+    msg[13] = (declared >> 8) as u8;
+    msg[14] = declared as u8;
+    let err = pgp::pub_decrypt(&msg, &ctl_sec(), None, Some(b"debug=1"), false).unwrap_err();
+    assert_eq!(err.message, consts::MATH_FAILED);
+    assert_eq!(err.notices, [format!("dbg: mpi_to_bn: bignum conversion failed: mpi={declared}, bn={bits}")]);
+}
+
+// pgp-pubkey.c:529 internal_read_key frees the public subkey's reader
+// without draining it: a trailing byte is parsed as the next header
+// (batch-76 pgp-pubkey#1).
+#[test]
+fn public_subkey_tail_is_parsed_as_a_header() {
+    let key = |tail: &str| unhex(&format!("{}{}{}", "040000000001040080", "00".repeat(126), tail));
+    let mut exact = vec![0xce, 0x8b];
+    exact.extend_from_slice(&key("01000101"));
+    assert!(pgp::pub_encrypt(b"x", &exact, None, true).is_ok());
+    let mut trailing = vec![0xce, 0x8c];
+    trailing.extend_from_slice(&key("0100010100"));
+    assert_eq!(pgp::pub_encrypt(b"x", &trailing, None, true).unwrap_err().message, consts::CORRUPT_DATA);
+}
+
+// mbuf.c:79 prepare_room: the decrypt output MBuf (pgp-pgsql.c:479,
+// VARSIZE_ANY(data) + 2048) grows by 2*STEP per append, and the growth
+// past MaxAllocSize is mcxt.c's error with that request size (batch-76
+// mbuf#3). The 1 GB plaintext is stood in for by a capacity near the top.
+#[test]
+fn decrypt_output_grows_like_prepare_room() {
+    let mut ctx = pgp::context::PgpContext::default();
+    ctx.mbuf_cap = ::mcx::MAX_ALLOC_SIZE - 10;
+    assert_eq!(
+        pgp::decrypt::mbuf_room(&mut ctx, ::mcx::MAX_ALLOC_SIZE - 9).unwrap_err(),
+        format!("invalid memory alloc request size {}", ::mcx::MAX_ALLOC_SIZE - 10 + 32768)
+    );
+    ctx.mbuf_cap = 1_071_735;
+    assert_eq!(pgp::decrypt::mbuf_room(&mut ctx, 1_073_732_216).unwrap_err(), "invalid memory alloc request size 1073764983");
+    let msg = pgp::sym_encrypt(b"hello world", b"k", Some(b"s2k-mode=0,compress-algo=0"), true).unwrap();
+    let mut ctx = pgp::context::PgpContext::default();
+    ctx.text_mode = 1;
+    ctx.mbuf_cap = 5;
+    assert_eq!(pgp::decrypt::decrypt_symmetric(&mut ctx, &msg, b"k").unwrap(), b"hello world");
+    assert_eq!(ctx.mbuf_cap, 5 + 32768);
+}
+
+// pgp-armor.c:222: enlargeStringInfo(pg_base64_enc_len(len)) after the
+// header lines; armor(800 MB) on C 18.6 is 54000 "Cannot enlarge string
+// buffer containing 29 bytes by 1080701755 more bytes." (batch-76 pgp-armor#2).
+#[test]
+fn armor_estimate_matches_pg_base64_enc_len() {
+    assert_eq!(pgp::armor::base64_enc_len(800_000_000), 1_080_701_755);
+    assert_eq!(pgp::armor::armor_header_len(&[], &[]), 29);
+    assert_eq!(pgp::armor::armor_header_len(&[b"k".to_vec()], &[b"vv".to_vec()]), 29 + 6);
+    assert!(stringinfo::enlarge_target(29, 29, 1_080_701_755).is_err());
+    assert!(stringinfo::enlarge_target(29, 29, pgp::armor::base64_enc_len(700_000_000)).is_ok());
+}
+
+// pgp-encrypt.c:397 init_litdata_packet stores time(NULL) in the literal
+// packet's creation-time field (batch-76 pgp-encrypt#4).
+#[test]
+fn literal_packet_carries_the_creation_time() {
+    let before = ::pg_clock::wall_timeval().0 as u32;
+    let msg = pgp::sym_encrypt(b"x", b"k", Some(b"s2k-mode=0,disable-mdc=1,compress-algo=0"), false).unwrap();
+    let after = ::pg_clock::wall_timeval().0 as u32;
+    let mut s2k = pgp::s2k::S2k::fill(consts::PGP_S2K_SIMPLE, consts::PGP_DIGEST_SHA1, -1).unwrap();
+    s2k.process(consts::PGP_SYM_AES_128, b"k").unwrap();
+    let mut rdr = pgp::packet::PktReader::new(&msg);
+    rdr.read_hdr().unwrap().unwrap();
+    rdr.read_body_avail(&pgp::packet::PktHdr { tag: 3, len: Some(4), partial: false }).unwrap();
+    let hdr = rdr.read_hdr().unwrap().unwrap();
+    assert_eq!(hdr.tag, consts::PGP_PKT_SYMENC_DATA);
+    let body = rdr.read_body_avail(&hdr).unwrap().data;
+    let mut cfb = pgp::cfb::PgpCfb::create(consts::PGP_SYM_AES_128, &s2k.key, true, None, false).unwrap();
+    let plain = cfb.decrypt(&body);
+    assert_eq!(&plain[18..22], &[0xcb, 7, b'b', 0]);
+    let t = u32::from_be_bytes([plain[22], plain[23], plain[24], plain[25]]);
+    assert!(before <= t && t <= after, "{before} <= {t} <= {after}");
+}
+
+// pgp.c:180 pgp_load_digest: an S2K digest code outside the table is
+// PXE_PGP_CORRUPT_DATA, not PXE_PGP_UNSUPPORTED_HASH — in a symmetric
+// session-key packet (pgp-s2k.c:288) and in a protected secret subkey
+// (pgp-pubkey.c:369) (batch-239 b2#6).
+#[test]
+fn unknown_s2k_digest_code_is_corrupt_data() {
+    let err = pgp::sym_decrypt(&unhex("c30404070077"), b"k", Some(b"debug=1"), false).unwrap_err();
+    assert_eq!((err.message.as_str(), err.notices.len()), (consts::CORRUPT_DATA, 0));
+    assert_eq!(pgp::sym_decrypt(&unhex("c30404070008"), b"k", None, false).unwrap_err().message, consts::CORRUPT_DATA);
+    let key = unhex("c713040000000010000101000202000101ff070077");
+    let err = pgp::pub_decrypt(&[0], &key, Some(b"p"), Some(b"debug=1"), false).unwrap_err();
+    assert_eq!((err.message.as_str(), err.notices.len()), (consts::CORRUPT_DATA, 0));
+    assert!(consts::Digest::load(consts::PGP_DIGEST_SHA256).is_ok());
+}
+
+// pgp-decrypt.c:634 parse_symenc_sesskey / pgp-s2k.c:253 pgp_s2k_read /
+// mbuf.c:311 pullf_read_fixed: every short read, the bad separate-key
+// length and decrypt_key's length check leave their px_debug line
+// (batch-239 mbuf#4, pgp-decrypt#11).
+#[test]
+fn symenc_sesskey_short_reads_are_debugged() {
+    let dbg = |hex: &str| {
+        let err = pgp::sym_decrypt(&unhex(hex), b"k", Some(b"debug=1"), false).unwrap_err();
+        assert_eq!(err.message, consts::CORRUPT_DATA, "{hex}");
+        err.notices
+    };
+    assert_eq!(dbg("c30104"), ["dbg: pullf_read_fixed: need=1 got=0"]);
+    assert_eq!(dbg("c3020407"), ["dbg: pullf_read_fixed: need=1 got=0"]);
+    assert_eq!(dbg("c3020507"), ["dbg: bad key pkt ver"]);
+    assert_eq!(dbg("c304040700"), ["dbg: pullf_read_fixed: need=1 got=0"]);
+    assert_eq!(dbg("c30604070108aabb"), ["dbg: pullf_read_fixed: need=8 got=2"]);
+    assert_eq!(dbg("c30c04070308000000000000000000"), ["dbg: pullf_read_fixed: need=1 got=0"]);
+    assert_eq!(dbg("c309040700080102030405"), ["dbg: expect key, but bad data"]);
+    assert_eq!(dbg(&format!("c31504070008{}", "00".repeat(17))), ["dbg: sesskey bad len: algo=214, expected=0, got=16"]);
+    assert_eq!(dbg(&format!("c32604070008{}", "00".repeat(34))), ["dbg: expect key, but bad data"]);
+    assert_eq!(dbg(&format!("c32504070008{}", "00".repeat(33))), ["dbg: sesskey bad len: algo=214, expected=0, got=32"]);
+}
+
+// pgp-pubdec.c:172 pgp_parse_pubenc_sesskey: the version byte, then the
+// 8-byte key id (compared before the algorithm byte is read), each short
+// read debugged (batch-239 b2#8).
+#[test]
+fn pubenc_sesskey_key_id_is_checked_before_the_algorithm() {
+    let key = unhex("c715040000000010000101000202000101000001010002");
+    let run = |hex: &str| pgp::pub_decrypt(&unhex(hex), &key, Some(b""), Some(b"debug=1"), false).unwrap_err();
+    let err = run("c10903ffffffffffffffff");
+    assert_eq!((err.message.as_str(), &err.notices[..]), ("Wrong key", &["dbg: key_id's does not match".to_string()][..]));
+    let err = run("c10503ffffffff");
+    assert_eq!((err.message.as_str(), &err.notices[..]), (consts::CORRUPT_DATA, &["dbg: pullf_read_fixed: need=8 got=4".to_string()][..]));
+    let err = run("c10003");
+    assert_eq!(err.notices, ["dbg: pullf_read_fixed: need=1 got=0"]);
+    let err = run("c10a030000000000000000");
+    assert_eq!(err.notices, ["dbg: pullf_read_fixed: need=1 got=0"]);
+}
+
+// pgp-pubkey.c px_debug trail of the key readers: check_key_cksum (:331),
+// process_secret_key's hide type (:405), _pgp_read_public_key's algorithm
+// (:235), internal_read_key's packet tag (:524), pgp_mpi_read short reads
+// (pgp-mpi.c:87) and pgp_expect_packet_end (:449) — on pgp_pub_decrypt AND
+// pgp_pub_encrypt (batch-239 pgp-pubkey#5).
+#[test]
+fn key_reader_debug_trail_follows_c() {
+    let dec = |hex: &str| pgp::pub_decrypt(&[0], &unhex(hex), Some(b""), Some(b"debug=1"), false).unwrap_err();
+    let err = dec("c715040000000010000101000202000101000001010003");
+    assert_eq!((err.message.as_str(), &err.notices[..]), ("Corrupt key packet", &["dbg: key cksum check failed".to_string()][..]));
+    let err = dec("c71004000000001000010100020200010105");
+    assert_eq!((err.message.as_str(), &err.notices[..]), ("Corrupt key packet", &["dbg: unknown hide type".to_string()][..]));
+    assert_eq!(dec("c70e04000000001000010100020200010105").notices, ["dbg: pullf_read_fixed: need=1 got=0"]);
+    let err = dec("c706040000000099");
+    assert_eq!((err.message.as_str(), &err.notices[..]), (consts::UNKNOWN_PUBALGO, &["dbg: unknown public algo: 153".to_string()][..]));
+    let err = dec("c400");
+    assert_eq!((err.message.as_str(), &err.notices[..]), ("Unexpected packet in key data", &["dbg: unknown/unexpected packet: 4".to_string()][..]));
+    assert_eq!(dec("c70d040000000010000101000202000101").notices, ["dbg: pullf_read_fixed: need=2 got=1"]);
+    assert_eq!(dec("c7050400000000").notices, ["dbg: pullf_read_fixed: need=1 got=0"]);
+    assert_eq!(dec("c70304000000").notices, ["dbg: pullf_read_fixed: need=4 got=2"]);
+    assert_eq!(dec("c70a040000000010000101").notices, ["dbg: pullf_read_fixed: need=2 got=0"]);
+    let err = dec("c714040000000010000101000202000101fe00000000");
+    assert_eq!((err.message.as_str(), err.notices.len()), (consts::UNSUPPORTED_CIPHER, 0));
+    assert_eq!(dec("c71104000000001000010100020200010100000101").notices, ["dbg: pullf_read_fixed: need=2 got=1"]);
+    let err = dec("c71604000000001000010100020200010100000101000200");
+    assert_eq!((err.message.as_str(), &err.notices[..]), (consts::CORRUPT_DATA, &["dbg: pgp_expect_packet_end: got data".to_string()][..]));
+    let err = pgp::pub_encrypt(b"x", &unhex("ce06040000000099"), Some(b"debug=1"), true).unwrap_err();
+    assert_eq!((err.message.as_str(), &err.notices[..]), (consts::UNKNOWN_PUBALGO, &["dbg: unknown public algo: 153".to_string()][..]));
+    assert_eq!(pgp::key_id(&unhex("c71004000000001000010100020200010105")), Ok("772270DC92C673F3".to_string()));
+    assert_eq!(pgp::key_id(&unhex("c70e04000000001000010100020200010105")).unwrap_err(), consts::CORRUPT_DATA);
+}
+
+// px.c:206 combo_init hands the cipher a zeroed key buffer with klen 0:
+// BF_set_key (bf_skey.c:38) cycles key[0] into every P-array word and
+// CAST_set_key (c_skey.c:41) zero-fills x[], so an empty key is the
+// one-byte zero key, not a failure (batch-239 openssl#4).
+#[test]
+fn empty_blowfish_and_cast5_keys_are_zero_keys() {
+    let d = b"0123456789abcdef";
+    for spec in ["bf", "bf-ecb", "cast5", "cast5-ecb"] {
+        let ct = cipher::encrypt(spec, b"", &[], d).ok().expect(spec);
+        assert_eq!(ct, cipher::encrypt(spec, &[0], &[], d).ok().unwrap(), "{spec}");
+        assert_eq!(cipher::decrypt(spec, b"", &[], &ct).ok().unwrap(), d, "{spec}");
     }
 }

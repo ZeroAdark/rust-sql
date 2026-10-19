@@ -4,7 +4,6 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use alloc::format;
 
 use adt_json::jsonapi::{JsonLex, JsonLexDe, JsonSem, JsonSemToken};
 use adt_numeric::Num;
@@ -69,12 +68,10 @@ pub fn parse_jsonb_index_flags(mcx: Mcx<'_>, jb: &[u8]) -> PgResult<u32> {
         } else if s.eq_ignore_ascii_case(b"boolean") {
             flags |= JTI_BOOL;
         } else {
-            return Err(flag_error(
-                format!(
-                    "wrong flag in flag array: \"{}\"",
-                    alloc::string::String::from_utf8_lossy(s)
-                ),
-                true,
+            return Err(Box::new(
+                PgError::error_bytes("wrong flag in flag array: \"", s, "\"")
+                    .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE)
+                    .with_hint(FLAG_HINT),
             ));
         }
     }

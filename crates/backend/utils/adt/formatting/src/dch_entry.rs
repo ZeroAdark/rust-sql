@@ -265,7 +265,7 @@ fn dtk_date_m() -> i32 {
 }
 
 fn dterr(code: i32, s: &[u8], escontext: Option<&mut SoftErrorContext>) -> PgResult<()> {
-    DateTimeParseError(code, None, &String::from_utf8_lossy(s), "timestamp", escontext)
+    DateTimeParseError(code, None, s, "timestamp", escontext)
 }
 
 /// C: `do_to_timestamp` (formatting.c:4442).

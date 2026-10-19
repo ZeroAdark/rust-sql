@@ -705,13 +705,13 @@ pub static ConfigureNamesBool: &[GucBoolSetting] = &[
     // also set it. Off => the pool is never spawned, so the whole runtime
     // engine stays inert (every arm falls back to the serial/Gather plan).
     GucBoolSetting { name: "pgrust.runtime", context: PGC_POSTMASTER, group: CUSTOM_OPTIONS, short_desc: Some("Enables the pgrust morsel runtime worker pool (the parallel analytics engine)."), long_desc: Some("Off restores the pool-less process exactly. The PGRUST_RUNTIME environment variable seeds the startup default."), flags: 0, variable: &vars::pgrust_runtime, boot_val: GucDefaultValue::Bool(true), check_hook: None, assign_hook: None, show_hook: None },
-    // pgrust.runtime_vacuum_pool (pgrust-only, GL-M41-3 flip): parallel
+    // pgrust.runtime_vacuum_pool (pgrust-only, regression flip): parallel
     // VACUUM's driver on the morsel-pool workers (M4.1 ⊕ Q2). PGC_POSTMASTER
     // (the reader is a per-process cell consulted at each vacuum; the pool
     // identity glue it composes with is spawn-time), default ON since the
     // train-40 flip. Off restores the launched bgworker gang exactly.
     GucBoolSetting { name: "pgrust.runtime_vacuum_pool", context: PGC_POSTMASTER, group: CUSTOM_OPTIONS, short_desc: Some("Runs parallel VACUUM's workers on the pgrust runtime worker pool."), long_desc: Some("Off restores the launched background-worker vacuum gang exactly. The PGRUST_RUNTIME_VACUUM_POOL environment variable seeds the startup default (0 or off disables)."), flags: 0, variable: &vars::pgrust_runtime_vacuum_pool, boot_val: GucDefaultValue::Bool(true), check_hook: None, assign_hook: None, show_hook: None },
-    // pgrust.memory_watchdog (pgrust-only, GL-MEMWATCH-1): master switch for
+    // pgrust.memory_watchdog (pgrust-only, regression): master switch for
     // the postmaster memory-watchdog sampler. PGC_SIGHUP: the watchdog thread
     // re-reads the cell each tick, so ops can arm/disarm on a running server.
     // Default ON — the sampler is off every query path (a 1s tick reading
@@ -742,7 +742,7 @@ pub static ConfigureNamesBool: &[GucBoolSetting] = &[
     // (the C reference file is shipped), and this is a per-connection knob.
     GucBoolSetting { name: "pgrust.admission_bypass", context: PGC_BACKEND, group: CUSTOM_OPTIONS, short_desc: Some("Claims a reserved connection slot instead of waiting in the connection admission queue."), long_desc: Some("Sent in the startup packet by superusers and pg_use_reserved_connections members who must not wait behind queued connections. The claim is verified after authentication: a connection that claims it without the privilege is refused with the reserved-slots error. No effect when connection_queue_size is 0."), flags: 0, variable: &vars::pgrust_admission_bypass, boot_val: GucDefaultValue::Bool(false), check_hook: None, assign_hook: None, show_hook: None },
     GucBoolSetting { name: "shared_catalog_cache", context: PGC_POSTMASTER, group: RESOURCES_MEM, short_desc: Some("Enables the shared catalog cache from which sessions adopt relation and catalog cache entries."), long_desc: Some("When off, every session builds all cache entries privately from the system catalogs, as stock PostgreSQL does."), flags: 0, variable: &vars::shared_catalog_cache, boot_val: GucDefaultValue::Bool(true), check_hook: None, assign_hook: None, show_hook: None },
-    // pgrust.memory_watchdog_dump (pgrust-only, GL-MEMWATCH-1): on a threshold
+    // pgrust.memory_watchdog_dump (pgrust-only, regression): on a threshold
     // breach, additionally signal every live backend to log its memory-context
     // tree (the pg_log_backend_memory_contexts machinery, fanned out).
     GucBoolSetting { name: "pgrust.memory_watchdog_dump", context: PGC_SIGHUP, group: CUSTOM_OPTIONS, short_desc: Some("Requests memory-context dumps from all backends when the memory watchdog fires."), long_desc: None, flags: 0, variable: &vars::pgrust_memory_watchdog_dump, boot_val: GucDefaultValue::Bool(true), check_hook: None, assign_hook: None, show_hook: None },
@@ -996,7 +996,7 @@ pub static ConfigureNamesInt: &[GucIntSetting] = &[
     // pgrust.condition_cache_size: the condition cache's LRU byte budget
     // (default 100MB — ClickHouse's query_condition_cache_size default).
     GucIntSetting { name: "pgrust.condition_cache_size", context: PGC_USERSET, group: CUSTOM_OPTIONS, short_desc: Some("Sets the memory budget of the pgrcolumnar condition cache."), long_desc: None, flags: GUC_UNIT_KB, variable: &vars::pgrust_condition_cache_size, boot_val: GucDefaultValue::Int(102400), min: 0, max: MAX_KILOBYTES, check_hook: None, assign_hook: None, show_hook: None },
-    // pgrust.memory_watchdog family ints (pgrust-only, GL-MEMWATCH-1).
+    // pgrust.memory_watchdog family ints (pgrust-only, regression).
     GucIntSetting { name: "pgrust.memory_watchdog_interval", context: PGC_SIGHUP, group: CUSTOM_OPTIONS, short_desc: Some("Sets the memory watchdog sampling interval."), long_desc: None, flags: GUC_UNIT_MS, variable: &vars::pgrust_memory_watchdog_interval, boot_val: GucDefaultValue::Int(1000), min: 100, max: 60 * 1000, check_hook: None, assign_hook: None, show_hook: None },
     GucIntSetting { name: "pgrust.memory_watchdog_threshold", context: PGC_SIGHUP, group: CUSTOM_OPTIONS, short_desc: Some("Sets the memory watchdog's base warning threshold as a percent of the memory limit."), long_desc: Some("Escalation tiers derive from the base T as T, T + (100-T)/2 and T + 3*(100-T)/4 (80 -> 80/90/95); each tier logs once per excursion above the base."), flags: 0, variable: &vars::pgrust_memory_watchdog_threshold, boot_val: GucDefaultValue::Int(80), min: 1, max: 100, check_hook: None, assign_hook: None, show_hook: None },
     GucIntSetting { name: "pgrust.memory_watchdog_limit", context: PGC_SIGHUP, group: CUSTOM_OPTIONS, short_desc: Some("Sets the absolute memory limit the watchdog thresholds apply to (0 = use the cgroup v2 memory limit)."), long_desc: None, flags: GUC_UNIT_MB, variable: &vars::pgrust_memory_watchdog_limit, boot_val: GucDefaultValue::Int(0), min: 0, max: i32::MAX, check_hook: None, assign_hook: None, show_hook: None },

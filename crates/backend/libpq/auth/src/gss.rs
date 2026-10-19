@@ -481,7 +481,7 @@ fn pg_GSS_checkauth(state: &mut GssState<'_>) -> PgResult<i32> {
     hba::check_usermap(
         hba.usermap.as_deref(),
         port.user_name.as_deref().unwrap_or(""),
-        map_user,
+        map_user.as_bytes(),
         caseins,
     )
 }

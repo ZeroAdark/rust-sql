@@ -33,7 +33,7 @@ fn setup() {
         pgstat_seams::pgstat_set_session_end_cause_fatal::set(|| {});
         init_small_seams::my_proc_pid::set(|| std::process::id() as i32);
         ipc_seams::proc_exit::set(|code, _pid| panic!("proc_exit({code})"));
-        // GL-SHMSEAM-1: the shipped foreign-segment probe, not a stub — these
+        // regression: the shipped foreign-segment probe, not a stub — these
         // tests are the regression bar for the migrate-from-C boot path.
         sysv_shmem::init_seams();
     });
@@ -323,6 +323,19 @@ fn lockfile_lifecycle() {
     UnlinkLockFiles(0, 0);
     assert!(std::fs::metadata(DIRECTORY_LOCK_FILE).is_err());
     assert!(std::fs::metadata(format!("{socketfile}.lock")).is_err());
+
+    // miscinit.c:1275 open(..., pg_file_create_mode): a group-access cluster's
+    // lock files are 0640, not a hard-wired 0600.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fd::vfd::set_pg_file_create_mode(0o640);
+        CreateDataDirLockFile(true).unwrap();
+        let mode = std::fs::metadata(DIRECTORY_LOCK_FILE).unwrap().permissions().mode() & 0o777;
+        fd::vfd::set_pg_file_create_mode(0o600);
+        UnlinkLockFiles(0, 0);
+        assert_eq!(mode, 0o640);
+    }
 }
 
 #[test]
@@ -342,7 +355,7 @@ fn stale_lockfile_from_dead_pid_is_replaced() {
 //
 // C writes eight lines (pidfile.h) and line 7 carries the System V shared
 // memory key and id. pgrust creates no SysV segment and leaves that line
-// blank, so before GL-SHMSEAM-1 the orphaned-segment interlock below reached
+// blank, so before regression the orphaned-segment interlock below reached
 // an uninstalled seam and the server *panicked* on first contact with any data
 // directory a C postmaster had ever held. Every case here asserts the clean
 // C-shaped FATAL instead: message, hint, SQLSTATE, exit code 1, and no panic

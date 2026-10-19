@@ -47,7 +47,8 @@ pub use lookup::{
     TypenameGetTypidExtended, RVR_MISSING_OK, RVR_NOWAIT, RVR_SKIP_LOCKED,
 };
 pub use path::{
-    assign_search_path, check_search_path, fetch_search_path, fetch_search_path_array,
+    active_search_path, assign_search_path, check_search_path, fetch_search_path,
+    fetch_search_path_array,
     CopySearchPathMatcher, GetSearchPathMatcher, InitializeSearchPath, SearchPathMatcher,
     SearchPathMatchesCurrentEnvironment,
 };
@@ -433,6 +434,7 @@ pub fn init_seams() {
     namespace_seams::get_temp_namespace_proc_number::set(GetTempNamespaceProcNumber);
     namespace_seams::initialize_search_path::set(InitializeSearchPath);
     namespace_seams::fetch_search_path::set(fetch_search_path);
+    namespace_seams::active_search_path::set(active_search_path);
     namespace_seams::find_default_conversion_proc::set(lookup::FindDefaultConversionProc);
     namespace_seams::get_collation_oid::set(lookup::get_collation_oid);
     namespace_seams::get_ts_config_oid::set(lookup::get_ts_config_oid);
@@ -440,6 +442,7 @@ pub fn init_seams() {
     namespace_seams::opername_get_oprid::set(lookup::OpernameGetOprid);
     namespace_seams::opername_get_candidate_oids::set(opername_get_candidate_oids);
     namespace_seams::type_is_visible::set(visibility::TypeIsVisible);
+    namespace_seams::relation_is_visible::set(visibility::RelationIsVisible);
     namespace_seams::lookup_explicit_namespace::set(lookup::LookupExplicitNamespace);
     namespace_seams::my_temp_namespace::set(my_temp_namespace);
 

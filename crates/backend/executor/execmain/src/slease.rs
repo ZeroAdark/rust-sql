@@ -1,16 +1,16 @@
 //! SERIAL LEASE v2 — floor-gated, donation-aware CPU-seat accounting for
-//! session threads (GL-SLEASE-2; Michael's rebuild charter).
+//! session threads (regression; Michael's rebuild charter).
 //!
-//! WHAT IT IS FOR (unchanged since GL-SLEASE-1): one permit ledger for the
+//! WHAT IT IS FOR (unchanged since regression): one permit ledger for the
 //! whole machine — the runtime's execution-permit semaphore accounts pool
 //! workers; the lease accounts session threads into the SAME ledger, so
 //! sustained serial CPU and pool parallelism cannot oversubscribe cores.
 //!
-//! WHY v1 DIED (GL-RO-BISECT-2): v1 acquired a permit on EVERY top-level
+//! WHY v1 DIED (regression): v1 acquired a permit on EVERY top-level
 //! ExecutorRun and HELD IT ACROSS BLOCKING I/O. With permits =
 //! available_parallelism, an OLTP posture with backends >> cores convoyed
 //! 32-64 I/O-bound backends over ~4 permits (witnessed ~20pp read-only
-//! C-ratio collapse; scratchpad/night/GL-RO-BISECT-2-letter.md).
+//! C-ratio collapse; scratchpad/night/regression-letter.md).
 //!
 //! THE v2 MECHANISM — two composed rules, both at session altitude:
 //!
@@ -18,7 +18,7 @@
 //!    slot (a handful of relaxed stores — no lock, no semaphore traffic)
 //!    and nothing else. A background sweeper (spawned on first armed enter)
 //!    scans slots at a fixed cadence; a run whose ACTIVE age — wall age
-//!    minus its reported-wait time (GL-SLEASE-3: the wait-seam wrappers
+//!    minus its reported-wait time (regression: the wait-seam wrappers
 //!    stamp every C-parity blocking span into the slot's blocked ledger, so
 //!    an I/O-bound run is never counted "expensive" for its storage/client
 //!    waits; `PGRUST_RUNTIME_SERIAL_LEASE_WALLAGE=1` restores the v2
@@ -61,7 +61,7 @@
 //! reaches deeper into the executor than the blocking points require, so
 //! task-ified serial execution deletes this file and four call sites.
 //!
-//! DEFAULT OFF (the GL-RO-BISECT-2 re-flip posture): `armed()` keeps the
+//! DEFAULT OFF (the regression re-flip posture): `armed()` keeps the
 //! t35 spelling — `PGRUST_RUNTIME_SERIAL_LEASE=1` arms; anything else is
 //! the unleased pre-flip posture, byte-exact (no sweeper thread, no seam
 //! wrappers, no tap — seams_init installs the stock reporters).
@@ -88,14 +88,14 @@ use pgsync::{Mutex, OnceLock};
 // Knobs (process-constant, OnceLock-cached — the lane-knob class).
 // ---------------------------------------------------------------------------
 
-/// The arming knob — t35 exact spelling, `=1` arms (GL-RO-BISECT-2 re-flip:
+/// The arming knob — t35 exact spelling, `=1` arms (regression re-flip:
 /// the unarmed default is the unleased posture, byte-exact).
 pub fn armed() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var("PGRUST_RUNTIME_SERIAL_LEASE").is_ok_and(|v| v.trim() == "1"))
 }
 
-/// GL-SLEASE-3 attribution arm: `PGRUST_RUNTIME_SERIAL_LEASE_SWEEPER=0`
+/// regression attribution arm: `PGRUST_RUNTIME_SERIAL_LEASE_SWEEPER=0`
 /// keeps the armed posture but never spawns the sweeper (t35 kill spelling,
 /// default ON). Armed-but-unswept = slot stores + seam wrappers only: no
 /// run is ever flagged, so no admission and no permit is ever held — the
@@ -109,7 +109,7 @@ pub fn sweeper_enabled() -> bool {
     })
 }
 
-/// GL-SLEASE-3 attribution arm: `PGRUST_RUNTIME_SERIAL_LEASE_DONATION=0`
+/// regression attribution arm: `PGRUST_RUNTIME_SERIAL_LEASE_DONATION=0`
 /// keeps the armed posture (slots + sweeper + safe-point admission) but
 /// leaves the wait-report seams STOCK — no donation wrappers, no IN_WAIT
 /// bracketing (seams_init consults this). An admitted run then HOLDS its
@@ -122,7 +122,7 @@ pub fn donation_enabled() -> bool {
     })
 }
 
-/// GL-SLEASE-3 fix A/B posture: `PGRUST_RUNTIME_SERIAL_LEASE_WALLAGE=1`
+/// regression fix A/B posture: `PGRUST_RUNTIME_SERIAL_LEASE_WALLAGE=1`
 /// restores the v2 wall-age floor (t35 spelling, =1 arms; default OFF =
 /// ACTIVE-age flagging — wall age minus reported-wait time, see the Slot
 /// blocked ledger). Armed-path-only read; ladder/A-B posture, the shipped
@@ -165,7 +165,7 @@ fn sweep_period() -> Duration {
 fn now_ns() -> u64 {
     // max(1): 0 stays reserved as the slot's "no run" sentinel even for a
     // read in the clock's first nanosecond. Nanosecond resolution because
-    // the blocked-time ledger (GL-SLEASE-3 active-age floor) accumulates
+    // the blocked-time ledger (regression active-age floor) accumulates
     // µs-scale storage-read spans — ms granularity would round them to 0.
     pg_clock::mono_ns().max(1)
 }
@@ -201,7 +201,7 @@ struct Slot {
     /// Box::leak'd — never dangles; timer-thread precedent). Re-pointed on
     /// slot reuse before the slot is re-published.
     interrupt_flag: AtomicPtr<AtomicBool>,
-    /// GL-SLEASE-3 active-age floor: cumulative ns this run spent inside
+    /// regression active-age floor: cumulative ns this run spent inside
     /// C-parity reported wait spans (owner-written via the armed wait-seam
     /// wrappers, sweeper-read; reset at enter). The sweeper's floor compares
     /// ACTIVE age = wall age − blocked − the open span, so an I/O-bound run
@@ -317,7 +317,7 @@ fn set_state(slot: &Slot, s: u8) {
 // ---------------------------------------------------------------------------
 
 fn ensure_sweeper() {
-    // GL-SLEASE-3 ladder arm: armed-but-unswept (see sweeper_enabled).
+    // regression ladder arm: armed-but-unswept (see sweeper_enabled).
     if !sweeper_enabled() {
         return;
     }
@@ -351,7 +351,7 @@ fn sweeper() -> ! {
             let state = slot.state.load(Ordering::Relaxed);
             let flag_it = match state {
                 S_PENDING => {
-                    // GL-SLEASE-3 active-age floor (the fix): the governed
+                    // regression active-age floor (the fix): the governed
                     // quantity is CPU DEMAND, so reported-wait time — the
                     // closed spans' ledger plus the currently-open span —
                     // never counts toward "expensive". An I/O-bound run
@@ -387,7 +387,7 @@ fn sweeper() -> ! {
                 // swap (not store) feeds the floor-crossing census: a
                 // Pending slot flagged from false = exactly one run newly
                 // crossing the floor (Pending leaves the state exactly once
-                // per run; Deficit re-flags don't re-count). GL-SLEASE-3's
+                // per run; Deficit re-flags don't re-count). regression's
                 // admission-census witness — zero-cost when the lanev2
                 // stats arm is off (the tick is armed-gated).
                 slot.admit.swap(true, Ordering::SeqCst);
@@ -518,7 +518,7 @@ impl Drop for SerialLeaseYield {
     }
 }
 
-/// GL-STMTTASK-2 composition bridge (t44): true ⇔ THIS thread's lease state
+/// regression composition bridge (t44): true ⇔ THIS thread's lease state
 /// machine currently HOLDS a permit (S_HELD). The stmt-task inline-execute
 /// path consults this so a lease-admitted session never borrows a SECOND
 /// pool seat. Floor-pending / donated / yielded spans read false — during a
@@ -533,12 +533,12 @@ pub(crate) fn serial_lease_currently_held() -> bool {
 // Donation hooks — called by the armed wait-report seam wrappers
 // (seams_init) on EVERY thread that reports waits; non-session threads and
 // idle sessions fall through on one TLS load + branch. In-run threads
-// additionally stamp the span into the slot's blocked ledger (GL-SLEASE-3
+// additionally stamp the span into the slot's blocked ledger (regression
 // active-age floor) — one mono clock read + a few relaxed slot ops per
 // reported span, paid only while a top-level run is live on the thread.
 // ---------------------------------------------------------------------------
 
-/// Wait span opens: a held permit is donated for the span, and (GL-SLEASE-3
+/// Wait span opens: a held permit is donated for the span, and (regression
 /// active-age floor) an in-run thread stamps the span start into its slot's
 /// blocked ledger. Idle threads (non-session, or a session between runs)
 /// still fall through on one TLS load + branch — the stamping cost lands

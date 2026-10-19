@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 adt_datetime = { path = "../adt_datetime" }
+format_type = { path = "../format_type" }
 adt_timestamp = { path = "../adt_timestamp" }
 numeric = { package = "adt_numeric", path = "../numeric" }
 xact = { path = "../../../access/transam/xact" }
@@ -30,3 +31,6 @@ pgtz = { path = "../../../timezone/pgtz" }
 guc_tables = { path = "../../misc/guc_tables" }
 fd = { path = "../../../storage/file/fd" }
 xact_seams = { path = "../../../access/transam/xact_seams" }
+syscache_seams = { path = "../../cache/syscache_seams" }
+namespace_seams = { path = "../../../catalog/namespace_seams" }
+types_tuple = { path = "../../../../_support/types/types_tuple" }

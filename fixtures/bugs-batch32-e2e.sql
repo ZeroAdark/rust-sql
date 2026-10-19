@@ -5,7 +5,7 @@
 CREATE DATABASE b32e2e TEMPLATE template0 ENCODING 'UTF8';
 \c b32e2e
 \set VERBOSITY verbose
--- fp-fmgr-fmgr#1: SendFunctionCall detoasts (DatumGetByteaP) a compressed or
+-- regression: SendFunctionCall detoasts (DatumGetByteaP) a compressed or
 -- short-header bytea handed back by a SQL-language send function.
 CREATE TABLE b32_big(k int, payload bytea);
 INSERT INTO b32_big VALUES (1, decode(repeat('00', 200000), 'hex'));

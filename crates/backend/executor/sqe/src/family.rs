@@ -166,6 +166,11 @@ pub fn elect_family(
         return Err(Refuse::NoFamilyRule { what: "ungrouped-shape" });
     }
     // grouped shapes ------------------------------------------------------
+    // The FILTER-threaded grouped body (the hash plane's cell foundation)
+    // has no per-group distinct set.
+    if s.has_count_distinct && s.has_agg_filters {
+        return Err(Refuse::AggUnsupported { what: "agg-filter-count-distinct" });
+    }
     // R6: grouped COUNT(DISTINCT) elects the distinct pipeline only when
     // the WHOLE agg set is distinct-shaped. An agg MIX
     // carrying one distinct leg (hot-shape: sum/count/avg + count-distinct) rides

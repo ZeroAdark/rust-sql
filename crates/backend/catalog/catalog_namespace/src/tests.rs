@@ -67,7 +67,7 @@ fn install_fakes() {
         });
         syscache_seams::lookup_pg_class_relid_by_name::set(|relname, nsp| {
             Ok(RELS
-                .with(|m| m.borrow().get(&(relname.to_string(), nsp)).copied())
+                .with(|m| m.borrow().get(&(String::from_utf8_lossy(relname).into_owned(), nsp)).copied())
                 .unwrap_or(InvalidOid))
         });
         inval_seams::accept_invalidation_messages::set(|| Ok(()));

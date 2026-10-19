@@ -5,7 +5,7 @@
 // clone syscalls — presenting the same surface as a C build without
 // HAVE_COPYFILE/HAVE_COPY_FILE_RANGE: the refusal is the stock invalid-value
 // ERROR with the available-values hint, never accepted-then-panic (the
-// GL-INERT-AUDIT-1 incident class).
+// regression incident class).
 
 use types_guc::{GucContext, GucSource};
 

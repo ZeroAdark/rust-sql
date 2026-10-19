@@ -705,16 +705,23 @@ fn file_iterate_foreign_scan<'mcx>(
     };
 
     exectuples::exec_clear_tuple(estate.slot_mut(scan_slot), qmcx);
-    let cstate = festate(node)
-        .expect("fdw_state set by BeginForeignScan")
-        .cstate
-        .as_mut()
-        .expect("cstate live between begin and end");
+    let f = festate(node).expect("fdw_state set by BeginForeignScan");
+    // SAFETY: the cstate's own statement context (begin_copy's restamp);
+    // defaults are re-armed to it after every row.
+    let copy_mcx = unsafe { core::mem::transmute::<Mcx<'_>, Mcx<'static>>(f.copycx.mcx()) };
+    let cstate = f.cstate.as_mut().expect("cstate live between begin and end");
 
     loop {
         let found = {
             let base = estate.slot_mut(scan_slot).base_mut();
-            match cstate.next_copy_from(row_mcx, &mut base.tts_values, &mut base.tts_isnull) {
+            // DEFAULT expressions evaluate in per-tuple memory (file_fdw.c:758).
+            match copy_cmd::next_copy_row(
+                cstate,
+                copy_mcx,
+                row_mcx,
+                &mut base.tts_values,
+                &mut base.tts_isnull,
+            ) {
                 Ok(found) => found,
                 // C reaches this through CopyFromErrorCallback.
                 Err(e) => return Err(copy_cmd::copy_from_error_context(cstate, e)),
@@ -726,7 +733,7 @@ fn file_iterate_foreign_scan<'mcx>(
         if cstate.soft_error_occurred() {
             // Soft error: skip the tuple and rearm the ErrorSaveContext.
             cstate.reset_soft_error();
-            postgres_seams::check_for_interrupts::call()?;
+            copy_cmd::check_for_interrupts_in_copy(cstate)?;
             estate.ecxt_mut(ecxt).reset();
             if cstate.opts.reject_limit > 0
                 && cstate.num_errors() > cstate.opts.reject_limit as u64
@@ -903,7 +910,7 @@ fn file_acquire_sample_rows<'mcx>(
     let mut tupcontext = MemoryContext::new("file_fdw temporary context");
 
     let mut rstate = commands_analyze::sampling::reservoir_init_selection_state(
-        pg_prng::global_prng(|p| p.next_u64()),
+        pg_prng::global_prng(|p| p.next_u32()),
         targrows as u32,
     );
 
@@ -916,7 +923,7 @@ fn file_acquire_sample_rows<'mcx>(
         // SAFETY: reset-only context; heap_form_tuple copies out before the
         // next reset.
         let row_mcx = unsafe { core::mem::transmute::<Mcx<'_>, Mcx<'mcx>>(tupcontext.mcx()) };
-        let found = match cstate.next_copy_from(row_mcx, &mut values, &mut nulls) {
+        let found = match copy_cmd::next_copy_row(&mut cstate, mcx, row_mcx, &mut values, &mut nulls) {
             Ok(found) => found,
             Err(e) => return Err(copy_cmd::copy_from_error_context(&cstate, e)),
         };

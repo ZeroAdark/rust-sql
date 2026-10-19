@@ -20,6 +20,7 @@ use ::commands_vacuum::{
     vac_open_indexes, vacuum_delay_point, vacuum_get_cutoffs, vacuum_xid_failsafe_check,
     SetVacuumFailsafeActive, VacuumFailsafeActive,
 };
+use ::elog::CritSection;
 use ::nbtree::IndexVacuumInfo;
 use ::types_nbtree::IndexBulkDeleteResult;
 use ::types_rel::lock::{NoLock, RowExclusiveLock};
@@ -84,7 +85,7 @@ const BYPASS_THRESHOLD_PAGES: f64 = 0.02;
 /// untruncated double instead (the pre-fix pgrust behavior) bypasses index
 /// vacuuming for the fractional band `floor(t) <= lpdead_item_pages < t`,
 /// leaving LP_DEAD stubs behind where C reaps them — a physical-layout
-/// divergence that cascades into FSM/placement differences (Antithesis RB-3).
+/// divergence that cascades into FSM/placement differences (regression test).
 #[inline]
 fn bypass_threshold_pages(rel_pages: BlockNumber) -> BlockNumber {
     (rel_pages as f64 * BYPASS_THRESHOLD_PAGES) as BlockNumber
@@ -360,7 +361,7 @@ pub struct LVRelState<'a, 'mcx> {
     relname: String,
 }
 
-/// GL-M41-2 per-phase wall clocks (trace-gated, PGRUST_VACUUM_TRACE=1):
+/// regression per-phase wall clocks (trace-gated, PGRUST_VACUUM_TRACE=1):
 /// leader-thread TLS accumulators, reset per heap_vacuum_rel, emitted as ONE
 /// `vacuum-phases:` summary line at the end. Every phase also snapshots the
 /// leader's TLS WalUsage so the summary carries leader-side WAL per phase.
@@ -656,7 +657,7 @@ pub fn heap_vacuum_rel<'mcx>(
     pgstat_progress_end_command();
 
     if morsels::vtrace_enabled() {
-        // GL-M41-2 attribution line. scan includes the nested idxbulk/reap/
+        // regression attribution line. scan includes the nested idxbulk/reap/
         // idxclean/fsm windows (they run inside lazy_scan_heap); scan_only
         // subtracts them. tail = everything after truncate (relstats,
         // visibilitymap_count, pgstat report). WAL figures are the LEADER's
@@ -994,7 +995,7 @@ fn dead_items_alloc(vacrel: &mut LVRelState<'_, '_>, nworkers: i32) -> PgResult<
                     ))
                     .finish(::types_error::ErrorLocation::new(
                         "vacuumlazy.c",
-                        3499,
+                        3524,
                         "dead_items_alloc",
                     ))?;
             }
@@ -1180,6 +1181,10 @@ fn lazy_scan_heap(vacrel: &mut LVRelState<'_, '_>, mcx: Mcx<'_>, nrequested: i32
     }
     vacrel.next_unskippable_allvis = false;
     vacrel.next_unskippable_eager_scanned = false;
+    // C's read stream (vacuumlazy.c:1236, read_stream.c:1001) runs the
+    // heap_vac_scan_next_block callback for block N+1 as it hands out block
+    // N, so N+1's eager admission precedes N's accounting (:1440-1443).
+    let mut lookahead: Option<Option<(BlockNumber, bool, bool)>> = None;
 
     loop {
         vacuum_delay_point(false)?;
@@ -1205,12 +1210,15 @@ fn lazy_scan_heap(vacrel: &mut LVRelState<'_, '_>, mcx: Mcx<'_>, nrequested: i32
             pgstat_progress_update_param(PROGRESS_VACUUM_PHASE, PROGRESS_VACUUM_PHASE_SCAN_HEAP);
         }
 
-        let Some((next_blkno, all_visible_according_to_vm, was_eager_scanned)) =
-            heap_vac_scan_next_block(vacrel)?
-        else {
+        let current = match lookahead.take() {
+            Some(l) => l,
+            None => heap_vac_scan_next_block(vacrel)?,
+        };
+        let Some((next_blkno, all_visible_according_to_vm, was_eager_scanned)) = current else {
             break;
         };
         blkno = next_blkno;
+        lookahead = Some(heap_vac_scan_next_block(vacrel)?);
 
         let buf = bufmgr_seams::read_buffer_extended::call(
             vacrel.rel,
@@ -1518,32 +1526,32 @@ fn lazy_scan_new_or_empty(
         if !page.is_all_visible() {
             // vacuumlazy.c:1890 START_CRIT_SECTION(): dirty mark, the
             // (possibly first) FPI of the page, PD_ALL_VISIBLE and the VM
-            // bits are one unit; an Err leaves the section open so the elog
-            // boundary promotes it to PANIC, as C's ereport would.
-            init_small::globals::StartCriticalSection();
+            // bits are one unit; an Err is promoted to PANIC at the
+            // bracket's edge, as C's ereport would have been.
+            CritSection::run(|| {
+                bufmgr_seams::mark_buffer_dirty::call(buf)?;
 
-            bufmgr_seams::mark_buffer_dirty::call(buf)?;
+                if relation_needs_wal(env.rel)
+                    && bufmgr_seams::buffer_page_get_lsn::call(buf) == 0
+                {
+                    xloginsert_seams::log_newpage_buffer::call(buf, true)?;
+                }
 
-            if relation_needs_wal(env.rel)
-                && bufmgr_seams::buffer_page_get_lsn::call(buf) == 0
-            {
-                xloginsert_seams::log_newpage_buffer::call(buf, true)?;
-            }
-
-            // SAFETY: pinned + exclusive-or-cleanup-locked above.
-            let mut pm = unsafe { PageMut::from_raw(bufmgr_seams::buffer_get_page::call(buf)) };
-            pm.set_all_visible();
-            visibilitymap_set(
-                env.rel,
-                blkno,
-                buf,
-                0,
-                vmbuffer,
-                InvalidTransactionId,
-                VISIBILITYMAP_ALL_VISIBLE | VISIBILITYMAP_ALL_FROZEN,
-            )?;
+                // SAFETY: pinned + exclusive-or-cleanup-locked above.
+                let mut pm = unsafe { PageMut::from_raw(bufmgr_seams::buffer_get_page::call(buf)) };
+                pm.set_all_visible();
+                visibilitymap_set(
+                    env.rel,
+                    blkno,
+                    buf,
+                    0,
+                    vmbuffer,
+                    InvalidTransactionId,
+                    VISIBILITYMAP_ALL_VISIBLE | VISIBILITYMAP_ALL_FROZEN,
+                )?;
+                Ok(())
+            })?;
             // vacuumlazy.c:1914 END_CRIT_SECTION()
-            init_small::globals::EndCriticalSection();
 
             folds.counters.vm_new_visible_pages += 1;
             folds.counters.vm_new_visible_frozen_pages += 1;
@@ -2245,43 +2253,43 @@ fn lazy_vacuum_heap_page_body(
 
     // vacuumlazy.c:2872 START_CRIT_SECTION(): the LP_UNUSED rewrite, the
     // line-pointer truncation, the dirty mark and the WAL record are one
-    // unit. An Err below leaves the section open so the elog boundary
-    // promotes it to PANIC (C's in-crit-section ereport promotion) instead of
-    // unwinding as a plain ERROR over a dirty, unlogged page.
-    init_small::globals::StartCriticalSection();
+    // unit. An Err below is promoted to PANIC at the bracket's edge (C's
+    // in-crit-section ereport promotion) instead of unwinding as a plain
+    // ERROR over a dirty, unlogged page.
+    CritSection::run(|| {
+        for &toff in deadoffsets {
+            let mut itemid = pm.as_ref().item_id(toff);
+            debug_assert!(itemid.is_dead() && !itemid.has_storage());
+            itemid.set_unused();
+            pm.set_item_id(toff, itemid);
+            unused[nunused] = toff;
+            nunused += 1;
+        }
+        debug_assert!(nunused > 0);
 
-    for &toff in deadoffsets {
-        let mut itemid = pm.as_ref().item_id(toff);
-        debug_assert!(itemid.is_dead() && !itemid.has_storage());
-        itemid.set_unused();
-        pm.set_item_id(toff, itemid);
-        unused[nunused] = toff;
-        nunused += 1;
-    }
-    debug_assert!(nunused > 0);
+        pm.truncate_line_pointer_array();
 
-    pm.truncate_line_pointer_array();
+        bufmgr_seams::mark_buffer_dirty::call(buffer)?;
 
-    bufmgr_seams::mark_buffer_dirty::call(buffer)?;
-
-    if relation_needs_wal(vacrel.rel) {
-        log_heap_prune_and_freeze(
-            vacrel.rel,
-            buffer,
-            InvalidTransactionId,
-            false,
-            PruneReason::PruneVacuumCleanup,
-            &mut [],
-            &[],
-            &[],
-            &unused[..nunused],
-        )?;
-    }
+        if relation_needs_wal(vacrel.rel) {
+            log_heap_prune_and_freeze(
+                vacrel.rel,
+                buffer,
+                InvalidTransactionId,
+                false,
+                PruneReason::PruneVacuumCleanup,
+                &mut [],
+                &[],
+                &[],
+                &unused[..nunused],
+            )?;
+        }
+        Ok(())
+    })?;
 
     // vacuumlazy.c:2915 END_CRIT_SECTION(): the visibility test below may do
     // I/O and allocate; a crash from here on merely leaves the VM bit for a
     // later VACUUM.
-    init_small::globals::EndCriticalSection();
 
     debug_assert!(!pm.as_ref().is_all_visible());
     let (all_visible, all_frozen, visibility_cutoff_xid) = heap_page_is_all_visible(

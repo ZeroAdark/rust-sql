@@ -179,6 +179,37 @@ fn failing_before_callback_reenters_and_finishes_with_code_1() {
     assert_eq!(take_log(), vec!["before-fail", "before-ok", "shmem(code1)"]);
 }
 
+// A before_shmem_exit ERROR outside proc_exit (bgjobs teardown) has no
+// exception stack to catch it: elog.c:377 reports it as FATAL, and the
+// remaining callbacks still drain.
+#[test]
+fn failing_before_callback_outside_proc_exit_logs_the_error_as_fatal() {
+    install();
+    let _g = b118_lock();
+    init_small::globals::SetMyProcPid(5252);
+    let _ = take_log();
+    on_shmem_exit(|_, _| log("shmem"), 0);
+    before_shmem_exit(
+        |_, _| Err(Box::new(PgError::error("exit callback exploded outside proc_exit"))),
+        Datum::from_i32(0),
+    )
+    .unwrap();
+
+    let log_lines = b118_capture_log(|| shmem_exit(0).unwrap());
+    assert_eq!(take_log(), vec!["shmem"]);
+    assert!(!shmem_exit_inprogress());
+    assert!(
+        log_lines.contains(&(FATAL.0, "exit callback exploded outside proc_exit".to_string())),
+        "captured log: {log_lines:?}"
+    );
+    assert!(
+        log_lines.iter().any(|(lvl, m)| *lvl == types_error::WARNING.0
+            && m == "before_shmem_exit callback failed during exit: shmem_exit callback failed outside proc_exit: exit callback exploded outside proc_exit"),
+        "captured log: {log_lines:?}"
+    );
+    on_exit_reset();
+}
+
 #[test]
 fn cancel_before_shmem_exit_is_strict_lifo() {
     install();

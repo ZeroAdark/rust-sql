@@ -11,7 +11,7 @@ use ::types_error::PgResult;
 use ::types_fmgr::FmgrInfo;
 use ::types_nbtree::{
     BTArrayKeyInfo, BTPageOpaqueData, BTScanOpaqueData, BTScanPosIsPinned, BTScanPosIsValid,
-    MaxTIDsPerBTreePage, BTP_HAS_GARBAGE, BT_READ, P_FIRSTDATAKEY,
+    BTP_HAS_GARBAGE, BT_READ, P_FIRSTDATAKEY,
 };
 use ::types_rel::Relation;
 use ::types_scan::scankey::{
@@ -196,10 +196,10 @@ pub(crate) fn bt_start_array_keys(so: &mut BTScanOpaqueData<'_>, dir: ScanDirect
     so.oppositeDirCheck = false;
 }
 
-// datumCopy for skip-array sk_argument. C divergence: C pfrees the previous
-// element; here superseded copies stay in the scan-lifetime arena until reset.
-fn skip_datum_copy<'mcx>(
-    mcx: Mcx<'mcx>,
+// datumCopy for skip-array sk_argument (nbtutils.c:571-578 pfree + datumCopy):
+// the array's skip_arg buffer is reused in place of C's free/alloc pair.
+pub(crate) fn skip_datum_copy<'mcx>(
+    buf: &mut ::mcx::PgVec<'mcx, u8>,
     value: Datum,
     attbyval: bool,
     attlen: i16,
@@ -222,9 +222,9 @@ fn skip_datum_copy<'mcx>(
                 n + 1
             }
         };
-        let mut v: ::mcx::PgVec<'mcx, u8> = ::mcx::vec_with_capacity_in(mcx, len)?;
-        ::mcx::vec_append_bytes(&mut v, core::slice::from_raw_parts(p, len))?;
-        Ok(Datum::from_usize(v.leak().as_ptr() as usize))
+        buf.clear();
+        ::mcx::vec_append_bytes(buf, core::slice::from_raw_parts(p, len))?;
+        Ok(Datum::from_usize(buf.as_ptr() as usize))
     }
 }
 
@@ -268,8 +268,7 @@ fn bt_skiparray_set_isnull(skey: &mut ScanKeyData, array: &BTArrayKeyInfo<'_>) {
 }
 
 /// _bt_skiparray_set_element: advance to tupdatum/tupnull, or to the bound set_elem_result picks.
-fn bt_skiparray_set_element<'mcx>(
-    mcx: Mcx<'mcx>,
+fn bt_skiparray_set_element(
     skey: &mut ScanKeyData,
     array: &mut BTArrayKeyInfo<'_>,
     set_elem_result: i32,
@@ -291,13 +290,13 @@ fn bt_skiparray_set_element<'mcx>(
 
     skey.sk_flags &=
         !(SK_SEARCHNULL | SK_ISNULL | SK_BT_MINVAL | SK_BT_MAXVAL | SK_BT_NEXT | SK_BT_PRIOR);
-    skey.sk_argument = skip_datum_copy(mcx, tupdatum, array.attbyval, array.attlen)?;
+    skey.sk_argument =
+        skip_datum_copy(&mut array.skip_arg, tupdatum, array.attbyval, array.attlen)?;
     Ok(())
 }
 
 // _bt_array_decrement / _bt_array_increment; false = no prior (next) element for the direction.
-fn bt_array_step<'mcx>(
-    mcx: Mcx<'mcx>,
+fn bt_array_step(
     frame: &mut OrderProcFrame,
     skey: &mut ScanKeyData,
     array: &mut BTArrayKeyInfo<'_>,
@@ -350,7 +349,7 @@ fn bt_array_step<'mcx>(
         } else {
             sksup.high_elem
         };
-        skey.sk_argument = skip_datum_copy(mcx, elem, array.attbyval, array.attlen)?;
+        skey.sk_argument = skip_datum_copy(&mut array.skip_arg, elem, array.attbyval, array.attlen)?;
         return Ok(true);
     }
 
@@ -395,13 +394,12 @@ fn bt_advance_array_keys_increment(
         let BTScanOpaqueData {
             keyData, arrayKeys, ..
         } = &mut *so;
-        let mcx = *keyData.allocator();
         for array in arrayKeys.iter_mut().rev() {
             let skey = &mut keyData[array.scan_key as usize];
             if array.num_elems == -1 {
                 *skip_array_set = true;
             }
-            if bt_array_step(mcx, frame, skey, array, ScanDirectionIsForward(dir))? {
+            if bt_array_step(frame, skey, array, ScanDirectionIsForward(dir))? {
                 return Ok(true);
             }
             bt_array_set_low_or_high(skey, array, ScanDirectionIsForward(dir));
@@ -678,7 +676,6 @@ unsafe fn bt_advance_array_keys(
             scanBehind,
             ..
         } = &mut *so;
-        let mcx = *keyData.allocator();
         let mut arrayidx = 0usize;
 
         for ikey in 0..*numberOfKeys as usize {
@@ -812,7 +809,6 @@ unsafe fn bt_advance_array_keys(
                 let array = &mut arrayKeys[ai];
                 if array.num_elems == -1 {
                     bt_skiparray_set_element(
-                        mcx,
                         &mut keyData[ikey],
                         array,
                         result,
@@ -1377,6 +1373,17 @@ unsafe fn advance_nonrequired_cold(
     bt_advance_array_keys(rel, so, None, tuple, tupnatts, ikey, false, frame)
 }
 
+// nbtutils.c:3183-3186: ramp the look-ahead distance, capped in line pointers.
+pub(crate) fn look_ahead_targetdistance(targetdistance: i32) -> i32 {
+    if targetdistance == 0 {
+        LOOK_AHEAD_DEFAULT_DISTANCE
+    } else if (targetdistance as usize) < ::types_storage::bufpage::MaxIndexTuplesPerPage / 2 {
+        targetdistance * 2
+    } else {
+        targetdistance
+    }
+}
+
 // _bt_checkkeys_look_ahead: probe a later tuple; set pstate.skip while still before the arrays.
 //
 // # Safety
@@ -1403,11 +1410,7 @@ unsafe fn bt_checkkeys_look_ahead(
         return Ok(());
     }
 
-    if pstate.targetdistance == 0 {
-        pstate.targetdistance = LOOK_AHEAD_DEFAULT_DISTANCE;
-    } else if (pstate.targetdistance as usize) < MaxTIDsPerBTreePage / 2 {
-        pstate.targetdistance *= 2;
-    }
+    pstate.targetdistance = look_ahead_targetdistance(pstate.targetdistance);
 
     let aheadoffnum = if ScanDirectionIsForward(dir) {
         (pstate.maxoff as i32).min(pstate.offnum as i32 + pstate.targetdistance)
@@ -1452,10 +1455,10 @@ pub(crate) unsafe fn datum_image_eq(a: Datum, b: Datum, attbyval: bool, attlen: 
             == core::slice::from_raw_parts(pb, attlen as usize);
     }
     if attlen == -1 {
-        let la = varsize_any(pa);
-        let lb = varsize_any(pb);
-        return la == lb
-            && core::slice::from_raw_parts(pa, la) == core::slice::from_raw_parts(pb, lb);
+        return varlena_image_eq(
+            core::slice::from_raw_parts(pa, varsize_any(pa)),
+            core::slice::from_raw_parts(pb, varsize_any(pb)),
+        );
     }
     debug_assert!(attlen == -2);
     let mut i = 0;
@@ -1469,6 +1472,35 @@ pub(crate) unsafe fn datum_image_eq(a: Datum, b: Datum, attbyval: bool, attlen: 
         }
         i += 1;
     }
+}
+
+// datum.c:303-324: raw (decompressed) sizes first, then the detoasted
+// payloads without headers, so a compressed and an uncompressed image of
+// one value are equal (dedup, split strategy, single-value detection).
+fn varlena_image_eq(a: &[u8], b: &[u8]) -> bool {
+    use ::datum::varlena::VARHDRSZ;
+    let len = ::detoast::toast_raw_datum_size(a);
+    if len != ::detoast::toast_raw_datum_size(b) {
+        return false;
+    }
+    fn payload(v: &[u8]) -> &[u8] {
+        if v[0] & 0x01 == 0x01 {
+            &v[1..]
+        } else {
+            &v[VARHDRSZ..]
+        }
+    }
+    let compressed = |v: &[u8]| ::detoast::toast_get_compression_id(v).is_some();
+    if !compressed(a) && !compressed(b) {
+        return payload(a) == payload(b);
+    }
+    let cx = ::mcx::MemoryContext::new("datum_image_eq");
+    let mcx = cx.mcx();
+    let eq = match (::detoast::detoast_attr(mcx, a), ::detoast::detoast_attr(mcx, b)) {
+        (Ok(da), Ok(db)) => da[VARHDRSZ..] == db[VARHDRSZ..],
+        _ => false,
+    };
+    eq
 }
 
 /// _bt_keep_natts_fast: first differing attribute (1-based), capped at keysz+1.

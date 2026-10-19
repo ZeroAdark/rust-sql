@@ -162,7 +162,7 @@ pub fn fc_pg_stat_get_activity(
                 BackendState::STATE_UNDEFINED => nulls[4] = true,
             }
 
-            let clipped = backend_status::pgstat_clip_activity(be.st_activity_raw.as_bytes());
+            let clipped = backend_status::pgstat_clip_activity(&be.st_activity_raw);
             values[5] = text_datum(fcinfo, &clipped)?;
 
             nulls[29] = true;
@@ -278,7 +278,13 @@ pub fn fc_pg_stat_get_activity(
             }
 
             if be.st_backendType == BackendType::BgWorker {
-                match bgworker_seams::get_background_worker_type_by_pid::call(be.st_procpid) {
+                // A serving pool worker thread names itself (no registry
+                // slot; see backend_status::PoolWorkerServe).
+                match be
+                    .st_bgw_type_override
+                    .map(str::to_owned)
+                    .or_else(|| bgworker_seams::get_background_worker_type_by_pid::call(be.st_procpid))
+                {
                     Some(bgw_type) => values[17] = text_datum(fcinfo, &bgw_type)?,
                     None => nulls[17] = true,
                 }

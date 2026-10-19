@@ -4,7 +4,7 @@
 //! longest-match search, `next`/`replace` 1-based (0 = C's NULL).
 
 use ::mcx::{alloc_in, vec_with_capacity_in, Mcx, PgVec};
-use ::ts_locale::dict_api::{lexize_result_ref, DictInitData, LexizeResult};
+use ::ts_locale::dict_api::{def_get_string, lexize_result_ref, DictInitData, LexizeResult};
 use ::ts_locale::{
     byte_isspace, could_not_open_error, get_tsearch_config_filename, tsearch_readline_begin,
     TsLexeme, TsearchReadline, TSL_FILTER,
@@ -250,7 +250,7 @@ pub fn unaccent_init(init: &DictInitData<'static>) -> PgResult<UnaccentTrie> {
             if root.is_some() {
                 return Err(invalid_param("multiple Rules parameters"));
             }
-            root = Some(init_trie(init.mcx, value.as_slice())?);
+            root = Some(init_trie(init.mcx, def_get_string(name, value)?)?);
         } else {
             return Err(invalid_param(format!(
                 "unrecognized Unaccent parameter: \"{}\"",
@@ -366,7 +366,11 @@ fn fc_unaccent_dict(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
 
     // SAFETY: the result word lives in `mcx`.
     let out: &[u8] = match unsafe { lexize_result_ref(res_word) } {
-        Some(LexizeResult(v)) if !v.is_empty() => &v[0].lexeme,
+        // unaccent.c:495 cstring_to_text(res->lexeme): strlen-bounded.
+        Some(LexizeResult(v)) if !v.is_empty() => {
+            let l: &[u8] = &v[0].lexeme;
+            &l[..l.iter().position(|&b| b == 0).unwrap_or(l.len())]
+        }
         _ => &token,
     };
     Ok(varlena_result(varlena::cstring_to_text(mcx, out)?))

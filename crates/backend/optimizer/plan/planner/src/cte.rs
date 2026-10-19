@@ -177,8 +177,7 @@ impl<'a, 'mcx> nodes_core::NodeWalker<'mcx> for InlineCteWalker<'a, 'mcx> {
                 let newquery_node = if self.share {
                     self.ctequery
                 } else {
-                    let s = outfuncs::nodeToString(self.mcx, self.ctequery)?;
-                    readfuncs::stringToNode(self.mcx, s.as_str())?
+                    copyfuncs::copy_object(self.mcx, self.ctequery)?
                 };
                 if self.levelsup > 0 {
                     rewrite_manip::IncrementVarSublevelsUp(
@@ -334,8 +333,9 @@ pub fn set_cte_pathlist(run: &mut PlannerRun<'_>, rel: RelId, rti: usize) -> PgR
     Ok(())
 }
 
-// wt_param_id is stashed on this level's root because the suspended_roots
-// chain to the cteroot (ctelevelsup-1 up) is gone by createplan time.
+// wt_param_id is stashed per RTE on this level's root because the
+// suspended_roots chain to the cteroot (ctelevelsup-1 up) is gone by
+// createplan time.
 pub fn set_worktable_pathlist(run: &mut PlannerRun<'_>, rel: RelId, rti: usize) -> PgResult<()> {
     let rte = run.rte(rti);
     debug_assert!(rte.self_reference);
@@ -363,7 +363,7 @@ pub fn set_worktable_pathlist(run: &mut PlannerRun<'_>, rel: RelId, rti: usize) 
             run.suspended_roots[run.suspended_roots.len() - up].root.path(pid).base().rows
         }
     };
-    run.root.self_ref_wt_param = wt_param;
+    run.root.self_ref_wt_params.push((rti as u32, wt_param));
 
     crate::costsize::set_cte_size_estimates(run, rel, nr_rows)?;
     // C set_worktable_pathlist: required_outer = rel->lateral_relids.

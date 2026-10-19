@@ -545,12 +545,19 @@ pub fn StandbyAcquireAccessExclusiveLock(
     Ok(())
 }
 
+// standby.c:1021-1022 links each new lock at the head of the xid's chain, so
+// StandbyReleaseXidEntryLocks (:1040) releases — and DEBUG4-logs — newest
+// first; the chain here is kept in acquisition order.
+fn release_sequence(chain: &[(Oid, Oid)]) -> impl Iterator<Item = (Oid, Oid)> + '_ {
+    chain.iter().rev().copied()
+}
+
 fn release_xid_entry_locks(
     st: &mut RecoveryLockState,
     xid: TransactionId,
     chain: &[(Oid, Oid)],
 ) -> PgResult<()> {
-    for &(db_oid, rel_oid) in chain {
+    for (db_oid, rel_oid) in release_sequence(chain) {
         elog(DEBUG4, format!("releasing recovery lock: xid {xid} db {db_oid} rel {rel_oid}"))?;
         let locktag = LOCKTAG::relation(db_oid, rel_oid);
         if !lock::LockRelease(&locktag, AccessExclusiveLock, true)? {
@@ -660,6 +667,10 @@ pub(crate) mod test_support {
         RECOVERY_LOCKS.with(|s| {
             s.borrow_mut().as_mut().unwrap().insert_entry(xid, db_oid, rel_oid)
         })
+    }
+
+    pub fn release_sequence(chain: &[(Oid, Oid)]) -> Vec<(Oid, Oid)> {
+        super::release_sequence(chain).collect()
     }
 
     pub fn chain(xid: TransactionId) -> Vec<(Oid, Oid)> {

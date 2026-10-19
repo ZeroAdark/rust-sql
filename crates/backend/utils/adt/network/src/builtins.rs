@@ -2,7 +2,6 @@
 //! varlena values: args read in place via PackedVarlena (PG_GETARG_INET_PP),
 //! new values built as SET_INET_VARSIZE images into the armed result mcx.
 
-use std::borrow::Cow;
 
 use ::datum::{Datum, Varlena};
 use ::mcx::Mcx;
@@ -22,10 +21,10 @@ fn arg_inet<'a>(fcinfo: &'a Fcinfo, i: usize) -> InetRef<'a> {
     InetRef::from_payload(pv.data())
 }
 
-fn in_arg<'a>(fcinfo: &'a Fcinfo) -> Cow<'a, str> {
+// Raw cstring bytes: C quotes them verbatim in its message (network.c:99).
+fn in_arg<'a>(fcinfo: &'a Fcinfo) -> &'a [u8] {
     // SAFETY: catalog arg 0 of inet_in/cidr_in is cstring (typlen -2).
-    let s = unsafe { fcinfo.arg_cstring(0) };
-    String::from_utf8_lossy(s.to_bytes())
+    unsafe { fcinfo.arg_cstring(0) }.to_bytes()
 }
 
 fn inet_result(fcinfo: &Fcinfo, v: &InetValue) -> PgResult<Datum> {
@@ -44,7 +43,7 @@ fn network_in_dat(fcinfo: &mut Fcinfo, is_cidr: bool) -> PgResult<Datum> {
     let s = in_arg(fcinfo);
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
-    match crate::network_in(&s, is_cidr, esc)? {
+    match crate::network_in(s, is_cidr, esc)? {
         Some(v) => {
             let (img, len) = v.image();
             byref_result(fcinfo.result_mcx(), &img[..len])

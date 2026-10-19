@@ -51,7 +51,7 @@ fi
 [ -n "$WASM_BIN" ] && [ -f "$WASM_BIN" ] || { echo "no wasm binary (wasm/wasm-build.sh)"; exit 2; }
 
 . "$REPO/wasm/lib/scratch.sh"
-WORK="${WASM_OPFS_E2E_DIR:-$(scratch_datadir pgrust-fast-wasm-opfs-e2e)}"
+WORK="${WASM_OPFS_E2E_DIR:-$(scratch_datadir pgrust-wasm-opfs-e2e)}"
 scratch_adopt "$WORK"
 rm -rf "$WORK"; mkdir -p "$WORK"
 

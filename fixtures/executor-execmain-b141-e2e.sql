@@ -5,7 +5,7 @@
 CREATE DATABASE b141e2e TEMPLATE template0 ENCODING 'UTF8';
 \c b141e2e
 \set VERBOSITY verbose
--- fp-executor-execAmi#1: an indirectly correlated hashed SubPlan is built
+-- regression: an indirectly correlated hashed SubPlan is built
 -- once per outer parameter change; the rescan of its own tree must not mark
 -- it stale (the volatile b141_vf ran 18 times instead of 3).
 CREATE TABLE b141_a(k int); INSERT INTO b141_a VALUES (1),(2);
@@ -15,7 +15,7 @@ CREATE FUNCTION b141_vf(i int) RETURNS int LANGUAGE plpgsql VOLATILE AS $$ BEGIN
 SET enable_hashjoin = off; SET enable_mergejoin = off;
 SELECT a.k, (SELECT count(*) FROM b141_b b WHERE b.k = a.k AND (b.y IN (SELECT b141_vf(c.y) FROM b141_c c WHERE c.k = a.k) OR b.y IS NULL)) FROM b141_a a ORDER BY 1;
 RESET enable_hashjoin; RESET enable_mergejoin;
--- fp-executor-execParallel#1: only the worker's root statement skips its
+-- regression: only the worker's root statement skips its
 -- junk filter; a nested SELECT INTO record inside a PARALLEL SAFE function
 -- run by a worker drops its ORDER BY junk column as in C.
 CREATE TABLE b141_p AS SELECT i AS a, (i*7)%11 AS b FROM generate_series(1,2000) i;
@@ -28,7 +28,7 @@ EXPLAIN (COSTS OFF) SELECT b141_pf(a) FROM b141_p WHERE a % 500 = 0;
 SELECT b141_pf(a) FROM b141_p WHERE a % 500 = 0 ORDER BY 1;
 RESET parallel_setup_cost; RESET parallel_tuple_cost; RESET min_parallel_table_scan_size;
 RESET max_parallel_workers_per_gather; RESET parallel_leader_participation;
--- fp-executor-execAmi#3: IndexSupportsBackwardScan asks the AM handler, so
+-- regression: IndexSupportsBackwardScan asks the AM handler, so
 -- an index of a CREATE ACCESS METHOD ... HANDLER bthandler AM gives an
 -- undeclared cursor implicit SCROLL like btree.
 CREATE ACCESS METHOD b141_btree TYPE INDEX HANDLER bthandler;

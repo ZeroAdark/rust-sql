@@ -1151,12 +1151,19 @@ struct RecordInData {
 #[cold]
 fn malformed_record<'a>(
     escontext: Option<&mut ::types_fmgr::ErrorSaveNode>,
-    string: &str,
+    string: &[u8],
     detail: &str,
 ) -> PgResult<Option<Datum>> {
-    let err = ::types_error::PgError::error(alloc::format!(
-        "malformed record literal: \"{string}\""
-    ))
+    // rowtypes.c:158 "%s": the literal's bytes verbatim (SQL_ASCII high bytes).
+    let err = match core::str::from_utf8(string) {
+        Ok(s) => ::types_error::PgError::error(alloc::format!("malformed record literal: \"{s}\"")),
+        Err(_) => {
+            let mut msg = b"malformed record literal: \"".to_vec();
+            msg.extend_from_slice(string);
+            msg.push(b'"');
+            ::types_error::PgError::error_raw_message(msg)
+        }
+    }
     .with_detail(detail)
     .with_sqlstate(::types_error::ERRCODE_INVALID_TEXT_REPRESENTATION);
     match escontext {
@@ -1223,14 +1230,13 @@ pub fn fc_record_in(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
     }
 
     let bytes = string.to_bytes();
-    let sdisplay = alloc::string::String::from_utf8_lossy(bytes);
     let mut pos = 0usize;
     // rowtypes.c:152 "Allow leading whitespace"
     while pos < bytes.len() && isspace_c_locale(bytes[pos]) {
         pos += 1;
     }
     if pos >= bytes.len() || bytes[pos] != b'(' {
-        return Ok(malformed_record(escontext, &sdisplay, "Missing left parenthesis.")?
+        return Ok(malformed_record(escontext, bytes, "Missing left parenthesis.")?
             .unwrap_or(Datum::null()));
     }
     pos += 1;
@@ -1251,7 +1257,7 @@ pub fn fc_record_in(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
             if pos < bytes.len() && bytes[pos] == b',' {
                 pos += 1;
             } else {
-                return Ok(malformed_record(escontext, &sdisplay, "Too few columns.")?
+                return Ok(malformed_record(escontext, bytes, "Too few columns.")?
                     .unwrap_or(Datum::null()));
             }
         }
@@ -1266,7 +1272,7 @@ pub fn fc_record_in(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
                 if pos >= bytes.len() {
                     return Ok(malformed_record(
                         escontext,
-                        &sdisplay,
+                        bytes,
                         "Unexpected end of input.",
                     )?
                     .unwrap_or(Datum::null()));
@@ -1280,7 +1286,7 @@ pub fn fc_record_in(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
                     if pos >= bytes.len() {
                         return Ok(malformed_record(
                             escontext,
-                            &sdisplay,
+                            bytes,
                             "Unexpected end of input.",
                         )?
                         .unwrap_or(Datum::null()));
@@ -1349,7 +1355,7 @@ pub fn fc_record_in(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
     }
 
     if pos >= bytes.len() || bytes[pos] != b')' {
-        return Ok(malformed_record(escontext, &sdisplay, "Too many columns.")?
+        return Ok(malformed_record(escontext, bytes, "Too many columns.")?
             .unwrap_or(Datum::null()));
     }
     pos += 1;
@@ -1358,7 +1364,7 @@ pub fn fc_record_in(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
         pos += 1;
     }
     if pos < bytes.len() {
-        return Ok(malformed_record(escontext, &sdisplay, "Junk after right parenthesis.")?
+        return Ok(malformed_record(escontext, bytes, "Junk after right parenthesis.")?
             .unwrap_or(Datum::null()));
     }
 
@@ -1453,8 +1459,11 @@ pub fn fc_record_recv(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
         let coltypoid = ::pqformat::pq_getmsgint(buf, 4)? as Oid;
         const FIRST_GENBKI: Oid = types_core::catalog::FirstGenbkiObjectId;
         if coltypoid != column_type && coltypoid < FIRST_GENBKI && column_type < FIRST_GENBKI {
-            let n1 = ::format_type::format_type_be(coltypoid).unwrap_or_default();
-            let n2 = ::format_type::format_type_be(column_type).unwrap_or_default();
+            const ALLOW_INVALID: u16 = ::format_type::FORMAT_TYPE_ALLOW_INVALID;
+            let n1 = ::format_type::format_type_extended(coltypoid, -1, ALLOW_INVALID)?
+                .unwrap_or_default();
+            let n2 = ::format_type::format_type_extended(column_type, -1, ALLOW_INVALID)?
+                .unwrap_or_default();
             return Err(alloc::boxed::Box::new(
                 ::types_error::PgError::error(alloc::format!(
                     "binary data has type {coltypoid} ({n1}) instead of expected \
@@ -1584,6 +1593,24 @@ pub fn fc_record_send(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
         ::pqformat::pq_sendbytes(&mut buf, payload)?;
     }
     Ok(::types_fmgr::varlena_result(::pqformat::pq_endtypsend(buf)))
+}
+
+#[cfg(test)]
+mod malformed_record_tests {
+    use super::*;
+    extern crate std;
+
+    // rowtypes.c:158 quotes the literal's bytes verbatim (SQL_ASCII high bytes).
+    #[test]
+    fn message_keeps_non_utf8_bytes() {
+        let err = malformed_record(None, b"x\xff", "Missing left parenthesis.").unwrap_err();
+        assert_eq!(err.message_raw.as_deref(), Some(&b"malformed record literal: \"x\xff\""[..]));
+        assert_eq!(err.detail(), Some("Missing left parenthesis."));
+        assert_eq!(err.sqlstate(), ::types_error::ERRCODE_INVALID_TEXT_REPRESENTATION);
+        let err = malformed_record(None, b"x", "Missing left parenthesis.").unwrap_err();
+        assert_eq!(err.message(), "malformed record literal: \"x\"");
+        assert!(err.message_raw.is_none());
+    }
 }
 
 #[cfg(test)]

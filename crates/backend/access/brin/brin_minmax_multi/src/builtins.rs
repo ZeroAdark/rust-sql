@@ -256,24 +256,27 @@ fn fc_summary_out(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
     let mut out_fn = ::fmgr_core::fmgr_info(outfunc)?;
     let ranges = crate::ranges::brin_range_deserialize(mcx, hdr.maxvalues, &image)?;
 
+    // C appends the output functions' cstrings verbatim: the bytes are in the
+    // database encoding, not necessarily UTF-8.
     let mut s = format!(
         "{{nranges: {}  nvalues: {}  maxvalues: {}",
         ranges.nranges, ranges.nvalues, ranges.maxvalues
-    );
+    )
+    .into_bytes();
 
-    let call_out = |out_fn: &mut FmgrInfo, val: Datum| -> PgResult<String> {
+    let call_out = |out_fn: &mut FmgrInfo, val: Datum| -> PgResult<Vec<u8>> {
         let d = ::fmgr::function_call1_coll_in(out_fn, ::types_core::InvalidOid, mcx, val)?;
         // SAFETY: output functions return NUL-terminated cstrings.
         let cs = unsafe { core::ffi::CStr::from_ptr(d.as_usize() as *const core::ffi::c_char) };
-        Ok(String::from_utf8_lossy(cs.to_bytes()).into_owned())
+        Ok(cs.to_bytes().to_vec())
     };
-    let text_elem = |txt: &str| -> Vec<u8> {
+    let text_elem = |txt: &[u8]| -> Vec<u8> {
         let mut img = Vec::with_capacity(txt.len() + 4);
         img.extend_from_slice(&(((txt.len() + 4) as u32) << 2).to_ne_bytes());
-        img.extend_from_slice(txt.as_bytes());
+        img.extend_from_slice(txt);
         img
     };
-    let anyarray_text = |astate: &::datum::array_build::ArrayBuildState<'_>| -> PgResult<String> {
+    let anyarray_text = |astate: &::datum::array_build::ArrayBuildState<'_>| -> PgResult<Vec<u8>> {
         let (typoutput, _) = ::lsyscache::getTypeOutputInfo(::types_core::ANYARRAYOID)?;
         let mut arr_out = ::fmgr_core::fmgr_info(typoutput)?;
         let img = ::arrayfuncs::build::make_array_result(mcx, astate)?;
@@ -281,7 +284,7 @@ fn fc_summary_out(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
         let d = ::fmgr::function_call1_coll_in(&mut arr_out, ::types_core::InvalidOid, mcx, val)?;
         // SAFETY: array_out returns a NUL-terminated cstring.
         let cs = unsafe { core::ffi::CStr::from_ptr(d.as_usize() as *const core::ffi::c_char) };
-        let s = String::from_utf8_lossy(cs.to_bytes()).into_owned();
+        let s = cs.to_bytes().to_vec();
         core::mem::forget(img); // keep the mcx image alive for the call above
         Ok(s)
     };
@@ -289,10 +292,12 @@ fn fc_summary_out(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
     let mut idx = 0usize;
     let mut astate: Option<::datum::array_build::ArrayBuildState<'_>> = None;
     for _ in 0..ranges.nranges {
-        let a = call_out(&mut out_fn, ranges.values[idx])?;
+        let mut a = call_out(&mut out_fn, ranges.values[idx])?;
         let b = call_out(&mut out_fn, ranges.values[idx + 1])?;
         idx += 2;
-        let elem = text_elem(&format!("{a} ... {b}"));
+        a.extend_from_slice(b" ... ");
+        a.extend_from_slice(&b);
+        let elem = text_elem(&a);
         astate = Some(::arrayfuncs::build::accum_array_result(
             mcx,
             astate,
@@ -302,7 +307,8 @@ fn fc_summary_out(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
         )?);
     }
     if ranges.nranges > 0 {
-        s.push_str(&format!(" ranges: {}", anyarray_text(astate.as_ref().expect("nranges > 0"))?));
+        s.extend_from_slice(b" ranges: ");
+        s.extend_from_slice(&anyarray_text(astate.as_ref().expect("nranges > 0"))?);
     }
 
     let mut astate: Option<::datum::array_build::ArrayBuildState<'_>> = None;
@@ -319,14 +325,15 @@ fn fc_summary_out(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Da
         )?);
     }
     if ranges.nvalues > 0 {
-        s.push_str(&format!(" values: {}", anyarray_text(astate.as_ref().expect("nvalues > 0"))?));
+        s.extend_from_slice(b" values: ");
+        s.extend_from_slice(&anyarray_text(astate.as_ref().expect("nvalues > 0"))?);
     }
 
-    s.push('}');
+    s.push(b'}');
 
     let mut out: mcx::PgVec<'_, u8> = mcx::vec_with_capacity_in(mcx, s.len() + 1)
         .map_err(|_| mcx.oom(s.len() + 1))?;
-    out.extend_from_slice(s.as_bytes());
+    out.extend_from_slice(&s);
     out.push(0);
     Ok(::fmgr::cstring_result(out))
 }

@@ -397,7 +397,7 @@ fn parallel_vacuum_compute_workers(
 
 /// M4.1 driver switch for the parallel-index passes (same switch as the
 /// heap phase's driver swap). FLIPPED-KILL: default ON since the train-40
-/// flip (GL-M41-3); `pgrust.runtime_vacuum_pool = off` (env seed
+/// flip (regression); `pgrust.runtime_vacuum_pool = off` (env seed
 /// PGRUST_RUNTIME_VACUUM_POOL=0|off) restores the launched gang. Layered
 /// under the runtime master switch and the standing module's own gates
 /// (POOLBIND/POOLDB inside try_engage_pool).
@@ -520,7 +520,7 @@ struct PvUnit {
     /// is publish-after-work; this witnesses it and fails closed).
     busy: AtomicBool,
     run: Mutex<PvUnitRun>,
-    /// GL-M41-2 width census (trace-gated, observability only): first-quantum
+    /// regression width census (trace-gated, observability only): first-quantum
     /// mono_ms, quanta served by pool workers vs the participating leader,
     /// and busy time actually spent inside quanta (vs. inter-ticket gaps).
     census_t0_ms: OnceLock<i64>,
@@ -692,7 +692,7 @@ impl PvPoolPass {
             )
             .into());
         }
-        // GL-M41-2 width census (trace-gated): quanta per server class +
+        // regression width census (trace-gated): quanta per server class +
         // in-quantum busy time; gaps between tickets show up as
         // (end - t0) - busy in the unit-done line.
         let census = ptrace_enabled().then(|| {
@@ -726,7 +726,7 @@ impl PvPoolPass {
         if let Some(rt) = runtime::global() {
             rt.notify_source_progress();
         }
-        // GL-M41-2 fix (publish wake, the serve-start wake's other half): a
+        // regression fix (publish wake, the serve-start wake's other half): a
         // participating leader that found no claimable ticket parks on its
         // latch — notify_source_progress wakes only pool workers. Hand a
         // pool worker's freshly published ticket to the (possibly parked)
@@ -837,7 +837,15 @@ impl PvPoolPass {
         drop(run);
         let res = match fin {
             PvUnitRun::Bulkdelete(scan) => {
-                Some(nbtree::bt_chunked_bulkdelete_finish(&ivinfo, scan)?)
+                let res = nbtree::bt_chunked_bulkdelete_finish(&ivinfo, scan)?;
+                let ndead = shared.dead_items.lock().unwrap_or_else(|e| e.into_inner()).len();
+                elog::ereport(ivinfo.message_level)
+                    .errmsg(format!(
+                        "scanned index \"{}\" to remove {ndead} row versions",
+                        ivinfo.index.name()
+                    ))
+                    .finish(::types_error::ErrorLocation::new("vacuum.c", 2658, "vac_bulkdel_one_index"))?;
+                Some(res)
             }
             PvUnitRun::Cleanup(scan) => nbtree::bt_chunked_cleanup_finish(&ivinfo, scan)?,
             PvUnitRun::Pending | PvUnitRun::Done => unreachable!("finished unit re-finished"),
@@ -1035,9 +1043,22 @@ fn pool_index_drive(shared: &Arc<PvShared>, pass: &Arc<PvPoolPass>) -> PgResult<
     };
     debug_assert!(!indrels.is_empty());
 
+    let _ = elog::elog(::types_error::DEBUG1, "starting parallel vacuum worker");
     if shared.maintenance_work_mem_worker > 0 {
         g::set_maintenance_work_mem(shared.maintenance_work_mem_worker);
     }
+
+    // C vacuumparallel.c:1013-1020 for a pool-served pass: the worker shows
+    // in pg_stat_activity exactly as a launched parallel worker would —
+    // backend_type "parallel worker", the leader's statement and query id
+    // (leader_pid comes from the lock group) — for the span of this serve,
+    // and disappears again when it parks (PoolWorkerServe's Drop).
+    let _serve = backend_status::PoolWorkerServe::begin(parallel::standing::serving_on_pool());
+    backend_status::pgstat_report_activity(
+        backend_status::BackendState::STATE_RUNNING,
+        shared.query_text.as_deref(),
+    );
+    backend_status::pgstat_report_query_id(shared.queryid, false);
 
     autovacuum_seams::vacuum_update_costs::call()?;
     g::SetVacuumCostBalance(0);
@@ -1045,7 +1066,7 @@ fn pool_index_drive(shared: &Arc<PvShared>, pass: &Arc<PvPoolPass>) -> PgResult<
     set_vacuum_shared_cost(Some(Arc::clone(&shared.cost)));
     shared.cost.active_nworkers.fetch_add(1, SeqCst);
     pass.started.fetch_add(1, SeqCst);
-    // GL-M41-2 fix (serve-start wake): the leader's participation gate
+    // regression fix (serve-start wake): the leader's participation gate
     // (started > 0, pool_leader_join) parks on the leader latch, but no
     // wake fired at serve start — only completion/refusal/error and the
     // ~1s stall recheck set it. Any pass shorter than the recheck cadence
@@ -1387,7 +1408,7 @@ fn pool_leader_join(
     // its clock is pg_clock (the standing_channel precedent).
     let t0 = pg_clock::MonoStamp::now();
     let mut traced = false;
-    // GL-M41-2 census: leader-participation bursts (drive calls / tasks
+    // regression census: leader-participation bursts (drive calls / tasks
     // actually ran) + total join time, emitted on the Done exit.
     let mut census_bursts: u64 = 0;
     let mut census_ran: u64 = 0;
@@ -1589,7 +1610,7 @@ fn parallel_vacuum_process_all_indexes(
 ) -> PgResult<()> {
     debug_assert!(!parallel::IsParallelWorker());
 
-    // GL-M41-2: whole-pass wall + channel label (trace-gated).
+    // regression: whole-pass wall + channel label (trace-gated).
     let census_t0 = ptrace_enabled().then(pg_clock::MonoStamp::now);
     let mut census_channel = "leader-serial";
 
@@ -1955,7 +1976,7 @@ fn parallel_vacuum_process_one_index(
     idx: usize,
     bstrategy: &BufferAccessStrategy,
 ) -> PgResult<()> {
-    // GL-M41-2 width census (trace-gated): who processed this index, when it
+    // regression width census (trace-gated): who processed this index, when it
     // started (shared mono epoch — overlap reads directly off start+dur), and
     // how long it took. Covers the launched workers, the participating/serial
     // leader, the unsafe-index loop, and the pool COARSE arm (the chunks arm
@@ -2081,6 +2102,7 @@ fn parallel_vacuum_main(pshared: &parallel::ParallelShared) -> PgResult<()> {
         .unwrap_or_else(|_| panic!("parallel_vacuum_main private state is not PvShared"));
 
     let _ = elog::elog(::types_error::DEBUG1, "starting parallel vacuum worker");
+    ::commands_vacuum::reset_parallel_vacuum_worker_delay();
 
     // C vacuumparallel.c:1013-1020: "Set debug_query_string for individual
     // workers", report the leader's statement for monitoring
@@ -2186,7 +2208,7 @@ mod tests {
             pool_index_enabled(),
             "the vacuum index-pass pool gate admits under the armed env"
         );
-        // GL-M41-3 flipped-kill polarity: the backing cell IS the switch
+        // regression flipped-kill polarity: the backing cell IS the switch
         // (env seeds it at boot; unit processes see the flipped default).
         // Off must close the gate; restore the default after.
         assert!(

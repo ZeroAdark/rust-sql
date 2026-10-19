@@ -317,9 +317,17 @@ pub fn division_by_zero_error() -> PgError {
 
 #[cold]
 #[inline(never)]
-pub fn invalid_numeric_syntax(input: &str) -> PgError {
-    PgError::error(format!(
-        "invalid input syntax for type numeric: \"{input}\""
-    ))
-    .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
+pub fn invalid_numeric_syntax(input: &[u8]) -> PgError {
+    let err = match core::str::from_utf8(input) {
+        Ok(s) => PgError::error(format!(
+            "invalid input syntax for type numeric: \"{s}\""
+        )),
+        Err(_) => {
+            let mut msg = b"invalid input syntax for type numeric: \"".to_vec();
+            msg.extend_from_slice(input);
+            msg.push(b'"');
+            PgError::error_raw_message(msg)
+        }
+    };
+    err.with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
 }

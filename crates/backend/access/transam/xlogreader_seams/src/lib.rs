@@ -171,6 +171,8 @@ pub struct XLogReaderState {
     pub currTLI: TimeLineID,
     pub currTLIValidUntil: XLogRecPtr,
     pub nextTLI: TimeLineID,
+    pub latestPagePtr: XLogRecPtr,
+    pub latestPageTLI: TimeLineID,
     pub private_end_of_wal: bool,
     pub nonblocking: bool,
 }

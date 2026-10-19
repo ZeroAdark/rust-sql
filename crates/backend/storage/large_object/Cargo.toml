@@ -32,6 +32,7 @@ aclchk = { path = "../../catalog/aclchk" }
 adt_acl = { path = "../../utils/adt/acl" }
 miscinit = { path = "../../utils/init/miscinit" }
 xact = { path = "../../access/transam/xact" }
+resowner = { path = "../../utils/resowner/resowner" }
 snapmgr = { path = "../../utils/time/snapmgr" }
 guc_tables = { path = "../../utils/misc/guc_tables" }
 fmgr_seams = { path = "../../utils/fmgr/fmgr_seams" }

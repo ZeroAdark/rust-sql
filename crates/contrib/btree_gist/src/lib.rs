@@ -1409,7 +1409,12 @@ fn fc_gbt_var_fetch(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<
 }
 
 fn fc_gbtreekey_in(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let typioparam = fcinfo.arg(1).as_oid();
+    // A direct SQL call carries one arg; C reads slot 1 unchecked (btree_gist.c:28).
+    let typioparam = if fcinfo.nargs() > 1 {
+        fcinfo.arg(1).as_oid()
+    } else {
+        ::types_core::primitive::InvalidOid
+    };
     let name =
         format_type::format_type_extended(typioparam, -1, format_type::FORMAT_TYPE_ALLOW_INVALID)?
             .unwrap_or_else(|| "-".to_string());

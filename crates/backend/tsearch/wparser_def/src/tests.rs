@@ -299,19 +299,26 @@ fn nondefault_parser_via_ts_cache_fmgr_drive() {
     fcinfo.set_arg(0, datum::Datum::from_oid(CUSTOM_PRS));
     fcinfo.set_arg(1, input);
 
-    let crate::builtins::SrfRows::Tuples(custom) =
+    let crate::builtins::SrfRows::CStrings(custom) =
         crate::builtins::parse_rows(&fcinfo, CUSTOM_PRS).unwrap();
-    let crate::builtins::SrfRows::Tuples(default) =
+    let crate::builtins::SrfRows::CStrings(default) =
         crate::builtins::parse_rows(&fcinfo, crate::builtins::DEFAULT_PARSER_OID).unwrap();
     assert_eq!(custom.len(), 5, "The/ /Fat/ /Rats");
     assert_eq!(custom, default);
+    // prs_process_call: sprintf("%d") of the type and the lexeme bytes.
+    assert_eq!(custom[0], vec![b"1".to_vec(), b"The".to_vec()]);
+    assert_eq!(custom[1], vec![b"12".to_vec(), b" ".to_vec()]);
 
-    let crate::builtins::SrfRows::Tuples(custom_tt) =
+    let crate::builtins::SrfRows::CStrings(custom_tt) =
         crate::builtins::token_type_rows(&fcinfo, CUSTOM_PRS).unwrap();
-    let crate::builtins::SrfRows::Tuples(default_tt) =
+    let crate::builtins::SrfRows::CStrings(default_tt) =
         crate::builtins::token_type_rows(&fcinfo, crate::builtins::DEFAULT_PARSER_OID).unwrap();
     assert_eq!(custom_tt.len(), 23);
     assert_eq!(custom_tt, default_tt);
+    assert_eq!(
+        custom_tt[0],
+        vec![b"1".to_vec(), b"asciiword".to_vec(), b"Word, all ASCII".to_vec()]
+    );
 }
 
 #[test]

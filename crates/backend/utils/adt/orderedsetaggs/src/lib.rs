@@ -14,8 +14,8 @@ use ::types_core::catalog::{FLOAT8OID, INTERVALOID};
 use ::types_core::Oid;
 use ::types_error::{PgError, PgResult, ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE};
 use ::types_fmgr::{
-    byref_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo, LocalFcinfo,
-    PGFunction,
+    byref_result, function_call2_coll_in, FmgrBuiltin, FmgrInfo,
+    FunctionCallInfoBaseData as Fcinfo, PGFunction,
 };
 use ::types_nodes::primnodes::{Aggref, AGGKIND_HYPOTHETICAL, AGGKIND_NORMAL};
 use ::types_slot::{SlotData, TupleSlotKind};
@@ -909,15 +909,15 @@ pub fn fc_mode_final(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
             last_val_is_mode = true;
             last_abbrev = abbrev;
         } else {
-            let equal = abbrev.as_usize() == last_abbrev.as_usize() && {
-                let eq = st.equalfn.as_mut().unwrap();
-                let mut fc2 = LocalFcinfo::<2>::fresh(collation);
-                // SAFETY: the per-tuple context outlives the call.
-                unsafe { fc2.set_result_mcx(mcx) };
-                fc2.args[0] = NullableDatum { value: val, isnull: false };
-                fc2.args[1] = NullableDatum { value: last_val, isnull: false };
-                eq.invoke(&mut fc2)?.as_bool()
-            };
+            let equal = abbrev.as_usize() == last_abbrev.as_usize()
+                && function_call2_coll_in(
+                    st.equalfn.as_mut().unwrap(),
+                    collation,
+                    mcx,
+                    val,
+                    last_val,
+                )?
+                .as_bool();
             if equal {
                 if last_val_is_mode {
                     mode_freq += 1;
@@ -1010,7 +1010,9 @@ fn hypothetical_rank_common(
     }
     let nargs = nargs / 2;
     hypothetical_check_argtypes(flinfo, nargs, st)?;
-    assert!(!st.sort_done, "hypothetical-set aggregate cannot share transition state");
+    if st.sort_done {
+        return Err(elog_error("invalid tuplesort state"));
+    }
 
     insert_hypothetical_row(st, fcinfo, nargs, flag)?;
     st.sort.as_mut().unwrap().performsort()?;
@@ -1113,7 +1115,9 @@ pub fn fc_hypothetical_dense_rank_final(
             ));
         }
     }
-    assert!(!st.sort_done, "hypothetical-set aggregate cannot share transition state");
+    if st.sort_done {
+        return Err(elog_error("invalid tuplesort state"));
+    }
 
     insert_hypothetical_row(st, fcinfo, nargs, -1)?;
     st.sort.as_mut().unwrap().performsort()?;
@@ -1127,6 +1131,9 @@ pub fn fc_hypothetical_dense_rank_final(
     // Spilled reads recycle slab slots on the next fetch: the held previous
     // row needs an owned copy (C passes copy=true here unconditionally).
     let spilled = st.sort.as_ref().unwrap().spilled();
+    // C evaluates compareTuple with ExecQualAndReset under a standalone
+    // ExprContext's per-tuple memory (orderedsetaggs.c:1319-1328, 1408).
+    let mut per_tuple = ::mcx::MemoryContext::new_bump("hypothetical_dense_rank per-tuple");
     loop {
         ::tuplesort::cfi()?;
         let OsaGroupState { sort, fetch_slot, extra_slot, compare_tuple, gcx, .. } = st;
@@ -1152,7 +1159,17 @@ pub fn fc_hypothetical_dense_rank_final(
                 inner: Some(&mut *prev),
                 outer: Some(&mut *cur),
             };
-            if ::execexpr::exec_qual(compare_tuple.as_deref_mut(), &mut slots)? {
+            // SAFETY: per_tuple outlives this evaluation and is reset right
+            // after it, before the next arm.
+            unsafe {
+                compare_tuple
+                    .as_deref_mut()
+                    .expect("compare_tuple built above")
+                    .arm_result_mcx_raw(per_tuple.mcx())
+            };
+            let matched = ::execexpr::exec_qual(compare_tuple.as_deref_mut(), &mut slots);
+            per_tuple.reset();
+            if matched? {
                 duplicate_count += 1;
             }
         }

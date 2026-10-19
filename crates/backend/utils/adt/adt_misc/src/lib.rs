@@ -176,12 +176,9 @@ pub fn fc_pg_input_error_info(
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
     let Some(flinfo) = flinfo else { null_flinfo("pg_input_error_info") };
+    let expected = builtins::expected_desc(fcinfo);
     let mcx = fcinfo.result_mcx();
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
-    if resolved.class != funcapi::TypeFuncClass::Composite {
-        return Err(not_row_type());
-    }
-    let tupdesc = resolved.result_tuple_desc.expect("composite result has tupdesc");
+    let tupdesc = builtins::call_result_desc(mcx, flinfo, expected)?;
 
     let mut escontext = ErrorSaveNode::new(true);
     let ok = input_is_valid_common(flinfo, fcinfo, &mut escontext)?;
@@ -195,8 +192,8 @@ pub fn fc_pg_input_error_info(
         // input function reported a non-UTF-8 literal).
         values[0] = text_datum(mcx, err.message_raw.as_deref().unwrap_or(err.message.as_bytes()))?;
         isnull[0] = false;
-        if let Some(detail) = &err.detail {
-            values[1] = text_datum(mcx, detail.as_bytes())?;
+        if let Some(detail) = err.detail_raw.as_deref().or(err.detail.as_deref().map(str::as_bytes)) {
+            values[1] = text_datum(mcx, detail)?;
             isnull[1] = false;
         }
         if let Some(hint) = &err.hint {

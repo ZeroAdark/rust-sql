@@ -105,18 +105,11 @@ fn strtol10(s: &[u8]) -> (i64, usize) {
 // _crypt_itoa64 (crypt-sha.c:62) — same table as crypt.rs ITOA64.
 const ITOA64: &[u8; 64] = super::ITOA64;
 
-/// `pg_mblen`-alike for the error message's `%.*s`: byte length of the
-/// (assumed UTF-8) character starting at `s[0]`, clamped to the slice.
-fn mb_char(s: &[u8]) -> String {
-    let n = match s[0] {
-        b if b < 0x80 => 1,
-        b if b >= 0xf0 => 4,
-        b if b >= 0xe0 => 3,
-        b if b >= 0xc0 => 2,
-        _ => 1,
-    }
-    .min(s.len());
-    String::from_utf8_lossy(&s[..n]).into_owned()
+/// crypt-sha.c:330 `%.*s` with pg_mblen_cstr: the database encoding's
+/// character length at `s[0]`, clamped to the slice.
+fn mb_char(s: &[u8]) -> &[u8] {
+    let n = (mbutils::pg_mblen(s).max(1) as usize).min(s.len());
+    &s[..n]
 }
 
 fn contains(hay: &[u8], needle: &[u8]) -> bool {
@@ -428,10 +421,15 @@ pub fn crypt_sha(pw: &[u8], setting: &[u8]) -> Result<String, CryptError> {
             if ITOA64.contains(&c) {
                 decoded.push(c);
             } else {
-                return Err(err_22023(format!(
-                    "invalid character in salt string: \"{}\"",
-                    mb_char(&rest[i..])
-                )));
+                return Err(CryptError::Pg(
+                    PgError::error_bytes(
+                        "invalid character in salt string: \"",
+                        mb_char(&rest[i..]),
+                        "\"",
+                    )
+                    .with_sqlstate(types_error::ERRCODE_INVALID_PARAMETER_VALUE)
+                    .into(),
+                ));
             }
         } else if !decoded.is_empty() {
             // '$' after at least one absorbed byte terminates the salt;
@@ -443,6 +441,14 @@ pub fn crypt_sha(pw: &[u8], setting: &[u8]) -> Result<String, CryptError> {
         i += 1;
     }
     let salt_len = decoded.len();
+    // crypt-sha.c:351
+    let _ = elog::elog(
+        types_error::DEBUG1,
+        format!(
+            "using salt \"{}\", salt len = {salt_len}, rounds = {rounds}",
+            String::from_utf8_lossy(&decoded)
+        ),
+    );
     // C's dec_salt_binary: digest B and DS read salt_len bytes from the RAW
     // post-options string, NOT the cleaned salt (crypt-sha.c:377,456).
     let salt_raw = &rest[..salt_len];

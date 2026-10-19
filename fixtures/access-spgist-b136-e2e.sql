@@ -5,7 +5,7 @@
 CREATE DATABASE b136e2e TEMPLATE template0 ENCODING 'UTF8';
 \c b136e2e
 \set VERBOSITY verbose
--- fp-spgist-spgquadtreeproc#1: a cross-type operator bound to an unsupported
+-- regression: a cross-type operator bound to an unsupported
 -- strategy in quad_point_ops / kd_point_ops raises XX000 from the consistent
 -- functions instead of decoding the by-value argument as a point pointer.
 CREATE TABLE b136_tp(p point);
@@ -31,7 +31,7 @@ ALTER OPERATOR FAMILY kd_point_ops USING spgist DROP OPERATOR 2 (point, int4);
 DROP TABLE b136_tp;
 DROP OPERATOR ##<(point, int4);
 DROP FUNCTION b136_pt_int(point, int4);
--- fp-spgist-spgutils#1: an opclass declared FOR TYPE "any" keeps "any" as the
+-- regression: an opclass declared FOR TYPE "any" keeps "any" as the
 -- index input type ("any" is not polymorphic), so a config leaf type of box
 -- without a compress method is rejected at index build.
 CREATE TABLE b136_tb(b box);
@@ -47,7 +47,7 @@ SELECT count(*) FROM pg_class WHERE relname = 'b136_tb_any';
 DROP TABLE b136_tb;
 DROP OPERATOR CLASS b136_boxany_ops USING spgist;
 DROP OPERATOR FAMILY b136_boxany_ops USING spgist;
--- fp-spgist-b1#1: the SP-GiST insert temporary context is created and deleted
+-- regression: the SP-GiST insert temporary context is created and deleted
 -- per inserted row, so a BEFORE ROW trigger on a later row never sees it.
 CREATE TABLE b136_tm(p point);
 CREATE INDEX b136_tm_i ON b136_tm USING spgist (p);

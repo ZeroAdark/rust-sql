@@ -239,13 +239,27 @@ fn initial_slot() -> ReplicationSlot {
     }
 }
 
+// sizeof(ReplicationSlot) in C 18.6 on LP64 (slot.h); ReplicationSlotCtlData
+// is the bare slot array (offsetof(replication_slots) == 0).
+const C_SIZEOF_REPLICATION_SLOT: usize = 288;
+
 pub fn ReplicationSlotsShmemSize() -> usize {
     let n = walsender_config::max_replication_slots();
-    if n == 0 {
+    if n <= 0 {
         0
     } else {
-        n as usize * size_of::<ReplicationSlot>()
+        n as usize * C_SIZEOF_REPLICATION_SLOT
     }
+}
+
+// slot.c:211 ShmemInitStruct("ReplicationSlot Ctl", ReplicationSlotsShmemSize()):
+// the ShmemIndex row pg_shmem_allocations lists. The slot bodies themselves
+// stay in the boxed array (Rust-sized); the C-sized arena carries the name.
+fn register_shmem_ctl() -> PgResult<()> {
+    if shmem_seams::shmem_init_struct::is_installed() {
+        shmem_seams::shmem_init_struct::call("ReplicationSlot Ctl", ReplicationSlotsShmemSize())?;
+    }
+    Ok(())
 }
 
 pub fn ReplicationSlotsShmemInit() {
@@ -253,6 +267,7 @@ pub fn ReplicationSlotsShmemInit() {
     if n == 0 {
         return;
     }
+    let _ = register_shmem_ctl();
     let slots: Box<[ReplicationSlot]> = (0..n).map(|_| initial_slot()).collect();
     let len = slots.len();
     let ptr = Box::into_raw(slots) as *mut ReplicationSlot;
@@ -337,8 +352,6 @@ pub fn ReplicationSlotCreate(
     failover: bool,
     synced: bool,
 ) -> PgResult<()> {
-    assert!(MyReplicationSlot().is_none());
-
     ReplicationSlotValidateName(name, ERROR)?;
 
     if failover {
@@ -495,8 +508,6 @@ pub fn ReplicationSlotName(index: i32) -> PgResult<Option<NameData>> {
 
 pub fn ReplicationSlotAcquire(name: &str, nowait: bool, error_if_invalid: bool) -> PgResult<()> {
     loop {
-        assert!(MyReplicationSlot().is_none());
-
         lw(control_lock(), LW_SHARED)?;
         let s = SearchNamedReplicationSlot(name, false)?;
         // SAFETY: ReplicationSlot field serialized by ReplicationSlotControlLock / the slot spinlock mutex
@@ -674,8 +685,6 @@ fn walsender_slot_log_message(acquired: bool, is_logical: bool, slotname: &str) 
 }
 
 pub fn ReplicationSlotCleanup(synced_only: bool) -> PgResult<()> {
-    assert!(MyReplicationSlot().is_none());
-
     // No slot array (test harnesses / slot-less boots): nothing to clean.
     if REPLICATION_SLOT_CTL.get().is_none() {
         return Ok(());
@@ -707,8 +716,6 @@ pub fn ReplicationSlotCleanup(synced_only: bool) -> PgResult<()> {
 }
 
 pub fn ReplicationSlotDrop(name: &str, nowait: bool) -> PgResult<()> {
-    assert!(MyReplicationSlot().is_none());
-
     ReplicationSlotAcquire(name, nowait, false)?;
 
     // SAFETY: ReplicationSlot field serialized by ReplicationSlotControlLock / the slot spinlock mutex
@@ -728,7 +735,6 @@ pub fn ReplicationSlotAlter(
     failover: Option<bool>,
     two_phase: Option<bool>,
 ) -> PgResult<()> {
-    assert!(MyReplicationSlot().is_none());
     assert!(failover.is_some() || two_phase.is_some());
 
     ReplicationSlotAcquire(name, false, true)?;
@@ -2345,11 +2351,15 @@ pub fn init_seams() {
     slot_seams::replication_slots_drop_db_slots::set(ReplicationSlotsDropDBSlots);
     slot_seams::startup_replication_slots::set(StartupReplicationSlots);
     slot_seams::check_point_replication_slots::set(CheckPointReplicationSlots);
-    slot_seams::named_replication_slot_info::set(|name, need_lock| {
-        Ok(match SearchNamedReplicationSlot(name, need_lock)? {
+    slot_seams::with_named_replication_slot_info::set(|name, body| {
+        lw(control_lock(), LW_SHARED)?;
+        let (index, is_logical) = match SearchNamedReplicationSlot(name, false)? {
             Some(s) => (ReplicationSlotIndex(s), SlotIsLogical(s)),
             None => (-1, false),
-        })
+        };
+        let r = body(index, is_logical);
+        LWLockRelease(control_lock())?;
+        r
     });
     slot_seams::replication_slot_name::set(|index| {
         Ok(ReplicationSlotName(index)?.map(|n| {

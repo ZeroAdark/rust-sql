@@ -131,7 +131,7 @@ const fn b(foid: Oid, name: &'static str, nargs: i16, func: PGFunction) -> FmgrB
     FmgrBuiltin { foid, name, nargs, strict: true, retset: false, func }
 }
 
-pub const CONSTRAINT_BUILTINS: &[FmgrBuiltin] = &[b(1250, "unique_key_recheck", 1, fc_unique_key_recheck)];
+pub const CONSTRAINT_BUILTINS: &[FmgrBuiltin] = &[b(1250, "unique_key_recheck", 0, fc_unique_key_recheck)];
 
 #[cfg(test)]
 mod tests {
@@ -140,6 +140,13 @@ mod tests {
 
     // constraint.c:59: a plain SELECT unique_key_recheck() is 39P01, not an
     // internal error.
+    // pg_proc.dat:4064 proargtypes => '': a zero-argument fastpath call
+    // must pass the fn_nargs check and reach the 39P01 arm.
+    #[test]
+    fn registered_with_zero_args() {
+        assert_eq!(CONSTRAINT_BUILTINS[0].nargs, 0);
+    }
+
     #[test]
     fn not_called_by_trigger_manager_is_39p01() {
         let mut fcinfo = LocalFcinfo::<1>::new(0);

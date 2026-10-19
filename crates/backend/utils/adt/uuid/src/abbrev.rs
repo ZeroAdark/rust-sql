@@ -39,11 +39,54 @@ impl UuidAbbrevState {
         }
         let card = self.abbr_card.estimate();
         if card > 100000.0 {
+            if trace_sort() {
+                trace_log(estimation_ends_line(card, self.input_count, memtupcount));
+            }
             self.estimating = false;
             return false;
         }
-        card < self.input_count as f64 / 2000.0 + 0.5
+        let threshold = self.input_count as f64 / 2000.0 + 0.5;
+        if card < threshold {
+            if trace_sort() {
+                trace_log(aborting_line(card, threshold, self.input_count, memtupcount));
+            }
+            return true;
+        }
+        if trace_sort() {
+            trace_log(cardinality_line(card, self.input_count, memtupcount));
+        }
+        false
     }
+}
+
+fn estimation_ends_line(card: f64, input_count: i64, memtupcount: i32) -> String {
+    format!(
+        "uuid_abbrev: estimation ends at cardinality {card:.6} after {input_count} values \
+         ({memtupcount} rows)"
+    )
+}
+
+fn aborting_line(card: f64, threshold: f64, input_count: i64, memtupcount: i32) -> String {
+    format!(
+        "uuid_abbrev: aborting abbreviation at cardinality {card:.6} below threshold \
+         {threshold:.6} after {input_count} values ({memtupcount} rows)"
+    )
+}
+
+fn cardinality_line(card: f64, input_count: i64, memtupcount: i32) -> String {
+    format!("uuid_abbrev: cardinality {card:.6} after {input_count} values ({memtupcount} rows)")
+}
+
+fn trace_sort() -> bool {
+    guc_tables::vars::trace_sort.installed() && guc_tables::vars::trace_sort.read()
+}
+
+#[cold]
+#[inline(never)]
+fn trace_log(message: String) {
+    let _ = elog::ereport(types_error::LOG)
+        .errmsg_internal(message)
+        .finish(types_error::ErrorLocation::new(file!(), line!() as i32, "uuid_abbrev_abort"));
 }
 
 impl Default for UuidAbbrevState {
@@ -92,5 +135,24 @@ mod tests {
             st.convert(&u);
         }
         assert!(st.abort(20000));
+    }
+
+    // uuid.c:363-393 trace_sort lines, %f = six decimals, INT64_FORMAT / %d.
+    #[test]
+    fn trace_sort_lines_match_c() {
+        assert_eq!(
+            cardinality_line(10259.653083, 10240, 10240),
+            "uuid_abbrev: cardinality 10259.653083 after 10240 values (10240 rows)"
+        );
+        assert_eq!(
+            aborting_line(1.000489, 5.62, 10240, 10240),
+            "uuid_abbrev: aborting abbreviation at cardinality 1.000489 below threshold \
+             5.620000 after 10240 values (10240 rows)"
+        );
+        assert_eq!(
+            estimation_ends_line(100000.5, 200000, 200000),
+            "uuid_abbrev: estimation ends at cardinality 100000.500000 after 200000 values \
+             (200000 rows)"
+        );
     }
 }

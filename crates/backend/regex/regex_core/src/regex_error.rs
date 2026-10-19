@@ -68,7 +68,9 @@ impl From<alloc::collections::TryReserveError> for RegError {
 // regcomp/regexec/regprefix seam boundaries re-surface the stashed error as
 // their own `PgResult::Err`, exactly as C's longjmp would have aborted the
 // whole operation. REG_CANCEL is never shown to users (it is intercepted at the
-// seam), so it is not added to the pg_regerror message table.
+// seam), so it is not added to the pg_regerror message table. The same stash
+// carries the one other ereport C raises from inside the engine: palloc's
+// MaxAllocSize refusal (`check_alloc_request`).
 std::thread_local! {
     static PENDING_CANCEL: core::cell::Cell<Option<alloc::boxed::Box<types_error::PgError>>> =
         const { core::cell::Cell::new(None) };
@@ -92,6 +94,27 @@ pub fn check_interrupt() -> RegResult<()> {
             PENDING_CANCEL.with(|c| c.set(Some(e)));
             return Err(err_cancel());
         }
+    }
+    Ok(())
+}
+
+/// C `MaxAllocSize` (memutils.h).
+pub const MAX_ALLOC_SIZE: usize = 0x3FFF_FFFF;
+
+/// regcustom.h `MALLOC_ARRAY(type, n)` -> `palloc_extended(n * sizeof(type),
+/// MCXT_ALLOC_NO_OOM)`: a request above MaxAllocSize is not a regex error code
+/// but the elog(ERROR) of mcxt.c MemoryContextSizeFailure, aborting the whole
+/// operation. `c_size` is C's `sizeof(type)`, so the reported byte count
+/// matches C even where the Rust element differs in size.
+pub fn check_alloc_request(nmemb: usize, c_size: usize) -> RegResult<()> {
+    let bytes = nmemb.checked_mul(c_size).ok_or(err_espace())?;
+    if bytes > MAX_ALLOC_SIZE {
+        PENDING_CANCEL.with(|c| {
+            c.set(Some(alloc::boxed::Box::new(types_error::PgError::error(
+                alloc::format!("invalid memory alloc request size {bytes}"),
+            ))))
+        });
+        return Err(err_cancel());
     }
     Ok(())
 }

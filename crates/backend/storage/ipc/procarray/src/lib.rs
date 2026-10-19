@@ -1330,8 +1330,15 @@ pub fn GetSnapshotData<'m>(snapshot: &mut SnapshotData<'m>, mcx: Mcx<'m>) -> PgR
     LWLockAcquire(pa_lock, LW_SHARED, myprocno)?;
 
     let latest_completed = FullTransactionId::from_u64(tv.latestCompletedXid.load(Relaxed));
-    let mypgxactoff = my_proc.pgxactoff.load(Relaxed) as usize;
-    let myxid = hdr.xids[mypgxactoff].read();
+    // Our own slot only when it is ours, as in TransactionIdIsInProgress (pgrc2 P8): a caller whose PGPROC is not in
+    // the array (a pool thread) holds offset 0 or a stale one, and must neither take that slot's xid as its own nor
+    // leave it out of xip (a running transaction read as finished: its rows visible once it commits).
+    // SAFETY: [PAL] serialized by ProcArrayLock
+    let mypgxactoff = match my_proc.pgxactoff.load(Relaxed) as usize {
+        off if off < unsafe { arrayP.numProcs.get() } as usize && unsafe { arrayP.pgprocnos[off].get() } == myprocno => off,
+        _ => usize::MAX,
+    };
+    let myxid = if mypgxactoff == usize::MAX { InvalidTransactionId } else { hdr.xids[mypgxactoff].read() };
     debug_assert_eq!(myxid, my_proc.xid.read());
 
     let oldestxid = tv.oldestXid.load(Relaxed);
@@ -1639,7 +1646,7 @@ fn transaction_id_is_in_progress_scan(xid: TransactionId) -> PgResult<bool> {
         // exclusive lock) MOVES entries, so a pre-lock sample can alias
         // ANOTHER backend's current slot — the self-skip below then skips a
         // RUNNING transaction and the scan answers a false not-in-progress
-        // (found under GL-ELR-XIDWAIT's connection-churn hot-row repro:
+        // (found under regression's connection-churn hot-row repro:
         // the wrong answer resurrected updated versions via the
         // xmax-aborted visibility arms and forked the version chain; the
         // stale answer was then pinned by CACHED_XID_NOT_IN_PROGRESS).
@@ -1655,6 +1662,15 @@ fn transaction_id_is_in_progress_scan(xid: TransactionId) -> PgResult<bool> {
 
         // SAFETY: [PAL] serialized by ProcArrayLock
         let num_procs = unsafe { arrayP.numProcs.get() } as usize;
+        // Skip our own slot only when it is ours. A caller whose PGPROC is not in the array (a pool thread's
+        // identity: InitProcess without ProcArrayAdd) holds offset 0 from InitProcGlobal, or a stale one, and C's
+        // bare compare would skip whoever sits there: after a restart that is a recovered prepared transaction's
+        // dummy proc, answered not-in-progress (pgrc2 P8: the start-time columnar load dropped its generation).
+        // SAFETY: [PAL] serialized by ProcArrayLock
+        let mypgxactoff = match usize::try_from(mypgxactoff) {
+            Ok(off) if off < num_procs && unsafe { arrayP.pgprocnos[off].get() } == myprocno => mypgxactoff,
+            _ => -1,
+        };
         for pgxactoff in 0..num_procs {
             if pgxactoff as i32 == mypgxactoff {
                 continue;

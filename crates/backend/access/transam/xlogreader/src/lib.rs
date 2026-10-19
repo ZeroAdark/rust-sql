@@ -391,7 +391,11 @@ struct ErrSink<'a, 'mcx> {
     deferred: &'a mut bool,
 }
 
-impl ErrSink<'_, '_> {
+trait InvalidSink {
+    fn report(&mut self, args: fmt::Arguments<'_>);
+}
+
+impl InvalidSink for ErrSink<'_, '_> {
     #[cold]
     fn report(&mut self, args: fmt::Arguments<'_>) {
         self.buf.clear();
@@ -410,6 +414,16 @@ impl fmt::Write for CapWriter<'_, '_> {
         let room = MAX_ERRORMSG_LEN.saturating_sub(self.buf.len());
         let take = s.len().min(room);
         vec_append_bytes(self.buf, &s.as_bytes()[..take]).map_err(|_| fmt::Error)
+    }
+}
+
+struct StringSink(String);
+
+impl InvalidSink for StringSink {
+    #[cold]
+    fn report(&mut self, args: fmt::Arguments<'_>) {
+        self.0.clear();
+        let _ = fmt::Write::write_fmt(&mut self.0, args);
     }
 }
 
@@ -451,8 +465,6 @@ pub struct XLogReaderState<'mcx> {
     pub missingContrecPtr: XLogRecPtr,
     pub overwrittenRecPtr: XLogRecPtr,
     currRecPtr: XLogRecPtr,
-    latestPagePtr: XLogRecPtr,
-    latestPageTLI: TimeLineID,
     pub DecodeRecPtr: XLogRecPtr,
     pub NextRecPtr: XLogRecPtr,
     errormsg_buf: PgVec<'mcx, u8>,
@@ -516,8 +528,6 @@ impl<'mcx> XLogReaderState<'mcx> {
             missingContrecPtr: InvalidXLogRecPtr,
             overwrittenRecPtr: InvalidXLogRecPtr,
             currRecPtr: InvalidXLogRecPtr,
-            latestPagePtr: InvalidXLogRecPtr,
-            latestPageTLI: 0,
             DecodeRecPtr: InvalidXLogRecPtr,
             NextRecPtr: InvalidXLogRecPtr,
             errormsg_buf: vec_with_capacity_in(mcx, MAX_ERRORMSG_LEN)?,
@@ -1361,9 +1371,7 @@ impl<'mcx> XLogReaderState<'mcx> {
             ref read_buf,
             ref mut errormsg_buf,
             ref mut errormsg_deferred,
-            ref mut latestPagePtr,
-            ref mut latestPageTLI,
-            ref v,
+            ref mut v,
             system_identifier,
             ..
         } = *self;
@@ -1375,8 +1383,8 @@ impl<'mcx> XLogReaderState<'mcx> {
             v.seg.ws_tli,
             v.segcxt.ws_segsize,
             system_identifier,
-            latestPagePtr,
-            latestPageTLI,
+            &mut v.latestPagePtr,
+            &mut v.latestPageTLI,
             &mut err,
             recptr,
             read_buf,
@@ -1387,9 +1395,7 @@ impl<'mcx> XLogReaderState<'mcx> {
         let XLogReaderState {
             ref mut errormsg_buf,
             ref mut errormsg_deferred,
-            ref mut latestPagePtr,
-            ref mut latestPageTLI,
-            ref v,
+            ref mut v,
             system_identifier,
             ..
         } = *self;
@@ -1401,8 +1407,8 @@ impl<'mcx> XLogReaderState<'mcx> {
             v.seg.ws_tli,
             v.segcxt.ws_segsize,
             system_identifier,
-            latestPagePtr,
-            latestPageTLI,
+            &mut v.latestPagePtr,
+            &mut v.latestPageTLI,
             &mut err,
             recptr,
             phdr,
@@ -1645,7 +1651,7 @@ impl<'mcx> XLogReaderState<'mcx> {
 
     /// (latestPagePtr, latestPageTLI): the last page-header-validated page.
     pub fn latest_page(&self) -> (XLogRecPtr, TimeLineID) {
-        (self.latestPagePtr, self.latestPageTLI)
+        (self.v.latestPagePtr, self.v.latestPageTLI)
     }
 
     fn marshal_view_record(&mut self) {
@@ -1702,13 +1708,35 @@ impl<'mcx> XLogReaderState<'mcx> {
 }
 
 #[allow(clippy::too_many_arguments)]
+// XLogReaderValidatePageHeader over the view alone (xlogrecovery.c:3517 page-read callback).
+pub fn validate_view_page_header(
+    v: &mut ReaderView,
+    system_identifier: u64,
+    recptr: XLogRecPtr,
+    phdr: &[u8],
+) -> Option<String> {
+    let mut sink = StringSink(String::new());
+    let (ws_tli, ws_segsize) = (v.seg.ws_tli, v.segcxt.ws_segsize);
+    let ok = validate_page_header(
+        ws_tli,
+        ws_segsize,
+        system_identifier,
+        &mut v.latestPagePtr,
+        &mut v.latestPageTLI,
+        &mut sink,
+        recptr,
+        phdr,
+    );
+    (!ok).then_some(sink.0)
+}
+
 fn validate_page_header(
     ws_tli: TimeLineID,
     ws_segsize: i32,
     system_identifier: u64,
     latest_page_ptr: &mut XLogRecPtr,
     latest_page_tli: &mut TimeLineID,
-    err: &mut ErrSink<'_, '_>,
+    err: &mut impl InvalidSink,
     recptr: XLogRecPtr,
     phdr: &[u8],
 ) -> bool {
@@ -2426,7 +2454,7 @@ fn restore_block_image_seam(
             block_id,
         )));
     };
-    if (block_id as i8) > rec.max_block_id || !rec.blocks[block_id as usize].in_use {
+    if i32::from(block_id) > i32::from(rec.max_block_id) || !rec.blocks[block_id as usize].in_use {
         return Ok(Err(restore_err_msg(
             RestoreErr::InvalidBlock,
             record.ReadRecPtr,

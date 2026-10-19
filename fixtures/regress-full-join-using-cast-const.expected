@@ -1,0 +1,27 @@
+-- FS-051. One session.
+CREATE TABLE t_num (k bigint PRIMARY KEY, c1 numeric);
+CREATE TABLE t_int (k bigint PRIMARY KEY, c1 integer);
+INSERT INTO t_num VALUES (1, 5), (2, 7);
+INSERT INTO t_int VALUES (1, 5), (3, 9);
+EXPLAIN (COSTS OFF) SELECT c1, t.k AS tk, u.k AS uk FROM t_num t FULL JOIN t_int u USING (c1) WHERE c1 = 5 ORDER BY tk, uk;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Sort
+   Sort Key: t.k, u.k
+   ->  Merge Full Join
+         ->  Seq Scan on t_num t
+               Filter: (c1 = '5'::numeric)
+         ->  Materialize
+               ->  Seq Scan on t_int u
+                     Filter: ((c1)::numeric = '5'::numeric)
+(8 rows)
+
+   -- PostgreSQL: Merge Full Join over two filtered Seq Scans (Filter: (c1 = '5'::numeric) / ((c1)::numeric = '5'::numeric)), no Merge Cond
+   -- pgrust:     Merge Cond: (t.c1 = ((u.c1)::numeric)) with Sorts on both sides and Filter: (COALESCE(t.c1, (u.c1)::numeric) = '5'::numeric)
+SELECT c1, t.k AS tk, u.k AS uk FROM t_num t FULL JOIN t_int u USING (c1) WHERE c1 = 5 ORDER BY tk, uk;   -- control: (5, 1, 1) on both
+ c1 | tk | uk 
+----+----+----
+  5 |  1 |  1
+(1 row)
+
+DROP TABLE t_num, t_int;

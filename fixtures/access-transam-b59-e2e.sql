@@ -5,10 +5,10 @@
 CREATE DATABASE b59e2e TEMPLATE template0 ENCODING 'UTF8';
 \c b59e2e
 \set VERBOSITY verbose
--- fp-transam-xlog-p2#7 / fp-transam-xlogprefetcher#1: XLOGShmemInit and
+-- regression / regression: XLOGShmemInit and
 -- XLogPrefetchShmemInit register their ShmemIndex rows (default wal_buffers)
 SELECT name, size FROM pg_shmem_allocations WHERE name IN ('XLOG Ctl', 'Control File', 'XLogPrefetchStats') ORDER BY name;
--- fp-transam-xloginsert#1: InitXLogInsert's named context is listed
+-- regression: InitXLogInsert's named context is listed
 SELECT name, level FROM pg_backend_memory_contexts WHERE name = 'WAL record construction';
 \c postgres
 DROP DATABASE b59e2e;

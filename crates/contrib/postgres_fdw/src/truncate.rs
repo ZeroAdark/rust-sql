@@ -9,7 +9,6 @@ use types_rel::Relation;
 
 use crate::connection;
 use crate::deparse;
-use crate::modify::parse_bool;
 
 /// postgresExecForeignTruncate (postgres_fdw.c:3000). `rels` all belong to one
 /// foreign server (ExecuteTruncateGuts groups by serverid).
@@ -35,7 +34,7 @@ pub fn postgresExecForeignTruncate<'mcx>(
             let server = GetForeignServer(mcx, serverid)?;
             for opt in server.options.iter() {
                 if opt.name == "truncatable" {
-                    server_truncatable = parse_bool(opt.require_value()?);
+                    server_truncatable = crate::option::def_get_boolean(opt.name, opt.value)?;
                     break;
                 }
             }
@@ -46,7 +45,7 @@ pub fn postgresExecForeignTruncate<'mcx>(
         let mut truncatable = server_truncatable;
         for opt in table.options.iter() {
             if opt.name == "truncatable" {
-                truncatable = parse_bool(opt.require_value()?);
+                truncatable = crate::option::def_get_boolean(opt.name, opt.value)?;
                 break;
             }
         }

@@ -63,8 +63,8 @@ impl GucVariable {
         }
     }
 
-    pub fn name(&self) -> &'static str {
-        self.gen().name
+    pub fn name(&self) -> &str {
+        &self.gen().name
     }
 }
 
@@ -101,8 +101,10 @@ impl GucRegistry {
         }
     }
 
+    // guc_report_list is head-pushed (guc.c:4272): newest change first.
     pub fn drain_report_list(&mut self) -> Vec<usize> {
-        let indices = core::mem::take(&mut self.reported);
+        let mut indices = core::mem::take(&mut self.reported);
+        indices.reverse();
         for &idx in &indices {
             self.vars[idx].gen_mut().status &= !GUC_NEEDS_REPORT;
         }
@@ -190,9 +192,10 @@ impl GucRegistry {
     pub fn add_placeholder_variable(&mut self, name: &str) -> PgResult<usize> {
         use types_guc::{config_group, config_type};
 
-        // C guc_strdups the name into GUCMemoryContext, never freed.
+        // C guc_strdups the name into GUCMemoryContext, which lives exactly
+        // as long as the backend; the owned name dies with this registry.
         let gen = config_generic::boot(
-            Box::leak(name.to_string().into_boxed_str()),
+            name.to_string(),
             GucContext::PGC_USERSET,
             config_group::CUSTOM_OPTIONS,
             Some("GUC placeholder variable"),
@@ -259,11 +262,11 @@ impl GucRegistry {
     // guc_hashtab entry and unlinks the var from all lists; our vars slot must
     // keep its index, so it stays behind as a GUC_REMOVED tombstone that
     // find_index/iter can no longer reach. Returns the removed names.
-    pub fn remove_reserved_placeholders(&mut self, class_name: &str) -> Vec<&'static str> {
+    pub fn remove_reserved_placeholders(&mut self, class_name: &str) -> Vec<String> {
         let mut removed = Vec::new();
         for idx in 0..self.vars.len() {
             let g = self.vars[idx].gen();
-            let name = g.name;
+            let name = g.name.to_string();
             if g.flags & types_guc::GUC_CUSTOM_PLACEHOLDER == 0
                 || g.status & crate::model::GUC_REMOVED != 0
                 || name.len() <= class_name.len()
@@ -272,7 +275,7 @@ impl GucRegistry {
             {
                 continue;
             }
-            self.index.remove(fold_name(name).as_str());
+            self.index.remove(fold_name(&name).as_str());
             self.stacked.retain(|&i| i != idx);
             self.reported.retain(|&i| i != idx);
             self.nondef.retain(|&i| i != idx);
@@ -403,7 +406,7 @@ fn check_can_set(
     change_val: bool,
     is_reload: bool,
 ) -> PgResult<AccessCheck> {
-    let name = record.name;
+    let name = record.name.as_ref();
 
     if xact_seams::is_in_parallel_mode::call()
         && change_val
@@ -538,7 +541,7 @@ pub fn parse_and_validate_value(
     source: GucSource,
 ) -> PgResult<(config_var_val, Option<SharedExtra>)> {
     let gen = record.gen();
-    let name = gen.name;
+    let name = gen.name.as_ref();
 
     match record {
         GucVariable::Bool(conf) => {
@@ -662,7 +665,7 @@ fn unit_and_space(flags: i32) -> (&'static str, &'static str) {
 
 // call_*_check_hook (guc.c:6809..): an uninstalled slot is an unported owner;
 // it behaves as C's check_hook == NULL (boot defaults are valid by construction).
-fn check_hook_error(fallback: String) -> PgError {
+pub(crate) fn check_hook_error(fallback: String) -> PgError {
     let check = crate::take_guc_check_error();
     if check.message.is_none()
         && check.detail.is_none()
@@ -674,7 +677,9 @@ fn check_hook_error(fallback: String) -> PgError {
     let mut builder = ereport(ERROR)
         .errcode(check.sqlstate)
         .errmsg(check.message.unwrap_or(fallback));
-    if let Some(detail) = check.detail {
+    if let Some(raw) = check.detail_raw {
+        builder = builder.errdetail_raw(raw);
+    } else if let Some(detail) = check.detail {
         builder = builder.errdetail_internal(detail);
     }
     if let Some(hint) = check.hint {
@@ -698,10 +703,13 @@ macro_rules! check_hook_caller {
             }
             crate::reset_guc_check_error();
             let mut extra: Option<GucHookExtra> = None;
-            if (slot.get())(newval, &mut extra, source)? {
-                Ok(extra.map(SharedExtra::new))
-            } else {
-                Err(check_hook_error($fallback(conf, newval)).into())
+            match (slot.get())(newval, &mut extra, source) {
+                Ok(true) => Ok(extra.map(SharedExtra::new)),
+                Ok(false) => Err(check_hook_error($fallback(conf, newval)).into()),
+                Err(e) => {
+                    crate::mark_guc_check_thrown();
+                    Err(e)
+                }
             }
         }
     };
@@ -982,22 +990,19 @@ pub fn reset_value_string(record: &GucVariable) -> Option<String> {
 }
 
 // get_explain_guc_options (guc.c): GUC_EXPLAIN vars whose current value
-// differs from boot_val, as (name, GetConfigOptionByName value). C walks
-// guc_nondef_list in hash order; table order here — EXPLAIN (SETTINGS)
-// consumers are order-insensitive (regress greps the line / extracts JSON
-// keys). `visible` is ConfigOptionIsVisible (lives with the ACL deps).
-pub fn get_explain_guc_options(
-    reg: &GucRegistry,
+// differs from boot_val, as (name, GetConfigOptionByName value), in
+// guc_nondef_list order (guc.c:5351: the order the vars first left
+// PGC_S_DEFAULT — the Settings line is printed in it). `visible` is
+// ConfigOptionIsVisible (lives with the ACL deps).
+pub fn get_explain_guc_options<'r>(
+    reg: &'r GucRegistry,
     visible: &mut dyn FnMut(&GucVariable) -> PgResult<bool>,
-) -> PgResult<Vec<(&'static str, Option<String>)>> {
+) -> PgResult<Vec<(&'r str, Option<String>)>> {
     let mut out = Vec::new();
-    for conf in reg.iter() {
+    for &idx in &reg.nondef {
+        let conf = &reg.vars[idx];
         let gen = conf.gen();
         if gen.flags & types_guc::GUC_EXPLAIN == 0 {
-            continue;
-        }
-        // guc_nondef_list membership: only sources beyond the default.
-        if gen.source == PGC_S_DEFAULT {
             continue;
         }
         if !visible(conf)? {
@@ -1017,7 +1022,7 @@ pub fn get_explain_guc_options(
         if !modified {
             continue;
         }
-        out.push((gen.name, Some(show_guc_option(conf, true))));
+        out.push((gen.name.as_ref(), Some(show_guc_option(conf, true))));
     }
     Ok(out)
 }
@@ -1199,11 +1204,12 @@ pub fn set_config_option_apply(
     if prohibit_value_change {
         if current_value_differs(&reg.vars[idx], &newval) {
             reg.vars[idx].gen_mut().status |= GUC_PENDING_RESTART;
+            let cname = reg.vars[idx].gen().name.as_ref();
             return reject(
                 elevel,
                 err(
                     ERRCODE_CANT_CHANGE_RUNTIME_PARAM,
-                    format!("parameter \"{name}\" cannot be changed without restarting the server"),
+                    format!("parameter \"{cname}\" cannot be changed without restarting the server"),
                 ),
             );
         }
@@ -1954,7 +1960,9 @@ pub fn at_eoxact_guc(
         }
     }
     reg.stacked = kept;
-    for idx in to_report {
+    // guc_stack_list is head-pushed and walked newest-first (guc.c:2206,
+    // 2276); `stacked` is oldest-first, so the report pushes run reversed.
+    for idx in to_report.into_iter().rev() {
         reg.note_reportable(idx);
     }
 }
@@ -2173,24 +2181,23 @@ fn reset_one(var: &mut GucVariable) {
 // values sourced <= PGC_S_OVERRIDE (client startup options, ALTER
 // ROLE/DATABASE SET). That stamp is the mechanism by which a reused pooled
 // worker thread would otherwise carry one session's GUCs into another's task.
-fn reset_one_to_boot(var: &mut GucVariable) {
+fn reset_one_to_boot(var: &mut GucVariable) -> Option<DeferredAssignHook> {
     let (bootval, bootextra) = match boot_default_value(var, PGC_S_DEFAULT) {
         Ok(v) => v,
         // boot_val always passes its own check hook; on the impossible error
         // path leave the variable untouched rather than corrupt it.
-        Err(_) => return,
+        Err(_) => return None,
     };
-    if let Some(hook) = apply_value(
+    // The assign hook is handed back to run past the store borrow: the
+    // GUC_NO_RESET_ALL hooks (assign_session_authorization / assign_role) go
+    // through SetConfigOption("is_superuser") and would re-borrow the store.
+    let hook = apply_value(
         var,
         bootval.clone(),
         bootextra.clone(),
         PGC_INTERNAL,
         BOOTSTRAP_SUPERUSERID,
-    ) {
-        // reset_one fires assign hooks inline (not deferred); match that so the
-        // live backing reflects the boot value before the caller returns.
-        hook();
-    }
+    );
     match (&mut *var, &bootval) {
         (GucVariable::Bool(c), config_var_val::Boolval(v)) => {
             c.reset_val = *v;
@@ -2219,6 +2226,7 @@ fn reset_one_to_boot(var: &mut GucVariable) {
     gen.reset_scontext = PGC_INTERNAL;
     gen.reset_srole = BOOTSTRAP_SUPERUSERID;
     gen.stack = None;
+    hook
 }
 
 // Fresh-backend scrub of every session-settable (USERSET/SUSET) variable, for
@@ -2232,16 +2240,18 @@ fn reset_one_to_boot(var: &mut GucVariable) {
 // before the new leader's GUC state is applied. The caller re-overlays the
 // postmaster config base (bind_base) to restore postgresql.conf-sourced values,
 // reproducing a freshly initialized backend store exactly.
-pub fn reset_session_options_to_boot(reg: &mut GucRegistry) {
-    use types_guc::GUC_NO_RESET_ALL;
-
+// GUC_NO_RESET_ALL variables (session_authorization, role, transaction_*)
+// are scrubbed too: RESET ALL keeps them by C parity, but a fresh worker
+// process never inherited them, and a prior session's PGC_S_SESSION value
+// would outrank the next leader's PGC_S_OVERRIDE capture.
+pub fn reset_session_options_to_boot(
+    reg: &mut GucRegistry,
+    deferred_hooks: &mut Vec<DeferredAssignHook>,
+) {
     let nondef = reg.nondef.clone();
     for idx in nondef {
         let gen = reg.vars[idx].gen();
         if gen.context != PGC_SUSET && gen.context != PGC_USERSET {
-            continue;
-        }
-        if gen.flags & GUC_NO_RESET_ALL != 0 {
             continue;
         }
         // reset_one_to_boot discards any transaction GUC stack; keep the
@@ -2250,7 +2260,9 @@ pub fn reset_session_options_to_boot(reg: &mut GucRegistry) {
         // the targeted <= PGC_S_OVERRIDE values carry no stack, so this is
         // normally a no-op, but the invariant must hold for every caller.)
         let had_stack = reg.vars[idx].gen().stack.is_some();
-        reset_one_to_boot(&mut reg.vars[idx]);
+        if let Some(hook) = reset_one_to_boot(&mut reg.vars[idx]) {
+            deferred_hooks.push(hook);
+        }
         if had_stack {
             reg.stacked.retain(|&i| i != idx);
         }

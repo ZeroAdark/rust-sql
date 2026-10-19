@@ -96,7 +96,7 @@ fn install_seams() {
                     typcollation: 0,
                 }),
                 // text (pg_type.dat 25): max(text)'s transtype — the
-                // GL-SINKCRASH-3 str-transvalue fold regression unit.
+                // regression str-transvalue fold regression unit.
                 TEXTOID => Some(PgTypeShape {
                     typlen: -1,
                     typbyval: false,
@@ -201,7 +201,7 @@ fn install_seams() {
                 // max(text): the REAL pg_aggregate.dat row (PostgreSQL 18.3:
                 // aggtransfn/aggcombinefn text_larger 458, aggsortop 666
                 // (text >), aggtranstype text, NULL initval, no moving
-                // columns) — the GL-SINKCRASH-3 str-transvalue fold
+                // columns) — the regression str-transvalue fold
                 // regression unit's aggregate.
                 2129 => Some(::syscache_seams::PgAggregateShape {
                     aggkind: b'n' as i8,
@@ -784,7 +784,7 @@ mod scanfix {
         pages: Vec<usize>,
         pins: Vec<i32>,
         two_col: std::collections::HashSet<Oid>,
-        // GL-SINKCRASH-3 regression fixture: `(k int4, v text)` relations.
+        // regression regression fixture: `(k int4, v text)` relations.
         kv_text: std::collections::HashSet<Oid>,
         // WS-J express_ab: fake btree indexes (index oid -> indexed heap
         // oid); fake_relation_open serves these as RELKIND_INDEX btree
@@ -919,7 +919,7 @@ mod scanfix {
     #[repr(align(8))]
     struct TestPage([u8; BLCKSZ]);
 
-    /// One heap tuple image for the GL-SINKCRASH-3 `(k int4, v text)`
+    /// One heap tuple image for the regression `(k int4, v text)`
     /// fixture: 2 attributes, no nulls, the text value as a SHORT (1-byte
     /// header) varlena — alignment-free, exactly what an untoasted small
     /// text lands as on a real heap page.
@@ -995,7 +995,7 @@ mod scanfix {
         });
     }
 
-    /// GL-SINKCRASH-3 regression fixture: a `(k int4, v text)` heap.
+    /// regression regression fixture: a `(k int4, v text)` heap.
     pub fn register_table_kv_text(relid: Oid, pages: &[&[(i32, &str)]]) {
         with_fake(|f| {
             let mut bufs = Vec::new();
@@ -1145,7 +1145,7 @@ mod scanfix {
         with_fake(|f| f.pins.iter().sum())
     }
 
-    /// The `(k int4, v text)` tupdesc (GL-SINKCRASH-3 fixture). Text is the
+    /// The `(k int4, v text)` tupdesc (regression fixture). Text is the
     /// real pg_attribute shape: varlena (attlen -1), byref, 'i' align,
     /// EXTENDED storage (⇒ attispackable — short-header images deform),
     /// default collation 100.
@@ -2449,13 +2449,13 @@ fn hashed_group_by_over_fake_heap_end_to_end() {
     scanfix::quiesced();
 }
 
-// GL-SINKCRASH-3 regression: Agg(AGG_HASHED) with a BY-REF STR TRANSVALUE —
+// regression regression: Agg(AGG_HASHED) with a BY-REF STR TRANSVALUE —
 // SELECT k, max(v COLLATE "C") FROM t GROUP BY k over a (k int4, v text)
 // fake heap — through the REAL InitPlan path and the lane-v2 SERIAL staged
 // fold (verified engaged: `[lanev2] agg-over-seqscan: staged fold feed
 // engaged (compact table)` under PGRUST_LANE_V2_TRACE=1).
 //
-// The defect this pins: `agg_fold_staged_mm`'s GL-SINKCRASH-2 fail-closed
+// The defect this pins: `agg_fold_staged_mm`'s regression fail-closed
 // guard spelled "is a sink build" as `agg_sink_state_bytes(agg).is_some()`,
 // which is true for EVERY hashed build (perhash always reports a state
 // size), while the store-arming side keys on `sink_cap` — so this perfectly
@@ -4919,6 +4919,9 @@ fn eval_plan_qual_recheck_over_seqscan() {
             recheck: None,
             result_rti: 1,
             epq_param: -1,
+            subplanstates: ::mcx::PgVec::new_in(estate.es_query_cxt),
+            subplan_chg: ::mcx::PgVec::new_in(estate.es_query_cxt),
+            fresh_subplanstates: ::mcx::PgVec::new_in(estate.es_query_cxt),
         };
         let mut subs = None;
         ::executils::ensure_epq_subs(&mut subs, estate.es_query_cxt, estate.epq_rtsize(), 1);
@@ -5538,6 +5541,9 @@ mod epq_seams_w5 {
                 recheck: None,
                 result_rti: 1,
                 epq_param: -1,
+                subplanstates: ::mcx::PgVec::new_in(estate.es_query_cxt),
+                subplan_chg: ::mcx::PgVec::new_in(estate.es_query_cxt),
+                fresh_subplanstates: ::mcx::PgVec::new_in(estate.es_query_cxt),
             };
             let mut subs = None;
             ::executils::ensure_epq_subs(&mut subs, estate.es_query_cxt, estate.epq_rtsize(), 1);
@@ -5633,6 +5639,9 @@ mod epq_seams_w5 {
                 recheck: None,
                 result_rti: 1,
                 epq_param: -1,
+                subplanstates: ::mcx::PgVec::new_in(estate.es_query_cxt),
+                subplan_chg: ::mcx::PgVec::new_in(estate.es_query_cxt),
+                fresh_subplanstates: ::mcx::PgVec::new_in(estate.es_query_cxt),
             };
             let mut subs = None;
             ::executils::ensure_epq_subs(&mut subs, estate.es_query_cxt, estate.epq_rtsize(), 1);

@@ -1,0 +1,19 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1u s2u s1c s2s s2v
+step s1u: UPDATE epqsp SET v = 1 WHERE id = 1;
+step s2u: UPDATE epqsp SET v = 100 WHERE id <= ALL (SELECT nextval('epqsp_seq')); <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+step s2s: SELECT last_value FROM epqsp_seq;
+last_value
+----------
+         2
+(1 row)
+
+step s2v: SELECT id, v FROM epqsp;
+id|  v
+--+---
+ 1|100
+(1 row)
+

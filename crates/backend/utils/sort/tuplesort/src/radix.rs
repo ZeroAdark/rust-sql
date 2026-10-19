@@ -11,7 +11,7 @@ use ::types_error::PgResult;
 
 use crate::qsort::qsort_tuple;
 use crate::ssup::SortComparator;
-use crate::{cfi, CmpCtx, SortTuple, TuplesortData};
+use crate::{cfi, CmpCtx, SortTuple, SortVariant, TuplesortData};
 
 // Below this the scratch + histogram + copy-back fixed costs beat the
 // n log n comparison savings (crossover: docs/optimizations/radix-abbrev.md).
@@ -28,6 +28,8 @@ impl<'m> TuplesortData<'m> {
         n >= RADIX_MIN
             && self.abbrev.is_some()
             && matches!(self.sort_keys[0].comparator, SortComparator::Unsigned)
+            // C reports the first duplicate pair its qsort compares.
+            && !matches!(self.variant, SortVariant::Index { enforce_unique: true, .. })
     }
 
     /// Ok(true) = `tuples` sorted, C-byte-identical. Ok(false) = a
@@ -171,6 +173,7 @@ impl<'m> TuplesortData<'m> {
             abbrev: &self.abbrev,
             variant: &self.variant,
             unique_violation: &self.unique_violation,
+            violated: &self.unique_violated,
         };
         let ctx = &ctx;
         let cmp =

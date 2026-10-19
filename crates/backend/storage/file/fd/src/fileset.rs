@@ -13,6 +13,7 @@ use ::types_core::{InvalidOid, Oid};
 use ::types_error::PgResult;
 use ::types_storage::File;
 
+use crate::vfd::{with_fd, FD_TEMP_FILE_LIMIT};
 use crate::temp::{
     GetTempTablespaces, PathNameCreateTemporaryDir, PathNameCreateTemporaryFile,
     PathNameDeleteTemporaryDir, PathNameDeleteTemporaryFile, PathNameOpenTemporaryFile,
@@ -192,9 +193,16 @@ impl FileSet {
         PathNameCreateTemporaryFile(path, true)
     }
 
-    /// Open one sqe_spill segment: File(<=0) when it doesn't exist.
+    /// Open one sqe_spill segment: File(<=0) when it doesn't exist. A
+    /// writer's per-event reopen is charged against temp_file_limit like the
+    /// creating VFD was (pgrust-only; C's PathNameOpenTemporaryFile never
+    /// charges a reopen).
     pub fn open_seg(&self, path: &str, mode: i32) -> PgResult<File> {
-        PathNameOpenTemporaryFile(path, mode)
+        let file = PathNameOpenTemporaryFile(path, mode)?;
+        if file.0 > 0 && mode & libc::O_RDWR != 0 {
+            with_fd(|fd| fd.vfd_cache[file.0 as usize].fdstate |= FD_TEMP_FILE_LIMIT);
+        }
+        Ok(file)
     }
 }
 

@@ -151,12 +151,7 @@ pub fn bt_checkpage_ref(
             blkno
         )));
     }
-    // Raw pd_special, NOT page_special_off: its corruption clamp would mask
-    // exactly the damage this check exists to report.
-    // SAFETY: pd_special lives at a 2-aligned in-page offset (PageRef contract).
-    let raw_special = unsafe { page.as_ptr().add(PD_SPECIAL_OFF).cast::<u16>().read() } as usize;
-    let special_size = BLCKSZ.wrapping_sub(raw_special);
-    if special_size != core::mem::size_of::<BTPageOpaqueData>() {
+    if page.special_size() as usize != core::mem::size_of::<BTPageOpaqueData>() {
         return Err(index_corrupted(format!(
             "index \"{}\" contains corrupted page at block {}",
             rel.name(),

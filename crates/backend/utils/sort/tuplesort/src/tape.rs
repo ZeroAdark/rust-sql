@@ -407,7 +407,16 @@ impl<'m> TuplesortData<'m> {
     /// Split borrow: mutable tape state + shared comparison context.
     fn tape_cmp_parts(&mut self) -> (&mut TapeState<'m>, CmpCtx<'_>, i32, Mcx<'m>) {
         let TuplesortData {
-            tapes, sort_keys, only_key, abbrev, variant, unique_violation, mcx, sortopt, ..
+            tapes,
+            sort_keys,
+            only_key,
+            abbrev,
+            variant,
+            unique_violation,
+            unique_violated,
+            mcx,
+            sortopt,
+            ..
         } = self;
         let ctx = CmpCtx {
             mcx: *mcx,
@@ -416,6 +425,7 @@ impl<'m> TuplesortData<'m> {
             abbrev,
             variant,
             unique_violation,
+            violated: unique_violated,
         };
         (tapes.as_mut().expect("tape sort state missing"), ctx, *sortopt, *mcx)
     }
@@ -491,6 +501,22 @@ impl<'m> TapeState<'m> {
     }
 
     /// `RELEASE_SLAB_SLOT`.
+    /// C tuplesort_free resets sortcontext, taking the tuples still held by
+    /// the merge heap and the last-returned slot with it; the oversize ones
+    /// live in the main context here and are freed explicitly.
+    pub(crate) fn release_outstanding(&mut self, mcx: Mcx<'m>) {
+        if !self.last_returned.is_null() {
+            let p = self.last_returned;
+            self.last_returned = core::ptr::null_mut();
+            self.release_slot(mcx, p);
+        }
+        while let Some(mt) = self.merge_heap.pop() {
+            if !mt.stup.tuple.is_null() {
+                self.release_slot(mcx, mt.stup.tuple.cast());
+            }
+        }
+    }
+
     fn release_slot(&mut self, mcx: Mcx<'m>, p: *mut u8) {
         let base = self.slab_arena.as_ptr().cast::<u8>() as usize;
         let end = base + self.slab_arena.len() * 8;
@@ -563,6 +589,9 @@ fn merge_one_run<'m>(
                 merge_heap_delete_top(&mut ts.merge_heap, cmp)?;
                 ts.n_input_runs -= 1;
             }
+        }
+        if let Some(err) = ctx.unique_violation.take() {
+            return Err(err);
         }
     }
 

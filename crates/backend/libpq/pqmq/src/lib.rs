@@ -22,9 +22,18 @@ const PG_PROTOCOL_LATEST: u32 = (3 << 16) | 2;
 // the neighboring indexes 33/35/36).
 const WAIT_EVENT_MESSAGE_QUEUE_PUT_MESSAGE: u32 = 0x0800_0000 + 34;
 
+// pq_mq_busy; DetachRequested = a nested send during the wait asked the
+// outer send to detach (C detaches the shared handle in place).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MqBusy {
+    Idle,
+    Busy,
+    DetachRequested,
+}
+
 thread_local! {
     static PQ_MQ_HANDLE: RefCell<Option<ShmMqHandle>> = const { RefCell::new(None) };
-    static PQ_MQ_BUSY: Cell<bool> = const { Cell::new(false) };
+    static PQ_MQ_BUSY: Cell<MqBusy> = const { Cell::new(MqBusy::Idle) };
     static PQ_MQ_PARALLEL_LEADER_PID: Cell<i32> = const { Cell::new(0) };
     static PQ_MQ_PARALLEL_LEADER_PROC_NUMBER: Cell<ProcNumber> =
         const { Cell::new(INVALID_PROC_NUMBER) };
@@ -74,20 +83,22 @@ fn mq_is_send_pending() -> bool {
 
 fn mq_putmessage(msgtype: u8, s: &[u8]) -> PgResult<i32> {
     // Re-entered mid-send (interrupt while waiting): detach rather than
-    // postpone the interrupt response indefinitely.
-    if PQ_MQ_BUSY.with(Cell::get) {
+    // postpone the interrupt response indefinitely. The outer send holds the
+    // handle while it waits; it detaches on the way out (C's detach here).
+    if PQ_MQ_BUSY.with(Cell::get) != MqBusy::Idle {
         if let Some(mut h) = PQ_MQ_HANDLE.with(|h| h.borrow_mut().take()) {
             h.detach();
         }
+        PQ_MQ_BUSY.with(|c| c.set(MqBusy::DetachRequested));
         return Ok(EOF);
     }
 
     // Queue already gone: ignore (late-shutdown DEBUG messages).
-    if PQ_MQ_HANDLE.with(|h| h.borrow().is_none()) {
+    let Some(mut handle) = PQ_MQ_HANDLE.with(|h| h.borrow_mut().take()) else {
         return Ok(0);
-    }
+    };
 
-    PQ_MQ_BUSY.with(|c| c.set(true));
+    PQ_MQ_BUSY.with(|c| c.set(MqBusy::Busy));
 
     // C's 2-entry iovec becomes one contiguous copy; cold path (errors,
     // notices), never per-row data.
@@ -95,52 +106,64 @@ fn mq_putmessage(msgtype: u8, s: &[u8]) -> PgResult<i32> {
     buf.push(msgtype);
     buf.extend_from_slice(s);
 
-    let result: PgResult<ShmMqResult> = PQ_MQ_HANDLE.with(|cell| {
-        let mut borrow = cell.borrow_mut();
-        let handle = borrow.as_mut().expect("checked non-empty above; backend is one thread");
-        loop {
-            let res = handle.send(&buf, true, /* force_flush before signal */ true)?;
-
-            let leader_pid = PQ_MQ_PARALLEL_LEADER_PID.with(Cell::get);
-            if leader_pid != 0 {
-                // pqmq.c:170-178: a logical parallel apply worker wakes its
-                // leader with PROCSIG_PARALLEL_APPLY_MESSAGE, any other
-                // (parallel-query) worker with PROCSIG_PARALLEL_MESSAGE. The
-                // seam is installed by the logical worker crate at boot; a
-                // binary without it has no parallel apply workers.
-                use logical_worker_seams::is_logical_parallel_apply_worker as is_pa_worker;
-                let reason = if is_pa_worker::is_installed() && is_pa_worker::call() {
-                    ProcSignalReason::PROCSIG_PARALLEL_APPLY_MESSAGE
-                } else {
-                    ProcSignalReason::PROCSIG_PARALLEL_MESSAGE
-                };
-                procsignal::SendProcSignal(
-                    leader_pid,
-                    reason,
-                    PQ_MQ_PARALLEL_LEADER_PROC_NUMBER.with(Cell::get),
-                );
-            }
-
-            if res != ShmMqResult::WouldBlock {
-                return Ok(res);
-            }
-
-            shm_mq::wait_on_my_latch(
-                init_small::globals::MyLatch(),
-                WAIT_EVENT_MESSAGE_QUEUE_PUT_MESSAGE,
-            )?;
-        }
-    });
+    let result = mq_send_loop(&mut handle, &buf);
 
     match result {
         Ok(res) => {
-            PQ_MQ_BUSY.with(|c| c.set(false));
+            if PQ_MQ_BUSY.with(Cell::get) == MqBusy::DetachRequested {
+                handle.detach();
+            } else {
+                PQ_MQ_HANDLE.with(|h| *h.borrow_mut() = Some(handle));
+            }
+            PQ_MQ_BUSY.with(|c| c.set(MqBusy::Idle));
             debug_assert!(matches!(res, ShmMqResult::Success | ShmMqResult::Detached));
             Ok(if res == ShmMqResult::Success { 0 } else { EOF })
         }
         // C parity: pq_mq_busy stays set across an error escape, so the next
         // putmessage detaches the queue.
-        Err(e) => Err(e),
+        Err(e) => {
+            PQ_MQ_HANDLE.with(|h| *h.borrow_mut() = Some(handle));
+            Err(e)
+        }
+    }
+}
+
+fn mq_send_loop(handle: &mut ShmMqHandle, buf: &[u8]) -> PgResult<ShmMqResult> {
+    loop {
+        let res = handle.send(buf, true, /* force_flush before signal */ true)?;
+
+        let leader_pid = PQ_MQ_PARALLEL_LEADER_PID.with(Cell::get);
+        if leader_pid != 0 {
+            // pqmq.c:170-178: a logical parallel apply worker wakes its
+            // leader with PROCSIG_PARALLEL_APPLY_MESSAGE, any other
+            // (parallel-query) worker with PROCSIG_PARALLEL_MESSAGE. The
+            // seam is installed by the logical worker crate at boot; a
+            // binary without it has no parallel apply workers.
+            use logical_worker_seams::is_logical_parallel_apply_worker as is_pa_worker;
+            let reason = if is_pa_worker::is_installed() && is_pa_worker::call() {
+                ProcSignalReason::PROCSIG_PARALLEL_APPLY_MESSAGE
+            } else {
+                ProcSignalReason::PROCSIG_PARALLEL_MESSAGE
+            };
+            procsignal::SendProcSignal(
+                leader_pid,
+                reason,
+                PQ_MQ_PARALLEL_LEADER_PROC_NUMBER.with(Cell::get),
+            );
+        }
+
+        if res != ShmMqResult::WouldBlock {
+            return Ok(res);
+        }
+
+        shm_mq::wait_on_my_latch(
+            init_small::globals::MyLatch(),
+            WAIT_EVENT_MESSAGE_QUEUE_PUT_MESSAGE,
+        )?;
+
+        if PQ_MQ_BUSY.with(Cell::get) == MqBusy::DetachRequested {
+            return Ok(ShmMqResult::Detached);
+        }
     }
 }
 
@@ -154,9 +177,11 @@ fn elog_error(msg: String) -> Box<PgError> {
 
 pub fn pq_parse_errornotice(msg: &mut StringInfo<'_>) -> PgResult<PgError> {
     let mut edata = PgError::new(ERROR, String::new());
-    // pqmq.c:219 MemSet: no filename/lineno/funcname until the F/L/R fields
-    // supply them (PgError::new records this construction site otherwise).
+    // pqmq.c:219 MemSet: sqlerrcode 0 and no filename/lineno/funcname until
+    // the C / F/L/R fields supply them (PgError::new records this
+    // construction site and XX000 otherwise).
     edata.location = None;
+    edata.sqlstate = types_error::ERRCODE_SUCCESSFUL_COMPLETION;
     let mut filename: Option<String> = None;
     let mut lineno: i32 = 0;
     let mut funcname: Option<String> = None;

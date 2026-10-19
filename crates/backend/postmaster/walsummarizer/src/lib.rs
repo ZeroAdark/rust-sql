@@ -108,11 +108,18 @@ fn unlock() -> PgResult<()> {
     LWLockRelease(summarizer_lock())
 }
 
+/// sizeof(WalSummarizerData) in C's layout (walsummarizer.c:82): bool +
+/// TimeLineID, XLogRecPtr, bool + ProcNumber, XLogRecPtr, ConditionVariable
+/// (slock_t + proclist_head), MAXALIGNed.
 pub fn WalSummarizerShmemSize() -> usize {
-    core::mem::size_of::<WalSummarizerData>()
+    48
 }
 
+/// WalSummarizerShmemInit (walsummarizer.c:197): ShmemInitStruct("Wal
+/// Summarizer Ctl", ...) registers the block in the ShmemIndex, so
+/// pg_shmem_allocations lists it; the live state is the OnceLock below.
 pub fn WalSummarizerShmemInit() {
+    let _ = shmem::ShmemInitStruct("Wal Summarizer Ctl", WalSummarizerShmemSize());
     SHMEM
         .set(WalSummarizerData {
             initialized: AtomicBool::new(false),
@@ -550,10 +557,15 @@ pub fn WaitForWalSummarization(lsn: XLogRecPtr) -> PgResult<()> {
 
 fn diff_ms(start: TimestampTz, stop: TimestampTz) -> i64 {
     if start >= stop {
-        0
-    } else {
-        (stop - start + 999) / 1000
+        return 0;
     }
+    let Some(diff) = stop.checked_sub(start) else {
+        return i32::MAX as i64;
+    };
+    if diff >= i32::MAX as i64 * 1000 - 999 {
+        return i32::MAX as i64;
+    }
+    (diff + 999) / 1000
 }
 
 fn wal_summarizer_shutdown(_code: i32, _arg: usize) {
@@ -1570,6 +1582,12 @@ fn wal_summary_contents_rows_in(
     Ok(rows)
 }
 
+/// walsummary.c:249: the signed st_mtime compares directly (a pre-epoch
+/// mtime is older than any cutoff).
+pub(crate) fn summary_expired(mtime_sec: i64, cutoff_time: i64) -> bool {
+    mtime_sec < cutoff_time
+}
+
 pub fn RemoveWalSummaryIfOlderThan(ws: &WalSummaryFile, cutoff_time: i64) -> PgResult<()> {
     let path = format!(
         "{XLOGDIR}/summaries/{:08X}{:08X}{:08X}{:08X}{:08X}.summary",
@@ -1593,8 +1611,7 @@ pub fn RemoveWalSummaryIfOlderThan(ws: &WalSummaryFile, cutoff_time: i64) -> PgR
             .finish(loc("RemoveWalSummaryIfOlderThan"))?;
         unreachable!();
     }
-    let mtime = if md.mtime_sec >= 0 { md.mtime_sec } else { i64::MAX };
-    if mtime >= cutoff_time {
+    if !summary_expired(md.mtime_sec, cutoff_time) {
         return Ok(());
     }
     if fd::pg_unlink(&path) != 0 {

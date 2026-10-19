@@ -160,11 +160,8 @@ fn fold_produces_pg_statistic_shaped_output() {
     .expect("fold");
     let nullfrac_expect = 1.0 - (int8_rec.nonnull as f64 / n as f64);
     assert!((out.stanullfrac - nullfrac_expect).abs() < 1e-9);
-    assert!(out.stadistinct > 0.0);
-    assert!(!out.sta_mcv.is_empty());
-    for (_, f) in &out.sta_mcv {
-        assert!(*f > 0.0 && *f <= 1.0);
-    }
+    assert_eq!(out.stadistinct, int8_rec.nonnull as f64, "unique int8 keys: every value counted");
+    assert!(out.sta_mcv.is_empty(), "unique int8 keys carry no MCV list");
     assert_eq!(
         out.stacorrelation, 1.0,
         "P-8: the declared-and-verified cluster key folds to +1.0, never default-0"

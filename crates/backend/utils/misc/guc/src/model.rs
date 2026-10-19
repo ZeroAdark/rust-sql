@@ -81,7 +81,10 @@ pub struct GucStack {
 
 #[derive(Clone, Debug)]
 pub struct config_generic {
-    pub name: &'static str,
+    // Built-in names are static table strings; placeholder names are owned by
+    // the (per-backend) registry and go with it at backend exit, C's
+    // GUCMemoryContext lifetime (regression: never Box::leak a name).
+    pub name: std::borrow::Cow<'static, str>,
     pub context: GucContext,
     pub group: config_group,
     pub short_desc: Option<&'static str>,
@@ -104,7 +107,7 @@ pub struct config_generic {
 
 impl config_generic {
     pub fn boot(
-        name: &'static str,
+        name: impl Into<std::borrow::Cow<'static, str>>,
         context: GucContext,
         group: config_group,
         short_desc: Option<&'static str>,
@@ -113,7 +116,7 @@ impl config_generic {
         vartype: config_type,
     ) -> Self {
         config_generic {
-            name,
+            name: name.into(),
             context,
             group,
             short_desc,

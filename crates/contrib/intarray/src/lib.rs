@@ -588,9 +588,22 @@ fc_stub! {
     fc_int_overlap_sel: selfuncs_symbol_via_fmgr("_int_overlap_sel");
     fc_int_contains_sel: selfuncs_symbol_via_fmgr("_int_contains_sel");
     fc_int_contained_sel: selfuncs_symbol_via_fmgr("_int_contained_sel");
-    fc_int_overlap_joinsel: selfuncs_symbol_via_fmgr("_int_overlap_joinsel");
-    fc_int_contains_joinsel: selfuncs_symbol_via_fmgr("_int_contains_joinsel");
-    fc_int_contained_joinsel: selfuncs_symbol_via_fmgr("_int_contained_joinsel");
+}
+
+// _int_selfuncs.c:86-118: the join estimators hand arraycontjoinsel the
+// built-in operator, and its stub answers DEFAULT_SEL without reading any
+// other argument (array_selfuncs.c:321), so a SQL-declared alias gets the
+// constant too.
+fn fc_int_overlap_joinsel(_f: Option<&mut FmgrInfo>, _fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    Ok(Datum::from_f64(0.01))
+}
+
+fn fc_int_contains_joinsel(_f: Option<&mut FmgrInfo>, _fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    Ok(Datum::from_f64(0.005))
+}
+
+fn fc_int_contained_joinsel(_f: Option<&mut FmgrInfo>, _fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    Ok(Datum::from_f64(0.005))
 }
 
 // ===========================================================================

@@ -4,7 +4,7 @@
  * The fuzz workspace's vendored oracles call strlcpy (e.g. the jsonpath
  * family's pg_formatting_min.c). macOS and glibc >= 2.38 provide it; the
  * CI cluster pod glibc does not, which broke the Linux link of the test binary
- * (fast-tests job pgrust-fast-tests-0758904159-1785602170-47e3).
+ * (fast-tests job pgrust-tests-0758904159-1785602170-47e3).
  *
  * The BODY is VERBATIM PostgreSQL src/port/strlcpy.c lines 60-85 @
  * 62d6c7d3df (18.3) — the same fallback PG itself ships for platforms

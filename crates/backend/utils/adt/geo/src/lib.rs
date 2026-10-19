@@ -21,7 +21,7 @@ mod ws_tests;
 
 use ::adt_float::{float8_max, float8_mi, float8_min, float8_mul};
 use ::types_core::geo::{Point, BOX, PATH_HEADER_SIZE, POLYGON_HEADER_SIZE};
-use ::types_error::{PgError, PgResult, ERRCODE_INVALID_TEXT_REPRESENTATION};
+use ::types_error::{PgError, PgResult};
 
 pub const EPSILON: f64 = 1.0E-06;
 
@@ -128,11 +128,8 @@ pub fn point_dt(pt1: &Point, pt2: &Point) -> PgResult<f64> {
 }
 
 #[cold]
-pub(crate) fn invalid_input(type_name: &str, orig: &str) -> PgError {
-    PgError::error(format!(
-        "invalid input syntax for type {type_name}: \"{orig}\""
-    ))
-    .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
+pub(crate) fn invalid_input(type_name: &str, orig: &[u8]) -> PgError {
+    ::adt_float::io::invalid_input(type_name, orig)
 }
 
 /// box_in core.
@@ -559,7 +556,7 @@ mod tests {
         // 2026-08-25): `SELECT radius(circle(box '(137,582),(867,821)'))`
         // = 384.06412225043886. C compiled on aarch64 with default
         // fp-contract fuses and prints ...874 — it is NOT a valid referee
-        // (float-parity law; Antithesis r11 seed 3161693741062387539).
+        // (float-parity law; regression seed 3161693741062387539).
         assert_eq!(pg_hypot(365.0, 119.5).unwrap(), 384.06412225043886_f64);
         // rect.data witness row (box '(11003,10859),(10950,10765)'):
         // amd64 referee radius(circle(box)) = 53.95600059307584; the

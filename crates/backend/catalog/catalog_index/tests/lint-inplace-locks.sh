@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lint-inplace-locks.sh — the standing guard for GL-INPLACE-1 defect (A):
+# lint-inplace-locks.sh — the standing guard for regression defect (A):
 # every TRANSACTIONAL updater of a pg_class row must hold LOCKTAG_TUPLE at
 # InplaceUpdateTupleLock across the update, wherever C holds it.
 #
@@ -203,6 +203,6 @@ done < <(find crates -name '*.rs' -type f -print0 2>/dev/null \
 if [ "$fail" = 0 ]; then
     say "lint-inplace-locks: PASS ($n_div locked pg_class updaters, $n_exact C-exact-unlocked, ${#censused[@]} files counted)"
 else
-    say "lint-inplace-locks: FAIL -- see VIOLATION lines above (notes/GL-INPLACE-1-letter.md has the full enumeration)"
+    say "lint-inplace-locks: FAIL -- see VIOLATION lines above (notes/regression-letter.md has the full enumeration)"
 fi
 exit $fail

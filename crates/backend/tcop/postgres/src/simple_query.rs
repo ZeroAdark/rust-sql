@@ -358,7 +358,7 @@ fn memctx_dump() -> PgResult<()> {
     tcop_dest::NullCommand(elog::config::where_to_send_output())
 }
 
-// GL-MEMWATCH-1: the deliberate context hog behind the developer GUC
+// regression: the deliberate context hog behind the developer GUC
 // pgrust.memory_watchdog_test_hog. Allocates (and touches — RSS must grow)
 // `mb` one-MB slabs into a session-lifetime "WatchdogTestHog" context and
 // leaks them there: ACCOUNTED growth, the incident shape. Freed only at
@@ -441,7 +441,7 @@ pub fn exec_simple_query<'mcx>(mcx: Mcx<'mcx>, query_string: &'mcx str) -> PgRes
         return memctx_dump();
     }
 
-    // GL-MEMWATCH-1 test instrumentation (developer GUC, default 0 = one
+    // regression test instrumentation (developer GUC, default 0 = one
     // TLS load + branch): each simple query leaks N MB into a named
     // session-lifetime context — the memory watchdog e2e's deliberate hog.
     if guc_tables::backing::pgrust_memory_watchdog_test_hog() > 0 {
@@ -468,7 +468,18 @@ pub fn exec_simple_query<'mcx>(mcx: Mcx<'mcx>, query_string: &'mcx str) -> PgRes
     // event in pg_stat_activity) but BEFORE the transaction starts, any
     // snapshot is taken, or any lock acquired; the guard's drop releases
     // on every exit path (Ok, Err unwind, panic).
-    let _admission = crate::admission::acquire_for_statement()?;
+    let _admission = crate::admission::acquire_for_statement(|| {
+        let bytes = query_string.as_bytes();
+        let mentions = bytes.windows(8).any(|w| w.eq_ignore_ascii_case(b"prepared"));
+        mentions
+            && pg_parse_query(mcx, query_string).is_ok_and(|list| {
+                list.iter().any(|raw| {
+                    raw.stmt.is_some_and(|stmt| {
+                        crate::admission::finishes_prepared(utility_seams::create_command_tag::call(stmt))
+                    })
+                })
+            })
+    })?;
 
     if save_log_statement_stats {
         ResetUsage();
@@ -571,14 +582,21 @@ pub fn exec_simple_query<'mcx>(mcx: Mcx<'mcx>, query_string: &'mcx str) -> PgRes
             // SAFETY: `plantree_list` is arena-backed by `mcx` and neither moves
             // nor drops before `stmt_list::free(stmts)` / the next reset_all().
             let stmts = unsafe { pquery::stmt_list::register(&plantree_list) };
-            portalmem::PortalDefineQuery(
-                &portal,
-                None,
-                query_string,
-                command_tag,
-                stmts,
-                CachedPlanHandle::NULL,
-            )?;
+            // SAFETY: `query_string` is the MessageContext message, which
+            // outlives this unnamed portal: the portal is dropped below on
+            // success, or by error_recovery's AbortCurrentTransaction on
+            // failure, and MessageContext is reset only at the top of the
+            // next main-loop iteration. C shares the pointer the same way
+            // (`portal->sourceText = sourceText`).
+            unsafe {
+                portalmem::PortalDefineQuerySharedText(
+                    &portal,
+                    query_string,
+                    command_tag,
+                    stmts,
+                    CachedPlanHandle::NULL,
+                )
+            };
 
             pquery::PortalStart(&portal, ParamListHandle::NULL, 0, None)?;
             crate::stmt_trace::probe("q.portalstart");
@@ -602,7 +620,7 @@ pub fn exec_simple_query<'mcx>(mcx: Mcx<'mcx>, query_string: &'mcx str) -> PgRes
                 tcop_dest::SetRemoteDestReceiverParams(&mut receiver, portal.clone());
             }
 
-            // GL-STMTTASK-1 (kill knob PGRUST_STMT_TASK, default OFF): arm the
+            // regression (kill knob PGRUST_STMT_TASK, default OFF): arm the
             // statement-as-task executor hook for exactly THIS statement's
             // top-level portal run — the protocol-level half of the admission
             // envelope (simple protocol, single statement, wire dest, a raw
@@ -727,7 +745,7 @@ pub fn start_xact_command() -> PgResult<()> {
     // C postgres.c: start the dead-client check when configured. One-shot;
     // ProcessInterrupts re-arms it after every live check, so a parked
     // parallel leader keeps polling for the disconnect that would otherwise
-    // have no cancel vector at all (GL-DISCONNECT-WEDGE-1).
+    // have no cancel vector at all (regression).
     let interval = crate::client_connection_check_interval_ms();
     if interval > 0
         && init_small::globals::IsUnderPostmaster()
@@ -794,7 +812,7 @@ fn check_log_statement(stmt_list: &PgVec<'_, RawStmt<'_>>) -> PgResult<bool> {
 // / log_statement_sample_rate decide an in_sample draw at the same decision
 // point as C, and xact_is_sampled (drawn once per transaction from
 // log_transaction_sample_rate at StartTransaction) forces logging for sampled
-// transactions. (GL-GUCBATCH-1: the sampling refinement was a silent PARTIAL —
+// transactions. (regression: the sampling refinement was a silent PARTIAL —
 // SET accepted, never honored.)
 pub(crate) fn check_log_duration(was_logged: bool) -> (i32, String) {
     let gucs = LogDurationGucs {
@@ -830,6 +848,8 @@ pub(crate) fn check_log_duration_impl(
         return (0, String::new());
     }
 
+    // TimestampDifference (timestamp.c:1697): a nonpositive difference is 0/0.
+    let diff_us = diff_us.max(0);
     let secs = diff_us / 1_000_000;
     let usecs = (diff_us % 1_000_000) as i64;
     let msecs = usecs / 1000;
@@ -862,6 +882,10 @@ pub(crate) fn check_log_duration_impl(
 
 fn enable_statement_timeout() -> PgResult<()> {
     debug_assert!(xact_started());
+    arm_statement_timeout()
+}
+
+pub(crate) fn arm_statement_timeout() -> PgResult<()> {
     let statement_timeout = lmgr_proc::globals::StatementTimeout();
     let transaction_timeout = lmgr_proc::globals::TransactionTimeout();
     // An earlier-or-equal TRANSACTION_TIMEOUT subsumes the statement timer.

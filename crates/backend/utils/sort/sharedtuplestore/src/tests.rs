@@ -32,3 +32,20 @@ fn overlong_name_is_refused() {
     assert_eq!(err.message(), "SharedTuplestore name too long");
     assert_eq!(err.sqlstate(), ERRCODE_INTERNAL_ERROR);
 }
+
+// sharedtuplestore.c:157 — each participant carries an LWLock of tranche
+// SharedTupleStore (pg_stat_activity wait_event during scan contention);
+// sts_parallel_scan_next takes it exclusively and releases it.
+#[test]
+fn participant_lock_is_a_shared_tuplestore_lwlock() {
+    use ::lwlock::{LWLockAcquire, LWLockHeldByMe, LWLockRelease, LW_EXCLUSIVE};
+    let sts = SharedTuplestore::new(2, core::mem::size_of::<u32>(), "b255").unwrap();
+    let lock = sts.participant_lock(1);
+    assert_eq!(::lwlock::GetLWTrancheName(lock.tranche), "SharedTupleStore");
+    assert!(!LWLockHeldByMe(lock));
+    assert!(LWLockAcquire(lock, LW_EXCLUSIVE, init_small::globals::MyProcNumber()).unwrap());
+    assert!(LWLockHeldByMe(lock));
+    LWLockRelease(lock).unwrap();
+    assert!(!LWLockHeldByMe(lock));
+    sts.reinitialize();
+}

@@ -231,7 +231,7 @@ fn backend_initialize(mcx: Mcx<'_>, client_sock: &ClientSocket, cac: CacState) -
     // drained at the client-IO wakes; delivery before ProcSignalInit rides
     // the pre-identity channel (procsignal::PreIdentitySignalAdopt at
     // launch). Without BOTH halves, TerminateChildren's SIGTERM was lost and
-    // a half-open connection wedged PM_WAIT_BACKENDS until the GL-GANGWEDGE
+    // a half-open connection wedged PM_WAIT_BACKENDS until the regression
     // watchdog forced crash recovery. PostgresMain's
     // install_thread_signal_handlers replaces this with die(), as C does.
     procsignal::pqsignal_thread(
@@ -578,7 +578,7 @@ fn process_startup_packet(mcx: Mcx<'_>, mut ssl_done: bool, mut gss_done: bool) 
                 .map(|()| STATUS_ERROR);
         }
 
-        let mut unrecognized_protocol_options: Vec<String> = Vec::new();
+        let mut unrecognized_protocol_options: Vec<Vec<u8>> = Vec::new();
         {
             let mut offset = SIZEOF_PROTOCOL_VERSION as usize;
             let len = len as usize;
@@ -595,8 +595,10 @@ fn process_startup_packet(mcx: Mcx<'_>, mut ssl_done: bool, mut gss_done: bool) 
                     break; // missing value, will complain below
                 }
                 let val_len = cstr_len(&buf, valoffset);
-                let name = bytes_str(&buf[offset..offset + name_len]);
-                let val = bytes_str(&buf[valoffset..valoffset + val_len]);
+                let name_bytes = &buf[offset..offset + name_len];
+                let val_bytes = &buf[valoffset..valoffset + val_len];
+                let name = bytes_str(name_bytes);
+                let val = bytes_str(val_bytes);
 
                 match name.as_str() {
                     "database" => {
@@ -638,21 +640,29 @@ fn process_startup_packet(mcx: Mcx<'_>, mut ssl_done: bool, mut gss_done: bool) 
                             }
                         }
                     }
-                    _ if name.starts_with("_pq_.") => {
-                        unrecognized_protocol_options.push(name.clone());
+                    _ if name_bytes.starts_with(b"_pq_.") => {
+                        unrecognized_protocol_options.push(name_bytes.to_vec());
                     }
                     _ => {
+                        // C stores the raw value (backend_startup.c:814) and
+                        // check_application_name cleans it AFTER guc.c's
+                        // GUC_IS_NAME truncation; only a non-UTF-8 value is
+                        // cleaned here, before the lossy decode above could
+                        // replace a byte.
+                        let cleaned = (name == "application_name")
+                            .then(|| pg_string::pg_clean_ascii_bytes(val_bytes));
                         {
                             let n = name.clone();
-                            let v = val.clone();
+                            let v = match &cleaned {
+                                Some(c) if core::str::from_utf8(val_bytes).is_err() => c.clone(),
+                                _ => val.clone(),
+                            };
                             init_small::globals::WithMyProcPort(|p| {
                                 p.guc_options.push(n.clone());
                                 p.guc_options.push(v.clone());
                             });
                         }
-                        if name == "application_name" {
-                            let cleaned = string_seams::pg_clean_ascii::call(&val, 0)
-                                .expect("pg_clean_ascii with alloc_flags=0 cannot fail");
+                        if let Some(cleaned) = cleaned {
                             init_small::globals::WithMyProcPort(|p| {
                                 p.application_name = Some(cleaned.clone())
                             });
@@ -684,7 +694,7 @@ fn process_startup_packet(mcx: Mcx<'_>, mut ssl_done: bool, mut gss_done: bool) 
             return ereport(FATAL)
                 .errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION)
                 .errmsg("no PostgreSQL user name specified in startup packet")
-                .finish(loc(828, "ProcessStartupPacket"))
+                .finish(loc(854, "ProcessStartupPacket"))
                 .map(|()| STATUS_ERROR);
         }
 
@@ -761,13 +771,13 @@ fn process_cancel_request_packet(pkt: &[u8], pktlen: i32) -> PgResult<()> {
 
 fn send_negotiate_protocol_version(
     mcx: Mcx<'_>,
-    unrecognized_protocol_options: &[String],
+    unrecognized_protocol_options: &[Vec<u8>],
 ) -> PgResult<()> {
     let mut buf = pqformat::pq_beginmessage(mcx, PQMSG_NEGOTIATE_PROTOCOL_VERSION)?;
     pqformat::pq_sendint32(&mut buf, init_small::globals::FrontendProtocol())?;
     pqformat::pq_sendint32(&mut buf, unrecognized_protocol_options.len() as u32)?;
     for opt in unrecognized_protocol_options {
-        pqformat::pq_sendstring(&mut buf, opt.as_bytes())?;
+        pqformat::pq_sendstring(&mut buf, opt)?;
     }
     pqformat::pq_endmessage(buf)?;
     // no need to flush, some other message will follow

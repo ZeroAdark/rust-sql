@@ -43,7 +43,13 @@ pub const DEBUG_PARALLEL_OFF: i32 = 0;
 pub const DEBUG_PARALLEL_ON: i32 = 1;
 pub const DEBUG_PARALLEL_REGRESS: i32 = 2;
 pub const DEFAULT_BACKEND_FLUSH_AFTER: i32 = 0;
+#[cfg(target_os = "linux")]
+pub const DEFAULT_BGWRITER_FLUSH_AFTER: i32 = 64;
+#[cfg(not(target_os = "linux"))]
 pub const DEFAULT_BGWRITER_FLUSH_AFTER: i32 = 0;
+#[cfg(target_os = "linux")]
+pub const DEFAULT_CHECKPOINT_FLUSH_AFTER: i32 = 32;
+#[cfg(not(target_os = "linux"))]
 pub const DEFAULT_CHECKPOINT_FLUSH_AFTER: i32 = 0;
 pub const DEFAULT_CPU_INDEX_TUPLE_COST: f64 = 0.005;
 pub const DEFAULT_CPU_OPERATOR_COST: f64 = 0.0025;
@@ -175,7 +181,7 @@ pub const PARALLEL_ENGINE_RUNTIME: i32 = 1;
 // never write either number anywhere else in the server source. Hosted here
 // because guc_tables already owns the SQL-visible `server_version` default,
 // which references PG_COMPAT_VERSION below.
-pub const PGRUST_VERSION: &str = "0.3";
+pub const PGRUST_VERSION: &str = "0.3.1";
 pub const PG_COMPAT_VERSION: &str = "18.6";
 pub const RECOVERY_TARGET_ACTION_PAUSE: i32 = 0;
 pub const RELSEG_SIZE: i32 = 131072;

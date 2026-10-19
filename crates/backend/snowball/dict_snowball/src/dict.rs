@@ -1,7 +1,7 @@
 use core::ffi::c_int;
 
 use ::mcx::{Mcx, PgVec};
-use ::ts_locale::dict_api::{DictInitData, LexizeResult};
+use ::ts_locale::dict_api::{def_get_string, DictInitData, LexizeResult};
 use ::ts_locale::{lowerstr, readstoplist, searchstoplist, StopList, TsLexeme};
 use ::types_error::{PgError, PgResult, ERRCODE_INVALID_PARAMETER_VALUE, ERRCODE_UNDEFINED_OBJECT};
 use ::wchar::{pg_enc, PG_KOI8R, PG_LATIN1, PG_LATIN2, PG_SQL_ASCII, PG_UTF8};
@@ -100,7 +100,7 @@ fn eq_strcasecmp(a: &str, b: &[u8]) -> bool {
             .all(|(x, &y)| x.to_ascii_lowercase() == y.to_ascii_lowercase())
 }
 
-struct Located {
+pub(crate) struct Located {
     z: *mut SN_env,
     stem: unsafe fn(*mut SN_env) -> c_int,
     close: unsafe fn(*mut SN_env),
@@ -124,7 +124,7 @@ impl Drop for Located {
     }
 }
 
-fn locate_stem_module(lang: &[u8]) -> PgResult<Located> {
+pub(crate) fn locate_stem_module(lang: &[u8]) -> PgResult<Located> {
     let db_enc = ::mbutils::GetDatabaseEncoding();
     for m in &STEMMER_MODULES {
         if (m.enc == PG_SQL_ASCII || m.enc == db_enc) && eq_strcasecmp(m.name, lang) {
@@ -140,13 +140,12 @@ fn locate_stem_module(lang: &[u8]) -> PgResult<Located> {
             return Ok(Located { z, stem: m.stem, close: m.close, needrecode: true });
         }
     }
-    Err(PgError::error(format!(
-        "no Snowball stemmer available for language \"{}\" and encoding \"{}\"",
-        String::from_utf8_lossy(lang),
-        ::mbutils::GetDatabaseEncodingName()
-    ))
-    .with_sqlstate(ERRCODE_UNDEFINED_OBJECT)
-    .into())
+    let mut msg = b"no Snowball stemmer available for language \"".to_vec();
+    msg.extend_from_slice(lang);
+    msg.extend_from_slice(
+        format!("\" and encoding \"{}\"", ::mbutils::GetDatabaseEncodingName()).as_bytes(),
+    );
+    Err(PgError::error_raw_message(msg).with_sqlstate(ERRCODE_UNDEFINED_OBJECT).into())
 }
 
 fn invalid_param(msg: &str) -> PgError {
@@ -163,12 +162,12 @@ pub fn dsnowball_init(init: &DictInitData<'static>) -> PgResult<DictSnowball> {
             if stoplist.is_some() {
                 return Err(invalid_param("multiple StopWords parameters").into());
             }
-            stoplist = Some(readstoplist(mcx, Some(value.as_slice()), true)?);
+            stoplist = Some(readstoplist(mcx, Some(def_get_string(name, value)?), true)?);
         } else if name.as_slice() == b"language" {
             if located.is_some() {
                 return Err(invalid_param("multiple Language parameters").into());
             }
-            located = Some(locate_stem_module(value.as_slice())?);
+            located = Some(locate_stem_module(def_get_string(name, value)?)?);
         } else {
             return Err(invalid_param(&format!(
                 "unrecognized Snowball parameter: \"{}\"",

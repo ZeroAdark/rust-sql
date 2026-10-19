@@ -25,7 +25,7 @@ use types_core::{
 use types_error::{
     ErrorLocation, PgError, PgResult, ERRCODE_ACTIVE_SQL_TRANSACTION, ERRCODE_INSUFFICIENT_PRIVILEGE,
     ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE, ERRCODE_PROGRAM_LIMIT_EXCEEDED, ERRCODE_SYNTAX_ERROR,
-    ERROR, LOG,
+    DEBUG1, ERROR, LOG,
 };
 use types_rel::RelationData;
 use types_storage::storage::{PROC_ARRAY_LOCK, REPLICATION_SLOT_CONTROL_LOCK};
@@ -694,6 +694,7 @@ fn startup_cb_maybe(ctx: &mut LogicalDecodingContext, is_init: bool) -> PgResult
         debug_assert!(!opc.fast_forward);
         opc.accept_writes = false;
         opc.end_xact = false;
+        let _frame = OutputPluginFrame::push(opc, "startup", InvalidXLogRecPtr);
         let r = cb(&mut *opc, is_init);
         with_output_plugin_context(opc, "startup", InvalidXLogRecPtr, r)?;
     }
@@ -727,6 +728,7 @@ impl LogicalDecodingContext {
             debug_assert!(!opc.fast_forward);
             opc.accept_writes = false;
             opc.end_xact = false;
+            let _frame = OutputPluginFrame::push(opc, "shutdown", InvalidXLogRecPtr);
             let r = cb(&mut *opc);
             with_output_plugin_context(opc, "shutdown", InvalidXLogRecPtr, r)?;
         }
@@ -864,16 +866,15 @@ fn LoadOutputPlugin(callbacks: &mut OutputPluginCallbacks, plugin: &str) -> PgRe
 // propagation where C pushed the callback.
 #[cold]
 #[inline(never)]
-fn attach_output_plugin_context(
+fn output_plugin_context_line(
     opc: &OutputPluginContext,
     callback_name: &str,
     report_location: XLogRecPtr,
-    err: Box<PgError>,
-) -> Box<PgError> {
+) -> String {
     let d = unsafe { opc.slot.data.get() };
     let name = String::from_utf8_lossy(d.name.name_str()).into_owned();
     let plugin = String::from_utf8_lossy(d.plugin.name_str()).into_owned();
-    let ctx = if report_location != InvalidXLogRecPtr {
+    if report_location != InvalidXLogRecPtr {
         format!(
             "slot \"{name}\", output plugin \"{plugin}\", in the {callback_name} callback, associated LSN {:X}/{:X}",
             (report_location >> 32) as u32,
@@ -881,8 +882,46 @@ fn attach_output_plugin_context(
         )
     } else {
         format!("slot \"{name}\", output plugin \"{plugin}\", in the {callback_name} callback")
-    };
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn attach_output_plugin_context(
+    opc: &OutputPluginContext,
+    callback_name: &str,
+    report_location: XLogRecPtr,
+    err: Box<PgError>,
+) -> Box<PgError> {
+    let ctx = output_plugin_context_line(opc, callback_name, report_location);
     Box::new(PgError::from(err).add_context(ctx))
+}
+
+// The same frame for sub-ERROR reports (logical.c pushes errcallback before
+// invoking the plugin, so a WARNING raised inside a callback carries the
+// CONTEXT line too); popped when the wrapper returns.
+struct OutputPluginFrame(u64);
+
+impl OutputPluginFrame {
+    fn push(
+        opc: &OutputPluginContext,
+        callback_name: &'static str,
+        report_location: XLogRecPtr,
+    ) -> Self {
+        let opc: *const OutputPluginContext = opc;
+        Self(elog::push_emit_context_callback(Box::new(move |e| {
+            // SAFETY: the frame is popped before the wrapper returns, while
+            // the decoding context owning `opc` is live.
+            let opc = unsafe { &*opc };
+            e.add_context_line(output_plugin_context_line(opc, callback_name, report_location));
+        })))
+    }
+}
+
+impl Drop for OutputPluginFrame {
+    fn drop(&mut self) {
+        elog::pop_emit_context_callback(self.0);
+    }
 }
 
 fn with_output_plugin_context<T>(
@@ -903,6 +942,7 @@ fn begin_cb_wrapper(rb: &mut ReorderBuffer, txn: TxnId) -> PgResult<()> {
     opc.end_xact = false;
     let cb = opc.callbacks.begin_cb.expect("begin callback registered");
     let report_location = rb.txn(txn).first_lsn;
+    let _frame = OutputPluginFrame::push(opc, "begin", report_location);
     let r = cb(&mut *opc, rb, txn);
     with_output_plugin_context(opc, "begin", report_location, r)
 }
@@ -916,6 +956,7 @@ fn commit_cb_wrapper(rb: &mut ReorderBuffer, txn: TxnId, commit_lsn: XLogRecPtr)
     opc.end_xact = true;
     let cb = opc.callbacks.commit_cb.expect("commit callback registered");
     let report_location = rb.txn(txn).final_lsn;
+    let _frame = OutputPluginFrame::push(opc, "commit", report_location);
     let r = cb(&mut *opc, rb, txn, commit_lsn);
     with_output_plugin_context(opc, "commit", report_location, r)
 }
@@ -945,6 +986,7 @@ fn begin_prepare_cb_wrapper(rb: &mut ReorderBuffer, txn: TxnId) -> PgResult<()> 
         return missing_prepare_family_cb("begin_prepare_cb");
     };
     let report_location = rb.txn(txn).first_lsn;
+    let _frame = OutputPluginFrame::push(opc, "begin_prepare", report_location);
     let r = cb(&mut *opc, rb, txn);
     with_output_plugin_context(opc, "begin_prepare", report_location, r)
 }
@@ -961,6 +1003,7 @@ fn prepare_cb_wrapper(rb: &mut ReorderBuffer, txn: TxnId, prepare_lsn: XLogRecPt
         return missing_prepare_family_cb("prepare_cb");
     };
     let report_location = rb.txn(txn).final_lsn;
+    let _frame = OutputPluginFrame::push(opc, "prepare", report_location);
     let r = cb(&mut *opc, rb, txn, prepare_lsn);
     with_output_plugin_context(opc, "prepare", report_location, r)
 }
@@ -981,6 +1024,7 @@ fn commit_prepared_cb_wrapper(
         return missing_prepare_family_cb("commit_prepared_cb");
     };
     let report_location = rb.txn(txn).final_lsn;
+    let _frame = OutputPluginFrame::push(opc, "commit_prepared", report_location);
     let r = cb(&mut *opc, rb, txn, commit_lsn);
     with_output_plugin_context(opc, "commit_prepared", report_location, r)
 }
@@ -1002,6 +1046,7 @@ fn rollback_prepared_cb_wrapper(
         return missing_prepare_family_cb("rollback_prepared_cb");
     };
     let report_location = rb.txn(txn).final_lsn;
+    let _frame = OutputPluginFrame::push(opc, "rollback_prepared", report_location);
     let r = cb(&mut *opc, rb, txn, prepare_end_lsn, prepare_time);
     with_output_plugin_context(opc, "rollback_prepared", report_location, r)
 }
@@ -1051,6 +1096,7 @@ fn stream_start_cb_wrapper(rb: &mut ReorderBuffer, txn: TxnId, first_lsn: XLogRe
         return missing_stream_cb("stream_start_cb");
     };
     let report_location = first_lsn;
+    let _frame = OutputPluginFrame::push(opc, "stream_start", report_location);
     let r = cb(&mut *opc, rb, txn);
     with_output_plugin_context(opc, "stream_start", report_location, r)
 }
@@ -1067,6 +1113,7 @@ fn stream_stop_cb_wrapper(rb: &mut ReorderBuffer, txn: TxnId, last_lsn: XLogRecP
         return missing_stream_cb("stream_stop_cb");
     };
     let report_location = last_lsn;
+    let _frame = OutputPluginFrame::push(opc, "stream_stop", report_location);
     let r = cb(&mut *opc, rb, txn);
     with_output_plugin_context(opc, "stream_stop", report_location, r)
 }
@@ -1083,6 +1130,7 @@ fn stream_abort_cb_wrapper(rb: &mut ReorderBuffer, txn: TxnId, abort_lsn: XLogRe
         return missing_stream_cb("stream_abort_cb");
     };
     let report_location = abort_lsn;
+    let _frame = OutputPluginFrame::push(opc, "stream_abort", report_location);
     let r = cb(&mut *opc, rb, txn, abort_lsn);
     with_output_plugin_context(opc, "stream_abort", report_location, r)
 }
@@ -1104,6 +1152,7 @@ fn stream_prepare_cb_wrapper(rb: &mut ReorderBuffer, txn: TxnId, prepare_lsn: XL
         return missing_stream_prepare_cb();
     };
     let report_location = rb.txn(txn).final_lsn;
+    let _frame = OutputPluginFrame::push(opc, "stream_prepare", report_location);
     let r = cb(&mut *opc, rb, txn, prepare_lsn);
     with_output_plugin_context(opc, "stream_prepare", report_location, r)
 }
@@ -1120,6 +1169,7 @@ fn stream_commit_cb_wrapper(rb: &mut ReorderBuffer, txn: TxnId, commit_lsn: XLog
         return missing_stream_cb("stream_commit_cb");
     };
     let report_location = rb.txn(txn).final_lsn;
+    let _frame = OutputPluginFrame::push(opc, "stream_commit", report_location);
     let r = cb(&mut *opc, rb, txn, commit_lsn);
     with_output_plugin_context(opc, "stream_commit", report_location, r)
 }
@@ -1141,6 +1191,7 @@ fn stream_change_cb_wrapper(
         return missing_stream_cb("stream_change_cb");
     };
     let report_location = change.lsn;
+    let _frame = OutputPluginFrame::push(opc, "stream_change", report_location);
     let r = cb(&mut *opc, rb, txn, relation, change);
     with_output_plugin_context(opc, "stream_change", report_location, r)
 }
@@ -1165,6 +1216,7 @@ fn stream_message_cb_wrapper(
     opc.write_location = lsn;
     opc.end_xact = false;
     let report_location = lsn;
+    let _frame = OutputPluginFrame::push(opc, "stream_message", report_location);
     let r = cb(&mut *opc, rb, txn, lsn, transactional, prefix, message);
     with_output_plugin_context(opc, "stream_message", report_location, r)
 }
@@ -1187,6 +1239,7 @@ fn stream_truncate_cb_wrapper(
         return Ok(());
     };
     let report_location = change.lsn;
+    let _frame = OutputPluginFrame::push(opc, "stream_truncate", report_location);
     let r = cb(&mut *opc, rb, txn, relations, change);
     with_output_plugin_context(opc, "stream_truncate", report_location, r)
 }
@@ -1203,6 +1256,7 @@ pub fn filter_prepare_cb_wrapper(
         .callbacks
         .filter_prepare_cb
         .expect("filter_prepare callback registered");
+    let _frame = OutputPluginFrame::push(opc, "filter_prepare", InvalidXLogRecPtr);
     let r = cb(&mut *opc, xid, gid);
     with_output_plugin_context(opc, "filter_prepare", InvalidXLogRecPtr, r)
 }
@@ -1221,6 +1275,7 @@ fn change_cb_wrapper(
     opc.end_xact = false;
     let cb = opc.callbacks.change_cb.expect("change callback registered");
     let report_location = change.lsn;
+    let _frame = OutputPluginFrame::push(opc, "change", report_location);
     let r = cb(&mut *opc, rb, txn, relation, change);
     with_output_plugin_context(opc, "change", report_location, r)
 }
@@ -1241,6 +1296,7 @@ fn truncate_cb_wrapper(
     opc.write_location = change.lsn;
     opc.end_xact = false;
     let report_location = change.lsn;
+    let _frame = OutputPluginFrame::push(opc, "truncate", report_location);
     let r = cb(&mut *opc, rb, txn, relations, change);
     with_output_plugin_context(opc, "truncate", report_location, r)
 }
@@ -1266,6 +1322,7 @@ fn message_cb_wrapper(
     opc.write_location = message_lsn;
     opc.end_xact = false;
     let report_location = message_lsn;
+    let _frame = OutputPluginFrame::push(opc, "message", report_location);
     let r = cb(&mut *opc, rb, txn, message_lsn, transactional, prefix, message);
     with_output_plugin_context(opc, "message", report_location, r)
 }
@@ -1281,6 +1338,7 @@ fn update_progress_txn_cb_wrapper(
     opc.write_xid = rb.txn(txn).xid;
     opc.write_location = lsn;
     opc.end_xact = false;
+    let _frame = OutputPluginFrame::push(opc, "update_progress_txn", lsn);
     let r = OutputPluginUpdateProgress(&mut *opc, false);
     with_output_plugin_context(opc, "update_progress_txn", lsn, r)
 }
@@ -1296,6 +1354,7 @@ pub fn filter_by_origin_cb_wrapper(
         .callbacks
         .filter_by_origin_cb
         .expect("filter_by_origin callback registered");
+    let _frame = OutputPluginFrame::push(opc, "filter_by_origin", InvalidXLogRecPtr);
     let r = cb(&mut *opc, origin_id);
     with_output_plugin_context(opc, "filter_by_origin", InvalidXLogRecPtr, r)
 }
@@ -1304,6 +1363,7 @@ pub fn LogicalIncreaseXminForSlot(current_lsn: XLogRecPtr, xmin: TransactionId) 
     let slot = MyReplicationSlot().expect("LogicalIncreaseXminForSlot requires a slot");
 
     let mut updated_xmin = false;
+    let mut got_new_xmin = false;
     slot.with_mutex(|| {
         if TransactionIdPrecedes(xmin, unsafe { slot.data.get() }.catalog_xmin)
             || xmin == unsafe { slot.data.get() }.catalog_xmin
@@ -1315,8 +1375,20 @@ pub fn LogicalIncreaseXminForSlot(current_lsn: XLogRecPtr, xmin: TransactionId) 
         } else if unsafe { slot.candidate_xmin_lsn.get() } == InvalidXLogRecPtr {
             unsafe { slot.candidate_catalog_xmin.set(xmin) };
             unsafe { slot.candidate_xmin_lsn.set(current_lsn) };
+            got_new_xmin = true;
         }
     });
+
+    if got_new_xmin {
+        let _ = elog(
+            DEBUG1,
+            format!(
+                "got new catalog xmin {xmin} at {:X}/{:X}",
+                (current_lsn >> 32) as u32,
+                current_lsn as u32
+            ),
+        );
+    }
 
     if updated_xmin {
         LogicalConfirmReceivedLocation(unsafe { slot.data.get() }.confirmed_flush)?;

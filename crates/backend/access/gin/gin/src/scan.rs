@@ -28,7 +28,7 @@ pub fn ginbeginscan<'mcx>(
         mcx,
         GinScanOpaqueData {
             ginstate: Some(state),
-            work: None,
+            work: Some(GinScanWork::new()),
             isVoidRes: false,
         },
     )?;
@@ -54,10 +54,12 @@ fn fill_scan_entry(
     query_orig: Datum,
     query_category: GinNullCategory,
     is_partial_match: bool,
+    has_extra_data: bool,
 ) -> PgResult<u32> {
-    if !is_partial_match && work.entries.len() < 100 {
+    if !has_extra_data && work.entries.len() < 100 {
         for (i, prev) in work.entries.iter().enumerate() {
-            if !prev.isPartialMatch
+            if !prev.hasExtraData
+                && prev.isPartialMatch == is_partial_match
                 && prev.strategy == strategy
                 && prev.searchMode == search_mode
                 && prev.attnum == attnum
@@ -82,6 +84,7 @@ fn fill_scan_entry(
     entry.queryOrig = query_orig;
     entry.queryCategory = query_category;
     entry.isPartialMatch = is_partial_match;
+    entry.hasExtraData = has_extra_data;
     entry.strategy = strategy;
     entry.searchMode = search_mode;
     entry.attnum = attnum;
@@ -114,6 +117,7 @@ fn add_hidden_entry(
         Datum::null(),
         category,
         false,
+        false,
     )?;
     let key = &mut work.keys[key_idx];
     key.nentries += 1;
@@ -124,7 +128,7 @@ fn add_hidden_entry(
 
 /// ginFillScanKey.
 #[allow(clippy::too_many_arguments)]
-fn fill_scan_key<'scan>(
+pub(crate) fn fill_scan_key<'scan>(
     state: &GinState,
     work: &mut GinScanState<'scan>,
     attnum: OffsetNumber,
@@ -141,6 +145,19 @@ fn fill_scan_key<'scan>(
 ) -> PgResult<()> {
     let kcx = work.kcx();
     let n = query_values.len();
+    // Which entries C's extractQuery hands a non-NULL extra_data[i]:
+    // gin_extract_tsquery every operand (tsginidx.c:160), btree_gin its one
+    // entry (btree_gin.c:79), gin_extract_query_trgm every trigram of a
+    // regex with a graph (trgm_gin.c:128), jsonb path ops only [0] of a
+    // palloc0 array (jsonb_gin.c:788-789); the rest leave it NULL.
+    let extract_query = state.col(attnum).extract_query;
+    let trgm_extra = trgm_graph.is_some();
+    let has_extra_data = |i: usize| match extract_query {
+        GinExtractQueryFn::Tsquery | GinExtractQueryFn::Btree(_) => true,
+        GinExtractQueryFn::Trgm => trgm_extra,
+        GinExtractQueryFn::JsonbPath => i == 0,
+        _ => false,
+    };
 
     let mut key = GinScanKeyData {
         nentries: n as u32,
@@ -195,6 +212,7 @@ fn fill_scan_key<'scan>(
             btree_orig,
             query_categories[i],
             can_partial_match && partial_match.get(i).copied().unwrap_or(false),
+            has_extra_data(i),
         )?;
         work.keys[key_idx].scanEntry.push(id);
     }
@@ -209,10 +227,8 @@ fn fill_scan_key<'scan>(
 
 /// ginFreeScanKeys.
 pub(crate) fn ginFreeScanKeys(so: &mut GinScanOpaqueData) -> PgResult<()> {
-    let Some(mut work) = so.work.take() else {
-        return Ok(());
-    };
-    work.with(|work| {
+    if let Some(mut work) = so.work.take() {
+        work.with(|work| -> PgResult<()> {
     for entry in work.entries.iter() {
         if entry.buffer != InvalidBuffer {
             bm::release_buffer::call(entry.buffer)?;
@@ -220,8 +236,12 @@ pub(crate) fn ginFreeScanKeys(so: &mut GinScanOpaqueData) -> PgResult<()> {
         // list / matchIterator / matchBitmap die with the work drop below.
     }
     Ok(())
-    })
-
+    })?;
+    }
+    // ginscan.c:260 MemoryContextReset(so->keyCtx): both scan contexts
+    // outlive the keys until ginendscan deletes them.
+    so.work = Some(GinScanWork::new());
+    Ok(())
 }
 
 /// ginNewScanKey.
@@ -400,6 +420,7 @@ pub fn ginendscan(scan: &mut IndexScanDescData<'_>) -> PgResult<()> {
         non_gin_opaque()
     };
     ginFreeScanKeys(so)?;
+    so.work = None;
     Ok(())
 }
 

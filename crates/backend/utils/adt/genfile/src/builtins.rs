@@ -1,5 +1,5 @@
 use datum::Datum;
-use types_core::Oid;
+use types_core::{Oid, BOOLOID, INT8OID, RECORDOID, TIMESTAMPTZOID};
 use types_error::{PgError, PgResult};
 use types_fmgr::{
     varlena_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo, PGFunction,
@@ -146,15 +146,8 @@ fn stat_words(md: &std::fs::Metadata, path: &[u8]) -> (i64, i64, i64, i64) {
     }
 }
 
-#[track_caller]
-#[cold]
-#[inline(never)]
-fn not_row_type() -> Box<PgError> {
-    Box::new(PgError::error("return type must be a row type"))
-}
-
 fn stat_file(
-    flinfo: Option<&mut FmgrInfo>,
+    _flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
     missing_ok: bool,
 ) -> PgResult<Datum> {
@@ -170,13 +163,17 @@ fn stat_file(
         }
     };
 
-    let flinfo = flinfo.expect("pg_stat_file: resolved FmgrInfo required");
     let mcx = fcinfo.result_mcx();
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
-    if resolved.class != funcapi::TypeFuncClass::Composite {
-        return Err(not_row_type());
-    }
-    let tupdesc = resolved.result_tuple_desc.expect("composite result carries a tupdesc");
+    let mut tupdesc = ::tupdesc::CreateTemplateTupleDesc(mcx, 6)?;
+    ::tupdesc::TupleDescInitEntry(&mut tupdesc, 1, Some("size"), INT8OID, -1, 0)?;
+    ::tupdesc::TupleDescInitEntry(&mut tupdesc, 2, Some("access"), TIMESTAMPTZOID, -1, 0)?;
+    ::tupdesc::TupleDescInitEntry(&mut tupdesc, 3, Some("modification"), TIMESTAMPTZOID, -1, 0)?;
+    ::tupdesc::TupleDescInitEntry(&mut tupdesc, 4, Some("change"), TIMESTAMPTZOID, -1, 0)?;
+    ::tupdesc::TupleDescInitEntry(&mut tupdesc, 5, Some("creation"), TIMESTAMPTZOID, -1, 0)?;
+    ::tupdesc::TupleDescInitEntry(&mut tupdesc, 6, Some("isdir"), BOOLOID, -1, 0)?;
+    tupdesc.tdtypeid = RECORDOID;
+    tupdesc.tdtypmod = -1;
+    ::typcache_seams::assign_record_type_typmod::call(&mut tupdesc)?;
 
     let (f_size, f_atime, f_mtime, f_ctime) = stat_words(&md, &filename);
     let values = [

@@ -42,6 +42,7 @@ procsignal = { path = "../../storage/ipc/procsignal" }
 bufmgr = { path = "../../storage/buffer/bufmgr" }
 smgr = { path = "../../storage/smgr/smgr" }
 fd = { path = "../../storage/file/fd" }
+waitevent_seams = { path = "../../utils/activity/waitevent_seams" }
 checkpointer = { path = "../../postmaster/checkpointer" }
 transam_xlog = { path = "../../access/transam/transam_xlog" }
 xloginsert = { path = "../../access/transam/xloginsert" }

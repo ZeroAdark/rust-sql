@@ -15,7 +15,7 @@ use crate::{
     ignore_till_sync,
 };
 
-mod pqmsg {
+pub(crate) mod pqmsg {
     pub const QUERY: i32 = b'Q' as i32;
     pub const PARSE: i32 = b'P' as i32;
     pub const BIND: i32 = b'B' as i32;
@@ -217,12 +217,24 @@ fn InteractiveBackend(in_buf: &mut StringInfo<'_>) -> PgResult<i32> {
 
     /* if the query echo flag was given, print the query.. */
     if crate::echo_query() {
-        let query = &in_buf.as_bytes()[..in_buf.len() - 1];
-        println!("statement: {}", String::from_utf8_lossy(query));
+        let _ = write_echo(&mut std::io::stdout().lock(), in_buf.as_bytes());
     }
     let _ = std::io::stdout().flush();
 
     Ok(pqmsg::QUERY)
+}
+
+// printf("%s", inBuf->data): the echo stops at the first NUL.
+pub(crate) fn echoed_statement(buf: &[u8]) -> &[u8] {
+    &buf[..buf.iter().position(|&b| b == 0).unwrap_or(buf.len())]
+}
+
+// printf("statement: %s\n"): the input bytes go out verbatim, invalid
+// UTF-8 included.
+pub(crate) fn write_echo(out: &mut impl std::io::Write, buf: &[u8]) -> std::io::Result<()> {
+    out.write_all(b"statement: ")?;
+    out.write_all(echoed_statement(buf))?;
+    out.write_all(b"\n")
 }
 
 pub(crate) struct LoopState {
@@ -255,7 +267,7 @@ pub(crate) fn error_recovery(
     g::SetQueryCancelHoldoffCount(0);
     g::SetCritSectionCount(0);
 
-    // GL-ERRFIX-1 (E-4 + E-5) — EMIT THE REPORT ONCE, BEFORE ANY FALLIBLE STEP.
+    // regression (E-4 + E-5) — EMIT THE REPORT ONCE, BEFORE ANY FALLIBLE STEP.
     // Two defects, one placement fixes both:
     //   E-4: the report used to sit AFTER `disable_all_timeouts` (the first
     //        fallible `?`). If that step failed, the original error reached
@@ -283,7 +295,7 @@ pub(crate) fn error_recovery(
 
     pqcomm::pq_comm_reset();
 
-    // (the report emission moved to the top of this function — GL-ERRFIX-1 E-4/E-5.)
+    // (the report emission moved to the top of this function — regression E-4/E-5.)
 
 
     xact::AbortCurrentTransaction()?;
@@ -486,16 +498,16 @@ fn forbidden_in_wal_sender(firstchar: i32) -> PgResult<()> {
 
 #[cold]
 #[inline(never)]
-fn forbidden_in_wal_sender_error(firstchar: i32) -> PgResult<()> {
-    let msg = if firstchar == pqmsg::FUNCTION_CALL {
-        "fastpath function calls not supported in a replication connection"
+pub(crate) fn forbidden_in_wal_sender_error(firstchar: i32) -> PgResult<()> {
+    let (msg, line) = if firstchar == pqmsg::FUNCTION_CALL {
+        ("fastpath function calls not supported in a replication connection", 5043)
     } else {
-        "extended query protocol not supported in a replication connection"
+        ("extended query protocol not supported in a replication connection", 5047)
     };
     ereport(ERROR)
         .errcode(ERRCODE_PROTOCOL_VIOLATION)
         .errmsg(msg)
-        .finish(loc(5036, "forbidden_in_wal_sender"))
+        .finish(loc(line, "forbidden_in_wal_sender"))
 }
 
 fn dispatch_message<'mcx>(

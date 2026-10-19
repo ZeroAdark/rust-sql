@@ -1,0 +1,87 @@
+-- bugs/batch-192-backend-commands-tablecmds: C-vs-pgrust parity for the
+-- single-session fixes. Expected file captured from C 18.6
+-- (scripts/regress-diff.sh --capture), then HAND-EDITED for the temporal
+-- foreign-key block (see the note there).
+\set VERBOSITY verbose
+
+-- regression: findFkeyCast (tablecmds.c:13673) reports a
+-- vanished implicit coercion as elog(ERROR) XX000, never a panic
+CREATE TYPE b192_mytext;
+CREATE FUNCTION b192_mytext_in(cstring) RETURNS b192_mytext AS 'textin' LANGUAGE internal IMMUTABLE STRICT;
+CREATE FUNCTION b192_mytext_out(b192_mytext) RETURNS cstring AS 'textout' LANGUAGE internal IMMUTABLE STRICT;
+CREATE TYPE b192_mytext (INPUT = b192_mytext_in, OUTPUT = b192_mytext_out, LIKE = text, COLLATABLE = true);
+CREATE CAST (b192_mytext AS text) WITHOUT FUNCTION AS IMPLICIT;
+CREATE TABLE b192_pk (k text PRIMARY KEY);
+CREATE TABLE b192_fk (k b192_mytext REFERENCES b192_pk);
+DROP CAST (b192_mytext AS text);
+CREATE CAST (b192_mytext AS text) WITHOUT FUNCTION;
+DO $$ BEGIN
+  ALTER TABLE b192_fk ALTER COLUMN k TYPE text USING k::text;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE '%: %', SQLSTATE, regexp_replace(SQLERRM, '\d+', 'N', 'g');
+END $$;
+SELECT conname, convalidated FROM pg_constraint WHERE conrelid = 'b192_fk'::regclass;
+DROP TABLE b192_fk, b192_pk;
+DROP TYPE b192_mytext CASCADE;
+
+-- regression: a denied TRUNCATE names a foreign table with
+-- get_relkind_objtype's noun (objectaddress.c:6202)
+CREATE EXTENSION postgres_fdw;
+CREATE SERVER b192_srv FOREIGN DATA WRAPPER postgres_fdw OPTIONS (dbname 'postgres');
+CREATE TABLE b192_loc (a int);
+CREATE FOREIGN TABLE b192_ft (a int) SERVER b192_srv OPTIONS (table_name 'b192_loc');
+CREATE ROLE b192_u;
+GRANT SELECT ON b192_ft TO b192_u;
+SET ROLE b192_u;
+TRUNCATE b192_ft;
+TRUNCATE b192_loc;
+RESET ROLE;
+DROP FOREIGN TABLE b192_ft;
+DROP SERVER b192_srv;
+DROP TABLE b192_loc;
+DROP ROLE b192_u;
+DROP EXTENSION postgres_fdw;
+
+-- regression / p7#1: ENABLE/DISABLE TRIGGER recursion opens
+-- the partitions with the statement's lockmode (tablecmds.c:5586)
+CREATE TABLE b192_pt (a int) PARTITION BY LIST (a);
+CREATE TABLE b192_pt1 PARTITION OF b192_pt FOR VALUES IN (1);
+CREATE FUNCTION b192_tf() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+CREATE TRIGGER b192_tr BEFORE INSERT ON b192_pt FOR EACH ROW EXECUTE FUNCTION b192_tf();
+BEGIN;
+ALTER TABLE b192_pt DISABLE TRIGGER b192_tr;
+SELECT relation::regclass, mode FROM pg_locks WHERE pid = pg_backend_pid() AND relation IN ('b192_pt'::regclass, 'b192_pt1'::regclass) ORDER BY relation::regclass::text, mode;
+ROLLBACK;
+BEGIN;
+ALTER TABLE b192_pt DISABLE TRIGGER b192_tr, ENABLE ROW LEVEL SECURITY;
+SELECT relation::regclass, mode FROM pg_locks WHERE pid = pg_backend_pid() AND relation IN ('b192_pt'::regclass, 'b192_pt1'::regclass) ORDER BY relation::regclass::text, mode;
+ROLLBACK;
+BEGIN;
+ALTER TABLE b192_pt ENABLE ROW LEVEL SECURITY, ENABLE TRIGGER b192_tr;
+SELECT relation::regclass, mode FROM pg_locks WHERE pid = pg_backend_pid() AND relation IN ('b192_pt'::regclass, 'b192_pt1'::regclass) ORDER BY relation::regclass::text, mode;
+ROLLBACK;
+DROP TABLE b192_pt;
+DROP FUNCTION b192_tf();
+
+-- regression (pg-also-bug, UPSTREAM-BUGS.md): C 18.6's
+-- QueueFKConstraintValidation (tablecmds.c:13051) and ATExecAlterConstrEnforceability
+-- (tablecmds.c:12532) leave NewConstraint.conwithperiod false, so VALIDATE
+-- CONSTRAINT and ALTER CONSTRAINT ENFORCED check a temporal foreign key with
+-- RI_Initial_Check's overlap join and accept a reference that the trigger path
+-- (and ADD CONSTRAINT without NOT VALID) rejects. The expected output of this
+-- block is HAND-VERIFIED: both commands raise 23503 and the constraint stays
+-- convalidated = f / conenforced = f. C 18.6 reports success and t / t.
+CREATE EXTENSION btree_gist;
+CREATE TABLE b192_tpk (id int, valid daterange, PRIMARY KEY (id, valid WITHOUT OVERLAPS));
+CREATE TABLE b192_tfk (id int, valid daterange);
+INSERT INTO b192_tpk VALUES (1, '[2020-01-01,2020-06-01)');
+INSERT INTO b192_tfk VALUES (1, '[2020-03-01,2020-09-01)');
+ALTER TABLE b192_tfk ADD CONSTRAINT b192_tfk_fk FOREIGN KEY (id, PERIOD valid) REFERENCES b192_tpk (id, PERIOD valid);
+ALTER TABLE b192_tfk ADD CONSTRAINT b192_tfk_fk FOREIGN KEY (id, PERIOD valid) REFERENCES b192_tpk (id, PERIOD valid) NOT VALID;
+ALTER TABLE b192_tfk VALIDATE CONSTRAINT b192_tfk_fk;
+SELECT conname, convalidated, conenforced FROM pg_constraint WHERE conname = 'b192_tfk_fk';
+ALTER TABLE b192_tfk ALTER CONSTRAINT b192_tfk_fk NOT ENFORCED;
+ALTER TABLE b192_tfk ALTER CONSTRAINT b192_tfk_fk ENFORCED;
+SELECT conname, convalidated, conenforced FROM pg_constraint WHERE conname = 'b192_tfk_fk';
+DROP TABLE b192_tfk, b192_tpk;
+DROP EXTENSION btree_gist;

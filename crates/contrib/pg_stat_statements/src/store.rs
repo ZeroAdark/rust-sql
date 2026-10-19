@@ -55,18 +55,29 @@ pub(crate) fn pgss_store(
         toplevel: nesting_level() == 0,
     };
 
+    // pg_stat_statements.c:1373-1400: look up under the shared lock, build
+    // the normalized text with no lock held (the scanner can raise), then
+    // allocate under the exclusive lock.
+    let absent = {
+        let guard = PGSS.lock().unwrap();
+        let Some(shared) = guard.as_ref() else { return };
+        !shared.hash.contains_key(&key)
+    };
+    let norm_query: Option<String> = match jstate {
+        Some(js) if absent => {
+            match crate::normalize::generate_normalized_query(js, query, location) {
+                Ok(s) => Some(s),
+                Err(e) => std::panic::panic_any(e),
+            }
+        }
+        _ => None,
+    };
+
     let mut guard = PGSS.lock().unwrap();
     let Some(shared) = guard.as_mut() else { return };
 
     if !shared.hash.contains_key(&key) {
-        let norm_query;
-        let text: &str = match jstate {
-            Some(js) => {
-                norm_query = crate::normalize::generate_normalized_query(js, query, location);
-                &norm_query
-            }
-            None => query,
-        };
+        let text: &str = norm_query.as_deref().unwrap_or(query);
         entry_alloc(shared, key, text.as_bytes(), encoding, jstate.is_some());
     }
 

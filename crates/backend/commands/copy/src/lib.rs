@@ -26,7 +26,10 @@ mod to;
 #[cfg(test)]
 mod tests;
 
-pub use from::{copy_from_error_context, BeginCopyFrom, BeginCopyFromCallback, CopyFrom, CopyFromState, EndCopyFrom};
+pub use from::{
+    check_for_interrupts_in_copy, copy_from_error_context, next_copy_row, BeginCopyFrom,
+    BeginCopyFromCallback, CopyFrom, CopyFromState, EndCopyFrom,
+};
 pub use to::{BeginCopyTo, DoCopyTo, EndCopyTo};
 
 /// copyfrom.c:1881 / copyto.c:971: the "client-side facility such as psql's
@@ -672,11 +675,12 @@ pub fn ProcessCopyOptions<'s>(
         let name = d.defname.unwrap_or("");
         match name {
             "format" => {
+                let fmt = def_string(mcx, d)?;
                 if format_specified {
                     return Err(conflicting_option(src, d.location));
                 }
                 format_specified = true;
-                match def_string(mcx, d)? {
+                match fmt {
                     "text" => {}
                     "csv" => opts.csv_mode = true,
                     "binary" => opts.binary = true,

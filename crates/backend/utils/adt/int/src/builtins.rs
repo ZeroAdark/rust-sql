@@ -1,7 +1,6 @@
 //! fmgr-shaped wrappers (`fc_<cname>`) and the registry table (`INT_BUILTINS`)
 //! the fmgr-core unit consumes; value cores live in the crate root.
 
-use alloc::string::String;
 
 use ::datum::Datum;
 use ::types_core::Oid;
@@ -13,17 +12,17 @@ use ::types_fmgr::{
     PGFunction, ThinBuiltin, ThinFcinfo,
 };
 
-fn in_arg<'a>(fcinfo: &'a Fcinfo) -> alloc::borrow::Cow<'a, str> {
+// Raw server-encoding bytes: C quotes the cstring as-is in its messages.
+fn in_arg<'a>(fcinfo: &'a Fcinfo) -> &'a [u8] {
     // SAFETY: catalog arg 0 of the in-functions is cstring (typlen -2).
-    let s = unsafe { fcinfo.arg_cstring(0) };
-    String::from_utf8_lossy(s.to_bytes())
+    unsafe { fcinfo.arg_cstring(0) }.to_bytes()
 }
 
 pub fn fc_int2in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let num = in_arg(fcinfo);
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
-    Ok(Datum::from_i16(crate::int2in(&num, esc)?))
+    Ok(Datum::from_i16(crate::int2in(num, esc)?))
 }
 
 pub fn fc_int2out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -41,7 +40,7 @@ pub fn fc_int2vectorin(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> P
     let num = in_arg(fcinfo);
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
-    match crate::int2vectorin(mcx, &num, esc)? {
+    match crate::int2vectorin(mcx, num, esc)? {
         Some(img) => {
             let d = Datum::from_usize(img.as_ptr() as usize);
             core::mem::forget(img);
@@ -89,7 +88,7 @@ pub fn fc_int4in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
     let num = in_arg(fcinfo);
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
-    Ok(Datum::from_i32(crate::int4in(&num, esc)?))
+    Ok(Datum::from_i32(crate::int4in(num, esc)?))
 }
 
 pub fn fc_int4out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {

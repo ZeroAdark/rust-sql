@@ -151,6 +151,13 @@ pub const REG_NLSTOP: i32 = 0o100;
 pub const REG_NLANCH: i32 = 0o200;
 /// C: `REG_NEWLINE` — newlines are line terminators (`REG_NLSTOP | REG_NLANCH`).
 pub const REG_NEWLINE: i32 = 0o300;
+
+// regcomp.c:396-400 pg_regcomp sanity checks (REG_INVARG), run before any
+// collation lookup.
+pub fn cflags_valid(cflags: i32) -> bool {
+    !((cflags & REG_QUOTE) != 0 && (cflags & (REG_ADVANCED | REG_EXPANDED | REG_NEWLINE)) != 0)
+        && !((cflags & REG_EXTENDED) == 0 && (cflags & REG_ADVF) != 0)
+}
 /// C: `REG_PEND` — backward-compatibility hack.
 pub const REG_PEND: i32 = 0o400;
 /// C: `REG_EXPECT` — report details on partial/limited matches.

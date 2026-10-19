@@ -473,7 +473,7 @@ fn inet_hist_match_divider(
     -1
 }
 
-// GL-STATSLOT-1: a torn MCV slot (values from one pg_statistic row
+// regression: a torn MCV slot (values from one pg_statistic row
 // generation, numbers image from a later one, so the arrays disagree) must
 // degrade softly. C reads a pinned tuple copy and can never see the
 // mismatch; the lazy slot re-probe can.

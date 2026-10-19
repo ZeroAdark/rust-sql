@@ -40,15 +40,16 @@ static C_LOCALE_LCONV: PgLconv = PgLconv {
     n_sign_posn: CHAR_MAX,
 };
 
-// C caches one converted copy guarded by CurrentLocaleConvValid (the monetary/
-// numeric assign hooks invalidate it). We key a process-wide cache on the
-// (lc_monetary, lc_numeric) pair instead: the values are immutable for a given
-// pair, so a stale entry is impossible and no invalidation hook is needed.
+// Converted copies are shared process-wide by (lc_monetary, lc_numeric,
+// database encoding); validity is per backend as C's CurrentLocaleConvValid,
+// so every rebuild after an assign repeats C's encoding lookups and warnings.
 pub fn pglc_localeconv() -> ::types_error::PgResult<&'static PgLconv> {
-    if monetary_and_numeric_are_c() {
-        return Ok(&C_LOCALE_LCONV);
+    if let Some(hit) = crate::setup::current_localeconv() {
+        return Ok(hit);
     }
-    localeconv_non_c()
+    let conv = if monetary_and_numeric_are_c() { &C_LOCALE_LCONV } else { localeconv_non_c()? };
+    crate::setup::set_current_localeconv(Some(conv));
+    Ok(conv)
 }
 
 // wasi-libc's locale is C/POSIX-only — newlocale fails for every other name,
@@ -78,7 +79,10 @@ fn localeconv_non_c() -> ::types_error::PgResult<&'static PgLconv> {
 
     let names = crate::setup::monetary_and_numeric_names();
     let key = (names.0, names.1, mbutils::GetDatabaseEncoding());
-    if let Some(hit) = cache.lock().expect("lconv cache").get(&key) {
+    let hit = cache.lock().expect("lconv cache").get(&key).copied();
+    if let Some(hit) = hit {
+        crate::chklocale::pg_get_encoding_from_locale(Some(&key.1), true)?;
+        crate::chklocale::pg_get_encoding_from_locale(Some(&key.0), true)?;
         return Ok(hit);
     }
     let built: &'static PgLconv = Box::leak(Box::new(read_lconv(&key.0, &key.1)?));

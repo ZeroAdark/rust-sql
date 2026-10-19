@@ -502,3 +502,38 @@ fn dump_footer_schema() {
     }
     println!("codecs: {codecs:?}");
 }
+
+/// A v1 data page with num_values == 0 is skipped rather than installed as
+/// the current page (fill_from_page asserts k > 0 in debug builds).
+#[test]
+fn zero_value_data_page_is_skipped() {
+    let path = fixture("uncompressed.parquet");
+    let mut bytes = std::fs::read(&path).expect("read fixture");
+    assert_eq!(&bytes[5630..5633], &[0x15, 0xF8, 0x0A], "fixture layout drifted");
+    bytes[5631] = 0x80;
+    bytes[5632] = 0x00;
+    let dir = std::env::temp_dir().join(format!("pqread-zvp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("zero_value_page.parquet");
+    std::fs::write(&p, &bytes).unwrap();
+    let mut fr = FileReader::open(p.to_str().unwrap()).unwrap();
+    let ncols = fr.meta.columns.len();
+    let cols: Vec<usize> = (0..ncols).collect();
+    let vutf8 = vec![false; ncols];
+    let mut batches: Vec<ColumnBatch> =
+        fr.meta.columns.iter().map(|c| ColumnBatch::new_for(c.phys)).collect();
+    let mut first_err = None;
+    'rgs: for rg in 0..fr.meta.row_groups.len() {
+        let Ok(mut rgr) = fr.row_group(rg, &cols, &vutf8) else { break };
+        while rgr.rows_remaining() > 0 {
+            let n = rgr.rows_remaining().min(521) as usize;
+            if let Err(e) = rgr.read_batches(&mut batches, n) {
+                first_err = Some(e.to_string());
+                break 'rgs;
+            }
+        }
+    }
+    let err = first_err.expect("the emptied page leaves the chunk short of its value count");
+    assert!(err.contains("column chunk ends before the declared"), "{err}");
+    std::fs::remove_dir_all(&dir).ok();
+}

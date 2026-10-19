@@ -125,9 +125,42 @@ pub fn checkpoint() {
     }
     let tok = CURRENT.with(|c| c.borrow().clone());
     let Some(tok) = tok else { return };
+    // Only the armer carries the real error; worker frames raise the marker.
+    if !armed_here() {
+        std::panic::panic_any(Canceled);
+    }
     let taken = tok.payload.lock().unwrap_or_else(|e| e.into_inner()).take();
     match taken {
         Some(p) => std::panic::resume_unwind(p),
         None => std::panic::panic_any(Canceled),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    fn real_error() -> Option<Payload> {
+        Some(Box::new("the-real-57014-error"))
+    }
+
+    #[test]
+    fn worker_checkpoint_raises_marker_and_keeps_armer_payload() {
+        let _g = arm(real_error);
+        poll_now();
+        let tok = current().expect("armed");
+        assert!(tok.fired.load(Ordering::SeqCst));
+        let worker = std::thread::spawn(move || {
+            let _inh = inherit(&Some(tok));
+            assert!(!armed_here());
+            catch_unwind(AssertUnwindSafe(checkpoint))
+        })
+        .join()
+        .expect("worker joined");
+        let err = worker.expect_err("fired token unwinds");
+        assert!(err.is::<Canceled>(), "worker must raise the Canceled marker");
+        let armer = catch_unwind(AssertUnwindSafe(checkpoint)).expect_err("armer unwinds");
+        assert_eq!(armer.downcast_ref::<&str>().copied(), Some("the-real-57014-error"));
     }
 }

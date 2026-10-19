@@ -8,8 +8,11 @@ use xlogreader_seams::XLogReaderState;
 const XLOG_LOGICAL_MESSAGE: u8 = 0x00;
 
 pub fn logicalmsg_desc(buf: &mut StringInfo<'_>, record: &XLogReaderState) -> PgResult<()> {
-    let rec = Rec(rec_data(record));
-    let info = rec_info(record) & !XLR_INFO_MASK;
+    logicalmsg_desc_data(buf, rec_data(record), rec_info(record) & !XLR_INFO_MASK)
+}
+
+fn logicalmsg_desc_data(buf: &mut StringInfo<'_>, data: &[u8], info: u8) -> PgResult<()> {
+    let rec = Rec(data);
 
     if info == XLOG_LOGICAL_MESSAGE {
         let transactional = rec.u8(4, "xl_logical_message")? != 0;
@@ -35,19 +38,18 @@ pub fn logicalmsg_desc(buf: &mut StringInfo<'_>, record: &XLogReaderState) -> Pg
             .0
             .get(HEADER + prefix_size..payload_end)
             .ok_or_else(|| crate::record_truncated("xl_logical_message"))?;
-        let prefix_str = prefix
-            .get(..prefix_size - 1)
-            .ok_or_else(|| crate::record_truncated("xl_logical_message prefix"))
-            .and_then(|s| {
-                core::str::from_utf8(s)
-                    .map_err(|_| crate::record_truncated("xl_logical_message prefix"))
-            })?;
+        // C prints the prefix with %s: raw bytes up to the NUL, no encoding
+        // check (a SQL_ASCII or LATIN1 database stores non-UTF-8 prefixes).
+        let prefix = &prefix[..prefix_size - 1];
+        let prefix = &prefix[..prefix.iter().position(|&b| b == 0).unwrap_or(prefix.len())];
 
         appendf!(
             buf,
-            "{}, prefix \"{prefix_str}\"; payload ({message_size} bytes): ",
+            "{}, prefix \"",
             if transactional { "transactional" } else { "non-transactional" }
         )?;
+        buf.append_bytes(prefix)?;
+        appendf!(buf, "\"; payload ({message_size} bytes): ")?;
         let mut sep = "";
         for &byte in message {
             appendf!(buf, "{sep}{byte:02X}")?;
@@ -62,5 +64,49 @@ pub fn logicalmsg_identify(info: u8) -> Option<&'static str> {
         Some("MESSAGE")
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{logicalmsg_desc_data, XLOG_LOGICAL_MESSAGE};
+    use stringinfo::StringInfo;
+
+    fn desc(prefix: &[u8], message: &[u8]) -> Result<Vec<u8>, String> {
+        let mut data = vec![0u8; 24];
+        data[8..16].copy_from_slice(&((prefix.len() + 1) as u64).to_ne_bytes());
+        data[16..24].copy_from_slice(&(message.len() as u64).to_ne_bytes());
+        data.extend_from_slice(prefix);
+        data.push(0);
+        data.extend_from_slice(message);
+        let cx = mcx::MemoryContext::new("logicalmsgdesc_test");
+        let mut buf = StringInfo::new_in(cx.mcx()).unwrap();
+        logicalmsg_desc_data(&mut buf, &data, XLOG_LOGICAL_MESSAGE)
+            .map_err(|e| e.to_string())?;
+        Ok(buf.as_bytes().to_vec())
+    }
+
+    /// C parity = logicalmsgdesc.c %s: a non-UTF-8 prefix (LATIN1 "é" from
+    /// a SQL_ASCII database) is printed byte for byte, never rejected.
+    #[test]
+    fn non_utf8_prefix_prints_raw_bytes() {
+        assert_eq!(
+            desc(b"\xe9", b"AB").unwrap(),
+            b"non-transactional, prefix \"\xe9\"; payload (2 bytes): 41 42".to_vec()
+        );
+        assert_eq!(
+            desc(b"pfx", b"").unwrap(),
+            b"non-transactional, prefix \"pfx\"; payload (0 bytes): ".to_vec()
+        );
+    }
+
+    #[test]
+    fn truncated_prefix_still_errors() {
+        let mut data = vec![0u8; 24];
+        data[8..16].copy_from_slice(&4u64.to_ne_bytes());
+        let cx = mcx::MemoryContext::new("logicalmsgdesc_test");
+        let mut buf = StringInfo::new_in(cx.mcx()).unwrap();
+        let err = logicalmsg_desc_data(&mut buf, &data, XLOG_LOGICAL_MESSAGE).unwrap_err();
+        assert!(err.to_string().contains("xl_logical_message"));
     }
 }

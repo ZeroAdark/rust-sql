@@ -3598,21 +3598,16 @@ mod site_tests {
         assert_eq!(v.get("signature").and_then(|c| c.as_str()), Some("wire:N | analyzing \"%s\" | 00000/- | N.presence"));
     }
 
-    /// Cell identity (CONTRACTS.md "Cell identity"): a `sitediff-cell/1`
-    /// document from the real factory keeps the factory's id
-    /// (`sitediff-cell.sh id`), which is NOT the contracts hash of the
+    /// Cell identity: a captured `sitediff-cell/1` document keeps the
+    /// factory's known SHA-256 id, which is NOT the contracts hash of the
     /// mapped Cell; a carried `cell_id` is verified, a wrong one is a
     /// hard failure; the contracts shape hashes through `Cell::cell_id`.
     #[test]
     fn factory_cell_json_keeps_the_factory_id() {
-        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../scripts/sitediff-cell.sh");
-        let run = |args: &[&str]| -> String {
-            let o = std::process::Command::new("bash").arg(&script).args(args).output().expect("bash sitediff-cell.sh");
-            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-            String::from_utf8(o.stdout).unwrap()
-        };
-        let rendered = run(&["render", "--cell", "base"]);
-        let printed_id = run(&["id", "--cell", "base"]).trim().to_string();
+        // Captured with --cell base --host linux. The expected id hashes the
+        // canonical JSON bytes without the file's trailing newline.
+        let rendered = include_str!("../fixtures/contracts/factory-cell-base.json");
+        let printed_id = "829a5b647a3e30f1d9769872476b268b2aa40b072a1f7c46e8f17ec5a3e39229".to_string();
         assert_eq!(printed_id.len(), 64);
         let cfg = SiteConfig::from_cell_json(&rendered, Path::new("/w")).unwrap();
         assert_eq!(cfg.cell_id, printed_id, "from_cell_json keeps the factory's own id");

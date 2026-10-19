@@ -1,0 +1,142 @@
+-- Two-binary differential corpus for the 2026-09-13 bug-inventory batch
+-- batch-142-backend-executor-execmain (C 18.6 oracle vs pgrust). Each leg is
+-- one row of the batch (scripts/executor-execmain-b142-e2e.sh).
+\set VERBOSITY verbose
+CREATE DATABASE b142e2e TEMPLATE template0 ENCODING 'UTF8';
+\c b142e2e
+\set VERBOSITY verbose
+-- regression: ExecCheckXactReadOnly names a row-marked SELECT by
+-- its first PlanRowMark strength (utility.c:3132 CreateCommandTag); the SPI
+-- read-only arm carries the same tag.
+CREATE TABLE b142_r(x int); INSERT INTO b142_r VALUES (1);
+BEGIN READ ONLY; SELECT * FROM b142_r FOR UPDATE; ROLLBACK;
+ERROR:  25006: cannot execute SELECT FOR UPDATE in a read-only transaction
+BEGIN READ ONLY; SELECT * FROM b142_r FOR SHARE; ROLLBACK;
+ERROR:  25006: cannot execute SELECT FOR SHARE in a read-only transaction
+BEGIN READ ONLY; SELECT * FROM b142_r FOR KEY SHARE; ROLLBACK;
+ERROR:  25006: cannot execute SELECT FOR KEY SHARE in a read-only transaction
+BEGIN READ ONLY; SELECT * FROM b142_r FOR NO KEY UPDATE; ROLLBACK;
+ERROR:  25006: cannot execute SELECT FOR NO KEY UPDATE in a read-only transaction
+BEGIN READ ONLY; UPDATE b142_r SET x = 2; ROLLBACK;
+ERROR:  25006: cannot execute UPDATE in a read-only transaction
+BEGIN READ ONLY; SELECT * FROM b142_r; ROLLBACK;
+ x 
+---
+ 1
+(1 row)
+
+CREATE FUNCTION b142_spi() RETURNS void LANGUAGE plpgsql STABLE AS $$ BEGIN PERFORM * FROM b142_r FOR SHARE; END $$;
+SELECT b142_spi();
+ERROR:  0A000: SELECT FOR SHARE is not allowed in a non-volatile function
+CONTEXT:  SQL statement "SELECT * FROM b142_r FOR SHARE"
+PL/pgSQL function b142_spi() line 1 at PERFORM
+CREATE FUNCTION b142_spi2() RETURNS void LANGUAGE plpgsql STABLE AS $$ BEGIN PERFORM * FROM b142_r FOR NO KEY UPDATE; END $$;
+SELECT b142_spi2();
+ERROR:  0A000: SELECT FOR NO KEY UPDATE is not allowed in a non-volatile function
+CONTEXT:  SQL statement "SELECT * FROM b142_r FOR NO KEY UPDATE"
+PL/pgSQL function b142_spi2() line 1 at PERFORM
+-- regression: ExecInitGroup compiles the projection before the HAVING
+-- qual (nodeGroup.c:198/:204); with both functions denied the projection's
+-- function is the one reported.
+CREATE ROLE b142_u;
+CREATE TABLE b142_g(x int); INSERT INTO b142_g VALUES (1),(2);
+GRANT SELECT ON b142_g TO b142_u;
+CREATE FUNCTION b142_f1(int) RETURNS int LANGUAGE plpgsql AS $$ BEGIN RETURN $1; END $$;
+CREATE FUNCTION b142_f2(int) RETURNS int LANGUAGE plpgsql VOLATILE AS $$ BEGIN RETURN $1; END $$;
+REVOKE EXECUTE ON FUNCTION b142_f1(int), b142_f2(int) FROM PUBLIC;
+SET ROLE b142_u;
+SET enable_hashagg = off;
+SELECT b142_f1(x) FROM b142_g GROUP BY x HAVING b142_f2(x) > 0;
+ERROR:  42501: permission denied for function b142_f1
+RESET enable_hashagg;
+RESET ROLE;
+-- regression: ExecInitBitmapHeapScan initializes the
+-- bitmap child (its runtime index key) before the heap scan's projection
+-- (nodeBitmapHeapscan.c:379/:392): the key's function is reported first.
+CREATE TABLE b142_b(x int, y int); INSERT INTO b142_b SELECT i, i FROM generate_series(1,1000) i;
+CREATE INDEX b142_b_x ON b142_b(x);
+ANALYZE b142_b;
+GRANT SELECT ON b142_b TO b142_u;
+CREATE TABLE b142_o(v int); INSERT INTO b142_o VALUES (5);
+GRANT SELECT ON b142_o TO b142_u;
+CREATE FUNCTION b142_f4(int) RETURNS int LANGUAGE plpgsql STABLE AS $$ BEGIN RETURN $1; END $$;
+REVOKE EXECUTE ON FUNCTION b142_f4(int) FROM PUBLIC;
+SET ROLE b142_u;
+SET enable_seqscan = off; SET enable_indexscan = off; SET enable_indexonlyscan = off;
+SELECT (SELECT b142_f1(b.y) FROM b142_b b WHERE b.x = b142_f4(o.v)) FROM b142_o o;
+ERROR:  42501: permission denied for function b142_f4
+RESET enable_seqscan; RESET enable_indexscan; RESET enable_indexonlyscan;
+RESET ROLE;
+-- regression / #2: under pgrust.sqe_heap the heap recognizer
+-- routes a negative OFFSET (2201X in recompute_limits) and LIMIT 0 (ExecLimit
+-- never pulls the child: no scan opened, seq_scan unchanged) to the incumbent
+-- executor. C treats the GUC as a placeholder.
+CREATE TABLE b142_l(a int, b int); INSERT INTO b142_l SELECT i, i % 10 FROM generate_series(1,1000) i;
+ANALYZE b142_l;
+SET pgrust.sqe_heap = on;
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT seq_scan FROM pg_stat_user_tables WHERE relname = 'b142_l';
+ seq_scan 
+----------
+        0
+(1 row)
+
+SELECT count(*) FROM b142_l OFFSET -1;
+ERROR:  2201X: OFFSET must not be negative
+SELECT count(*) FROM b142_l OFFSET -1 LIMIT 1;
+ERROR:  2201X: OFFSET must not be negative
+SELECT count(*) FROM b142_l OFFSET -1 LIMIT 0;
+ERROR:  2201X: OFFSET must not be negative
+SELECT b, count(*) FROM b142_l GROUP BY b ORDER BY b LIMIT 2 OFFSET -1;
+ERROR:  2201X: OFFSET must not be negative
+SELECT count(*), sum(b) FROM b142_l LIMIT 0;
+ count | sum 
+-------+-----
+(0 rows)
+
+SELECT b, count(*) FROM b142_l GROUP BY b ORDER BY b LIMIT 0;
+ b | count 
+---+-------
+(0 rows)
+
+SELECT a FROM b142_l ORDER BY a LIMIT 0;
+ a 
+---
+(0 rows)
+
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT seq_scan FROM pg_stat_user_tables WHERE relname = 'b142_l';
+ seq_scan 
+----------
+        0
+(1 row)
+
+SELECT count(*) FROM b142_l LIMIT 1;
+ count 
+-------
+  1000
+(1 row)
+
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT seq_scan FROM pg_stat_user_tables WHERE relname = 'b142_l';
+ seq_scan 
+----------
+        1
+(1 row)
+
+RESET pgrust.sqe_heap;

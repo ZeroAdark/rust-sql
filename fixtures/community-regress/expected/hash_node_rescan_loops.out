@@ -9,9 +9,7 @@
 -- loop, in step with its HashJoin; a Param that reaches only the probe side
 -- keeps the single-batch table (ExecReScanHashJoin's reuse arm) and the Hash
 -- row stays at loops=1. pgrust rescanned the Hash's CHILD only, leaving the
--- Hash slot's cycle open: loops=1 with every build's rows summed (Gravity v3
--- L4 gate take-1/take-2 rescan cells hash-build-param, hash-build-scan-param,
--- hashjoin-build-param).
+-- Hash slot's cycle open: loops=1 with every build's rows summed.
 CREATE TABLE hnl_o (k int);
 INSERT INTO hnl_o VALUES (1), (2), (3);
 CREATE TABLE hnl_t (x int, z int);

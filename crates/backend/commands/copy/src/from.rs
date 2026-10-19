@@ -114,6 +114,8 @@ pub struct CopyFromState<'mcx, 's> {
     pub(crate) relname: String,
     pub(crate) escontext: Option<Box<types_fmgr::ErrorSaveNode>>,
     pub(crate) num_errors: u64,
+    // Skip-row notices supply their own relation-only context, as in C.
+    pub(crate) in_skip_row_notice: bool,
     pub(crate) bytes_processed: u64,
     pub(crate) volatile_defexprs: bool,
 }
@@ -536,6 +538,7 @@ fn begin_copy_from_guts<'mcx: 's, 's>(
         escontext: (opts_on_error == crate::CopyOnErrorChoice::Ignore)
             .then(|| Box::new(types_fmgr::ErrorSaveNode::new(false))),
         num_errors: 0,
+        in_skip_row_notice: false,
         bytes_processed: 0,
         volatile_defexprs,
     };
@@ -703,7 +706,19 @@ pub fn CopyFrom<'mcx>(
     // CopyFromErrorCallback scope: C installs error_context_stack here, after
     // the relkind + FREEZE checks; buffered-but-unflushed slots on the Err
     // path are simply dropped, as C's are (the aborted xact kills flushed
-    // ones).
+    // ones). Non-ERROR reports emitted inside the row loop (trigger or
+    // default-expression notices) carry the COPY context through the emit
+    // callback; the ERROR path attaches it on propagation below.
+    let cb_state = cstate as *const CopyFromState<'_, '_> as usize;
+    let emit_cb = elog::push_emit_context_callback(Box::new(move |e| {
+        // SAFETY: the callback is popped right after `body` returns, while
+        // `cstate` is still alive; it only reads the cursor fields the loop
+        // updates between reports.
+        let cstate = unsafe { &*(cb_state as *const CopyFromState<'_, '_>) };
+        if !cstate.in_skip_row_notice {
+            e.add_context_line(copy_from_error_context_text(cstate));
+        }
+    }));
     let body = if relkind == types_rel::RELKIND_PARTITIONED_TABLE {
         copy_from_partitioned_body(
             mcx,
@@ -714,6 +729,10 @@ pub fn CopyFrom<'mcx>(
             transition_capture.as_ref(),
             mycid,
         )
+        .and_then(|n| {
+            execindexing::ExecCloseIndices(root_index_state)?;
+            Ok(n)
+        })
     } else {
         let mut trig = trigdesc.as_ref().map(|td| CopyTrig {
             td,
@@ -723,8 +742,11 @@ pub fn CopyFrom<'mcx>(
         });
         copy_from_body(mcx, cstate, rel, ti_options, trig.as_mut(), root_index_state, mycid)
     };
+    elog::pop_emit_context_callback(emit_cb);
     match body {
         Ok(n) => {
+            // C restores error_context_stack before the skipped-row summary.
+            skipped_rows_notice(cstate)?;
             if let Some(td) = &trigdesc {
                 let mut when =
                     trigger::TriggerWhenEval { mcx, cache: &mut trig_when, modified_cols: None };
@@ -994,11 +1016,12 @@ fn copy_from_body<'mcx>(
         tableam::table_finish_bulk_insert(rel, ti_options)?;
     }
 
-    skipped_rows_notice(cstate)?;
+    // ExecCloseResultRelations -> ExecCloseIndices (copyfrom.c:1507).
+    execindexing::ExecCloseIndices(index_state)?;
     Ok(processed)
 }
 
-fn next_copy_row<'mcx>(
+pub fn next_copy_row<'mcx>(
     cstate: &mut CopyFromState<'mcx, '_>,
     statement_mcx: Mcx<'mcx>,
     row_mcx: Mcx<'_>,
@@ -1182,8 +1205,12 @@ fn copy_from_partitioned_body<'mcx>(
         }
 
         route_eval_cx.reset();
-        let leaf =
-            router.find_partition(&mut rootslot, route_eval_cx.mcx(), &mut partition_directory)?;
+        let leaf = router.find_partition(
+            &mut rootslot,
+            route_eval_cx.mcx(),
+            &mut partition_directory,
+            Some(&inserted_cols),
+        )?;
         if leaf_checks.len() <= leaf {
             leaf_checks.resize_with(leaf + 1, || None);
             leaf_indexes.resize_with(leaf + 1, || None);
@@ -1480,7 +1507,12 @@ fn copy_from_partitioned_body<'mcx>(
         tableam::table_finish_bulk_insert(router.leaf_rel(buf.leaf), ti_options)?;
     }
 
-    skipped_rows_notice(cstate)?;
+    // ExecCleanupTupleRouting (copyfrom.c:1504): the routed leaves' indexes.
+    for idx in leaf_indexes.iter_mut() {
+        if let Some(indexes) = idx.take() {
+            execindexing::ExecCloseIndices(indexes)?;
+        }
+    }
     Ok(processed)
 }
 
@@ -1610,31 +1642,38 @@ pub fn copy_from_error_context(
     cstate: &CopyFromState<'_, '_>,
     e: Box<PgError>,
 ) -> Box<PgError> {
+    Box::new(e.add_context(copy_from_error_context_text(cstate)))
+}
+
+// file_fdw.c:789: CHECK_FOR_INTERRUPTS with CopyFromErrorCallback installed.
+pub fn check_for_interrupts_in_copy(cstate: &CopyFromState<'_, '_>) -> PgResult<()> {
+    postgres_seams::check_for_interrupts::call().map_err(|e| copy_from_error_context(cstate, e))
+}
+
+fn copy_from_error_context_text(cstate: &CopyFromState<'_, '_>) -> String {
     let relname = &cstate.relname;
     let lineno = cstate.cur_lineno;
     if cstate.opts.parquet {
         // Parquet rows are not lines and carry no displayable raw text.
-        let ctx = match cstate.cur_attidx {
+        return match cstate.cur_attidx {
             Some(m) => {
                 let attname = cstate.attname(m);
                 format!("COPY {relname}, row {lineno}, column {attname}")
             }
             None => format!("COPY {relname}, row {lineno}"),
         };
-        return Box::new(e.add_context(ctx));
     }
     if cstate.opts.binary {
         // C's binary arm: the raw data is not usefully displayable.
-        let ctx = match cstate.cur_attidx {
+        return match cstate.cur_attidx {
             Some(m) => {
                 let attname = cstate.attname(m);
                 format!("COPY {relname}, line {lineno}, column {attname}")
             }
             None => format!("COPY {relname}, line {lineno}"),
         };
-        return Box::new(e.add_context(ctx));
     }
-    let ctx = match cstate.cur_attidx {
+    match cstate.cur_attidx {
         Some(m) => {
             let attname = cstate.attname(m);
             match cstate.cur_attval_off {
@@ -1655,8 +1694,7 @@ pub fn copy_from_error_context(
                 format!("COPY {relname}, line {lineno}")
             }
         }
-    };
-    Box::new(e.add_context(ctx))
+    }
 }
 
 const MAX_COPY_DATA_DISPLAY: i32 = 100;

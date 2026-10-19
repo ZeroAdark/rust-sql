@@ -35,10 +35,11 @@ pub fn DropRelationBuffers(
     // fork size is cached and the range is small (recovery guarantees the
     // cache; elsewhere a stale cache just forfeits the fast path).
     let mut n_fork_block = [InvalidBlockNumber; MAX_FORKNUM as usize + 1];
-    // BlockNumber arithmetic as in C (bufmgr.c:4613): a cached size below
-    // firstDelBlock wraps to a huge count, which simply forfeits the fast
-    // path (and InvalidBlockNumber itself is "not cached").
-    let mut n_blocks_to_invalidate: BlockNumber = 0;
+    // Per-fork BlockNumber arithmetic summed in uint64 as in C
+    // (bufmgr.c:4563/4613): a cached size below firstDelBlock wraps to a huge
+    // count, which simply forfeits the fast path, and multi-fork totals never
+    // wrap back under the threshold.
+    let mut n_blocks_to_invalidate: u64 = 0;
     let mut cached = true;
     for (i, fork) in forknum.iter().enumerate() {
         let nblocks = smgr_seams::smgr_nblocks_cached::call(rlocator, *fork);
@@ -47,13 +48,12 @@ pub fn DropRelationBuffers(
             break;
         }
         n_fork_block[i] = nblocks;
-        n_blocks_to_invalidate =
-            n_blocks_to_invalidate.wrapping_add(nblocks.wrapping_sub(first_del_block[i]));
+        n_blocks_to_invalidate += nblocks.wrapping_sub(first_del_block[i]) as u64;
     }
 
     if cached
-        && n_blocks_to_invalidate != InvalidBlockNumber
-        && (n_blocks_to_invalidate as u64) < buf_drop_full_scan_threshold()
+        && n_blocks_to_invalidate != InvalidBlockNumber as u64
+        && n_blocks_to_invalidate < buf_drop_full_scan_threshold()
     {
         for (i, fork) in forknum.iter().enumerate() {
             FindAndDropRelationBuffers(

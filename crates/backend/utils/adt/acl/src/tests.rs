@@ -322,7 +322,7 @@ fn aclitemin_rejects_a_grantor_name_that_is_not_utf8() {
     assert_eq!(err.sqlstate(), types_error::ERRCODE_UNDEFINED_OBJECT);
 }
 
-// audit-18.6 fp-adt-acl-p1#3 / fp-adt-acl-p2#3: acl.c:1721 takes the
+// audit-18.6 regression / regression: acl.c:1721 takes the
 // privilege text as database-encoding bytes (SQL_ASCII allows 0xFF), so an
 // unrecognized privilege is 22023 rather than an internal UTF-8 error.
 #[test]
@@ -341,7 +341,7 @@ fn makeaclitem_non_utf8_privilege_is_invalid_parameter() {
     assert_eq!(err.message(), "unrecognized privilege type: \"\u{FFFD}\"");
 }
 
-// audit-18.6 fp-adt-acl-p3#1: acl.c:5258 keeps the membership lists in
+// audit-18.6 regression: acl.c:5258 keeps the membership lists in
 // TopMemoryContext, freed with the backend process; here the backend is a
 // thread, so the TLS slot must own (and drop) them rather than leak them.
 #[test]
@@ -349,3 +349,19 @@ fn membership_cache_slot_is_dropped_with_the_thread() {
     assert!(core::mem::needs_drop::<membership::MembershipSlot>());
 }
 
+
+// audit-18.6 regression: check_acl tests the element type before
+// dimensionality (acl.c:593-600); an empty array carries no dimension words.
+#[test]
+fn check_acl_empty_wrong_elemtype_is_wrong_data_type() {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&0i32.to_le_bytes());
+    payload.extend_from_slice(&0i32.to_le_bytes());
+    payload.extend_from_slice(&23u32.to_le_bytes());
+    let err = varlena::check_acl_payload(&payload).unwrap_err();
+    assert_eq!(err.message(), "ACL array contains wrong data type");
+
+    payload[8..12].copy_from_slice(&ACLITEMOID.to_le_bytes());
+    let err = varlena::check_acl_payload(&payload).unwrap_err();
+    assert_eq!(err.message(), "ACL arrays must be one-dimensional");
+}

@@ -435,9 +435,16 @@ fn fc_difference(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
     Ok(Datum::from_i32(result))
 }
 
+// NewMetaString's palloc(length + 7) (dmetaphone.c:249): a 1073741817-byte
+// input is C's MaxAllocSize error, not a phonetic code.
+pub(crate) fn dmetaphone_alloc_guard(len: usize) -> PgResult<()> {
+    mcx::check_alloc_size(len + 7)
+}
+
 fn fc_dmetaphone(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg is a non-null text varlena (strict fn).
     let src = unsafe { fcinfo.arg_varlena_packed(0)? };
+    dmetaphone_alloc_guard(src.data().len())?;
     let (primary, _alt) = dmetaphone::double_metaphone(src.data());
     Ok(varlena_result(varlena::cstring_to_text(
         fcinfo.result_mcx(),
@@ -448,6 +455,7 @@ fn fc_dmetaphone(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
 fn fc_dmetaphone_alt(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg is a non-null text varlena (strict fn).
     let src = unsafe { fcinfo.arg_varlena_packed(0)? };
+    dmetaphone_alloc_guard(src.data().len())?;
     let (_primary, alt) = dmetaphone::double_metaphone(src.data());
     Ok(varlena_result(varlena::cstring_to_text(
         fcinfo.result_mcx(),

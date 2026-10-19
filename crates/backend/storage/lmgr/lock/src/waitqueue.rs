@@ -525,6 +525,14 @@ fn cancel_blocking_autovacuum(lock: *mut LOCK, lockmode: LOCKMODE) -> PgResult<(
     Ok(())
 }
 
+// proc.c:1610-1614: TimestampDifference clamps a nonpositive interval to
+// zero, so a backward clock step reports 0.000 ms.
+pub(crate) fn lock_wait_elapsed(start: i64, now: i64) -> (i64, i64) {
+    let diff = (now - start).max(0);
+    let (secs, usecs) = (diff / 1_000_000, diff % 1_000_000);
+    (secs * 1000 + usecs / 1000, usecs % 1000)
+}
+
 #[cold]
 fn log_lock_wait_progress(
     localtag: &LOCALLOCKTAG,
@@ -539,9 +547,7 @@ fn log_lock_wait_progress(
     let tag_desc = lmgr_seams::describe_lock_tag::call(localtag.lock);
     let start = timeout_seams::get_timeout_start_time::call(timeout_seams::DEADLOCK_TIMEOUT);
     let now = timestamp_seams::get_current_timestamp::call();
-    let diff_us = now - start;
-    let msecs = diff_us / 1000;
-    let usecs = diff_us % 1000;
+    let (msecs, usecs) = lock_wait_elapsed(start, now);
     let pid = init_small::globals::MyProcPid();
 
     lwlock::LWLockAcquire(partition_lock, lwlock::LW_SHARED, my_procno())?;
@@ -554,42 +560,42 @@ fn log_lock_wait_progress(
     };
     let detail = format!("{noun}: {holders}. Wait queue: {waiters}.");
 
+    // proc.c:1650-1677 errdetail_log_plural: the holder/waiter detail goes to
+    // the server log only.
+    let log_with_detail = |cline: i32, msg: String| {
+        elog_seams::ereport::call(
+            types_error::PgError::new(LOG, msg)
+                .with_detail_log(detail.clone())
+                .with_location("proc.c", cline, "ProcSleep"),
+        )
+    };
+
     match lmgr_proc::DeadlockState() {
-        DeadLockState::SoftDeadLock => elog_seams::ereport_msg::call(
-            LOG,
-            format!(
-                "process {pid} avoided deadlock for {modename} on {tag_desc} by rearranging queue order after {msecs}.{usecs:03} ms"
-            ),
-            Some(detail.clone()),
-        )?,
-        DeadLockState::HardDeadLock => elog_seams::ereport_msg::call(
-            LOG,
-            format!(
-                "process {pid} detected deadlock while waiting for {modename} on {tag_desc} after {msecs}.{usecs:03} ms"
-            ),
-            Some(detail.clone()),
-        )?,
+        DeadLockState::SoftDeadLock => log_with_detail(1623, format!(
+            "process {pid} avoided deadlock for {modename} on {tag_desc} by rearranging queue order after {msecs}.{usecs:03} ms"
+        ))?,
+        DeadLockState::HardDeadLock => log_with_detail(1638, format!(
+            "process {pid} detected deadlock while waiting for {modename} on {tag_desc} after {msecs}.{usecs:03} ms"
+        ))?,
         _ => {}
     }
 
     if my_wait_status == PROC_WAIT_STATUS_WAITING {
-        elog_seams::ereport_msg::call(
-            LOG,
-            format!("process {pid} still waiting for {modename} on {tag_desc} after {msecs}.{usecs:03} ms"),
-            Some(detail),
-        )?;
+        log_with_detail(1647, format!(
+            "process {pid} still waiting for {modename} on {tag_desc} after {msecs}.{usecs:03} ms"
+        ))?;
     } else if my_wait_status == PROC_WAIT_STATUS_OK {
-        elog_seams::ereport_msg::call(
-            LOG,
-            format!("process {pid} acquired {modename} on {tag_desc} after {msecs}.{usecs:03} ms"),
-            None,
+        elog_seams::ereport::call(
+            types_error::PgError::new(
+                LOG,
+                format!("process {pid} acquired {modename} on {tag_desc} after {msecs}.{usecs:03} ms"),
+            )
+            .with_location("proc.c", 1654, "ProcSleep"),
         )?;
     } else if lmgr_proc::DeadlockState() != DeadLockState::HardDeadLock {
-        elog_seams::ereport_msg::call(
-            LOG,
-            format!("process {pid} failed to acquire {modename} on {tag_desc} after {msecs}.{usecs:03} ms"),
-            Some(detail),
-        )?;
+        log_with_detail(1671, format!(
+            "process {pid} failed to acquire {modename} on {tag_desc} after {msecs}.{usecs:03} ms"
+        ))?;
     }
     Ok(())
 }

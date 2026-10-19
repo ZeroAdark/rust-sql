@@ -7,26 +7,26 @@
 \set VERBOSITY verbose
 \pset pager off
 
--- fp-pl-plpgsql-pl_scanner#1: an unreserved keyword keeps its own spelling
+-- regression: an unreserved keyword keeps its own spelling
 DO $$DECLARE elsif integer; BEGIN elsif := 1; RAISE NOTICE 'elsif=%', elsif; END$$;
 DO $$DECLARE elseif integer; BEGIN elseif := 2; RAISE NOTICE 'elseif=%', elseif; END$$;
 
--- fp-pl-plpgsql-pl_gram-p1#1: a qualified integer-FOR variable does not shadow the plain name
+-- regression: a qualified integer-FOR variable does not shadow the plain name
 CREATE FUNCTION b27_qualified_loop() RETURNS integer LANGUAGE plpgsql AS $$
 <<blk>> DECLARE i integer := 10;
 BEGIN FOR blk.i IN 1..1 LOOP RETURN i; END LOOP; RETURN -1; END $$;
 SELECT b27_qualified_loop();
 
--- fp-pl-plpgsql-pl_gram-p1#2: cursor FOR arguments are read before the loop record exists
+-- regression: cursor FOR arguments are read before the loop record exists
 CREATE FUNCTION b27_cursor_shadow() RETURNS integer LANGUAGE plpgsql AS $$
 DECLARE x integer := 7; c CURSOR(p integer) FOR SELECT p AS n;
 BEGIN FOR x IN c(x) LOOP RETURN x.n; END LOOP; RETURN -1; END $$;
 SELECT b27_cursor_shadow();
 
--- fp-pl-plpgsql-pl_gram-p1#3: DECLARE-mode lookup survives a cursor argument list
+-- regression: DECLARE-mode lookup survives a cursor argument list
 DO $$ DECLARE x integer := 3; c CURSOR(p integer) FOR SELECT p; y x%TYPE := 4; BEGIN RAISE NOTICE 'y=%', y; END $$;
 
--- fp-pl-plpgsql-pl_comp#3: typisarray excludes plain-storage vectors, includes array domains
+-- regression: typisarray excludes plain-storage vectors, includes array domains
 CREATE DOMAIN b27_intarrdom AS integer[];
 CREATE FUNCTION b27_vector_type() RETURNS text LANGUAGE plpgsql AS $$
 DECLARE v int2vector; a v%TYPE[]; BEGIN RETURN pg_typeof(a)::text; END $$;
@@ -41,7 +41,7 @@ CREATE FUNCTION b27_int_arr_type() RETURNS text LANGUAGE plpgsql AS $$
 DECLARE v integer[]; a v%TYPE[]; BEGIN RETURN pg_typeof(a)::text; END $$;
 SELECT b27_int_arr_type();
 
--- fp-adt-expandedrecord#1 / fp-pl-plpgsql-pl_comp#6 / fp-pl-plpgsql-pl_exec-p3#1:
+-- regression / regression / regression:
 -- a record field carries the attribute's collation
 CREATE TABLE b27_er_coll (x text COLLATE "C", y text);
 CREATE TYPE b27_audit_coll AS (x text COLLATE "C", y text COLLATE "POSIX");
@@ -61,7 +61,7 @@ CREATE FUNCTION b27_query_record_collation() RETURNS text LANGUAGE plpgsql AS $$
 DECLARE r record; BEGIN SELECT 'a'::text COLLATE "POSIX" AS x INTO r; RETURN COLLATION FOR (r.x); END $$;
 SELECT b27_query_record_collation();
 
--- fp-pl-plpgsql-pl_exec-p1#1: RETURNS record hands back the composite datum's own rowtype
+-- regression: RETURNS record hands back the composite datum's own rowtype
 CREATE TYPE b27_audit_pair AS (a integer);
 CREATE FUNCTION b27_audit_record() RETURNS record LANGUAGE plpgsql AS $$
 BEGIN RETURN ROW(1)::b27_audit_pair; END $$;
@@ -75,7 +75,7 @@ CREATE FUNCTION b27_anon_record_type() RETURNS text LANGUAGE plpgsql AS $$
 DECLARE r record; BEGIN r := b27_anon_record(); RETURN pg_typeof(r)::text || ':' || r.b; END $$;
 SELECT b27_anon_record_type();
 
--- fp-adt-array_expanded#1: an assigned array variable holds a flat, decompressed image
+-- regression: an assigned array variable holds a flat, decompressed image
 CREATE TABLE b27_expanded_probe (a integer[] COMPRESSION pglz, d b27_intarrdom COMPRESSION pglz);
 INSERT INTO b27_expanded_probe VALUES (array_fill(1, ARRAY[10000]), array_fill(2, ARRAY[10000]));
 SELECT pg_column_compression(a), pg_column_size(a), pg_column_compression(d), pg_column_size(d) FROM b27_expanded_probe;

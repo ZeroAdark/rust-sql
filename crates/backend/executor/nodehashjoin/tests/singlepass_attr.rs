@@ -1,4 +1,4 @@
-//! GL-HJSP-1 loss ATTRIBUTION microbench (no fixes — measurement only).
+//! regression loss ATTRIBUTION microbench (no fixes — measurement only).
 //!
 //! The CI cluster skew bench (scratchpad/night/hj-skew-bench.sh, take-2 job
 //! ...1ead) measured single-pass losing 1.037-1.114 across the build-key
@@ -233,14 +233,14 @@ fn probe(case: Case, table: &FrozenJoinTable, rows: u64, probes: u64, workers: u
 }
 
 #[test]
-#[ignore = "GL-HJSP-1 attribution instrument: run --release with --ignored --nocapture"]
+#[ignore = "regression attribution instrument: run --release with --ignored --nocapture"]
 fn attribution_sweep() {
     let rows = knob("HJ_ATTR_ROWS", 2_000_000);
     let probes = knob("HJ_ATTR_PROBES", rows * 4);
     let workers = knob("HJ_ATTR_THREADS", 8) as usize;
     let reps = knob("HJ_ATTR_REPS", 3) as usize;
     println!(
-        "== GL-HJSP-1 attribution: rows={rows} probes={probes} workers={workers} best-of-{reps} =="
+        "== regression attribution: rows={rows} probes={probes} workers={workers} best-of-{reps} =="
     );
     println!(
         "{:<8} {:>5} | {:>10} {:>10} {:>10} | {:>10} {:>10} {:>10} | {:>9} {:>9} {:>9}",

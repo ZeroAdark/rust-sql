@@ -745,7 +745,7 @@ impl<'mcx> CbScanDescData<'mcx> {
     /// pure predicates; re-checking would only repeat work).
     pub fn set_granule_range(&mut self, g0: u64, g1: u64) -> PgResult<()> {
         debug_assert!(self.adaptive.is_none(), "granule-range drive vs adaptive drive");
-        // GL-Q4142 — the tripwire's pgrcolumnar leg (heapam::heap_set_block_range
+        // regression — the tripwire's pgrcolumnar leg (heapam::heap_set_block_range
         // is the heap one, verbatim in shape). A scan carrying a SHARED
         // parallel descriptor divides its work through `phs_nallocated`
         // (claim_next_rg); a private granule range abandons that cursor, so
@@ -1783,7 +1783,7 @@ impl<'mcx> CbScanDescData<'mcx> {
     }
 
     /// RG-altitude meta-answerability census over the PUSHED zone quals
-    /// (the GL-SERIALTERM-META qual-zone helper): (allpass_rgs, total_rgs)
+    /// (the regression qual-zone helper): (allpass_rgs, total_rgs)
     /// where an RG counts iff it is wholly visible, every pushed zone qual
     /// folds AllPass over its footer extremes, and (when `need_sums`) it
     /// carries the v4 footer sums — EXACTLY `agg_meta_peek`'s whole-RG-tier

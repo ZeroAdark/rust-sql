@@ -86,6 +86,6 @@ shmem = { path = "../../../storage/ipc/shmem" }
 aio_seams = { path = "../../../storage/aio/aio_seams" }
 
 [lints.rust]
-# `pgrust_sim` (non-default cfg): the GL-FLUSHSIM-1 mutation seam in
+# `pgrust_sim` (non-default cfg): the regression mutation seam in
 # flushpipe.rs lives behind it; empty/absent in production builds.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(pgrust_sim)'] }

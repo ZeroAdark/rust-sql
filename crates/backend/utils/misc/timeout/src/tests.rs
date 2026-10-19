@@ -11,7 +11,7 @@ static NOW: AtomicI64 = AtomicI64::new(1_000_000_000);
 /// test's `advance_ms` races another's start/finish-time asserts and its
 /// timer-thread post cadence (observed as a ~50%-rate
 /// register_enable_fire_after failure under the default multi-threaded
-/// test runner — GL-M2INC1-1 adjudication, pre-existing at t35 main).
+/// test runner — regression adjudication, pre-existing at t35 main).
 /// Each test holds the guard for its whole body via `setup_thread`.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

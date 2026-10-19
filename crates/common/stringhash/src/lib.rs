@@ -19,7 +19,7 @@
 //!   safe by page arithmetic) is deliberately NOT used: reading outside the
 //!   referent is UB in Rust however page-safe the address is, and the
 //!   over-read lands in adjacent live data (ASan global-buffer-overflow,
-//!   GL-TESTRIGS-1 F-R1-3). The ≤8-byte bucket instead uses the two
+//!   regression F-R1-3). The ≤8-byte bucket instead uses the two
 //!   overlapped in-bounds halves idiom (wyhash's tail shape): two u32 loads
 //!   for 4..=8 bytes, three byte loads for 1..=3 — same padded value, no
 //!   bytes outside the key ever touched.
@@ -344,7 +344,7 @@ fn alloc_uninit_bytes(n: usize) -> Box<[u8]> {
 /// bytes, three byte loads for 1..=3 (wyhash's tail shape). The overlapped
 /// bits agree by construction (same memory), so OR reassembles the exact
 /// little-endian zero-padded value the old 8-byte load produced — without
-/// the load-past-the-key UB it carried (GL-TESTRIGS-1 F-R1-3; the "safe by
+/// the load-past-the-key UB it carried (regression F-R1-3; the "safe by
 /// page arithmetic" over-read is still a read of adjacent live objects).
 #[inline(always)]
 fn pack8(s: &[u8]) -> u64 {

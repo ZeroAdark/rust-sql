@@ -220,7 +220,7 @@ fn array_subscript_transform<'mcx>(
 
 #[track_caller]
 #[cold]
-fn jsonb_no_slices(pstate: &ParseState<'_, '_>, location: ParseLoc) -> Box<PgError> {
+pub(crate) fn jsonb_no_slices(pstate: &ParseState<'_, '_>, location: ParseLoc) -> Box<PgError> {
     Box::new(
         elog::ereport(ERROR)
             .errcode(ERRCODE_DATATYPE_MISMATCH)
@@ -229,7 +229,7 @@ fn jsonb_no_slices(pstate: &ParseState<'_, '_>, location: ParseLoc) -> Box<PgErr
             .into_error()
             .with_error_location(ErrorLocation::new(
                 "jsonbsubs.c",
-                0,
+                68,
                 "jsonb_subscript_transform",
             )),
     )
@@ -245,6 +245,17 @@ fn jsonb_bad_subscript_type(
 ) -> Box<PgError> {
     let t = format_type::format_type_be(subexpr_type)
         .unwrap_or_else(|_| subexpr_type.to_string());
+    jsonb_bad_subscript_type_named(pstate, &t, hint, location)
+}
+
+#[track_caller]
+#[cold]
+pub(crate) fn jsonb_bad_subscript_type_named(
+    pstate: &ParseState<'_, '_>,
+    t: &str,
+    hint: &'static str,
+    location: ParseLoc,
+) -> Box<PgError> {
     Box::new(
         elog::ereport(ERROR)
             .errcode(ERRCODE_DATATYPE_MISMATCH)
@@ -254,7 +265,7 @@ fn jsonb_bad_subscript_type(
             .into_error()
             .with_error_location(ErrorLocation::new(
                 "jsonbsubs.c",
-                0,
+                116,
                 "jsonb_subscript_transform",
             )),
     )

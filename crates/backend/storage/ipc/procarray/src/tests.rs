@@ -3,12 +3,13 @@ use init_small::globals as g;
 use std::sync::{Mutex, Once};
 use types_core::BackendType;
 
-// One backend slot per test thread that calls my_backend(); keep headroom
-// over the my_backend() call-site count or InitProcess FATALs mid-suite.
-const MAX_CONNECTIONS: i32 = 24;
+// One backend slot per test thread that calls my_backend() and per off-array
+// thread (InitProcess without ProcArrayAdd); keep headroom over that count
+// or InitProcess FATALs mid-suite.
+const MAX_CONNECTIONS: i32 = 26;
 // Bump when claim_other() call sites grow: the claimable simulated-backend
-// range is MAX_BACKENDS - MAX_CONNECTIONS (21 today for 20 claim_other()s).
-const MAX_WORKER_PROCESSES: i32 = 14;
+// range is MAX_BACKENDS - MAX_CONNECTIONS; reserve two more slots for own-slot tests.
+const MAX_WORKER_PROCESSES: i32 = 16;
 const NUM_SPECIAL: i32 = types_storage::storage::NUM_SPECIAL_WORKER_PROCS;
 const MAX_BACKENDS: i32 = MAX_CONNECTIONS + 3 + MAX_WORKER_PROCESSES + 2 + NUM_SPECIAL;
 
@@ -26,6 +27,46 @@ static WAIT_EVENTS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 // Every fake-semaphore lock, by the thread that took it: the LWLock waiter
 // identity a contended acquisition sleeps under.
 static SEMA_LOCKS: Mutex<Vec<(std::thread::ThreadId, ProcNumber)>> = Mutex::new(Vec::new());
+
+// A counting semaphore per PGPROC, with PGSemaphoreLock/Unlock's semantics:
+// lock sleeps until a post is available. A lock that returned at once turned
+// every LWLock sleep into a spin: lwlock's extra_waits (C's extraWaits, which
+// counts absorbed wakeups) then counted spins, SEMA_LOCKS grew by one entry
+// per spin, and a waiter behind a lock that was never released (a test that
+// panicked while holding it) spun until the i32 overflowed minutes later,
+// hiding the first failure.
+static SEMA_COUNTS: Mutex<std::collections::BTreeMap<ProcNumber, u32>> =
+    Mutex::new(std::collections::BTreeMap::new());
+static SEMA_POSTED: std::sync::Condvar = std::sync::Condvar::new();
+const SEMA_WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn sema_reset(procno: ProcNumber) {
+    SEMA_COUNTS.lock().unwrap().insert(procno, 0);
+}
+
+fn sema_post(procno: ProcNumber) {
+    *SEMA_COUNTS.lock().unwrap().entry(procno).or_insert(0) += 1;
+    SEMA_POSTED.notify_all();
+}
+
+fn sema_wait(procno: ProcNumber) {
+    let deadline = std::time::Instant::now() + SEMA_WAIT_LIMIT;
+    let mut counts = SEMA_COUNTS.lock().unwrap();
+    loop {
+        let n = counts.entry(procno).or_insert(0);
+        if *n > 0 {
+            *n -= 1;
+            return;
+        }
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        assert!(
+            !left.is_zero(),
+            "proc {procno} slept {SEMA_WAIT_LIMIT:?} on its semaphore with no post: \
+             an LWLock holder never released"
+        );
+        counts = SEMA_POSTED.wait_timeout(counts, left).unwrap().0;
+    }
+}
 
 struct RecoveryOn;
 impl RecoveryOn {
@@ -49,7 +90,7 @@ fn setup() {
         g::SetMyProcPid(4242);
 
         pg_sema_seams::pg_semaphore_create::set(|_| {});
-        pg_sema_seams::pg_semaphore_reset::set(|_| {});
+        pg_sema_seams::pg_semaphore_reset::set(sema_reset);
         // A follower in ProcArrayGroupClearXid sleeps on its semaphore until
         // the leader clears its membership; no leader runs in these tests,
         // so the fake semaphore plays the leader for a group member.
@@ -58,16 +99,17 @@ fn setup() {
                 .lock()
                 .unwrap()
                 .push((std::thread::current().id(), procno));
-            std::thread::yield_now();
             let proc = GetPGProcByNumber(procno);
             if proc.procArrayGroupMember.load(Relaxed) {
                 proc.procArrayGroupNext
                     .value
                     .store(INVALID_PROC_NUMBER as u32, Relaxed);
                 proc.procArrayGroupMember.store(false, Relaxed);
+                return;
             }
+            sema_wait(procno);
         });
-        pg_sema_seams::pg_semaphore_unlock::set(|_| {});
+        pg_sema_seams::pg_semaphore_unlock::set(sema_post);
         s_lock_seams::perform_spin_delay::set(|_| std::thread::yield_now());
         s_lock_seams::finish_spin_delay::set(|_| {});
         s_lock_seams::set_spins_per_delay::set(|_| {});
@@ -173,6 +215,22 @@ fn other_proc_running(procno: ProcNumber, xid: TransactionId) {
 fn other_proc_end(procno: ProcNumber, latest: TransactionId) {
     ProcArrayEndTransaction(procno, latest).expect("end xact");
     ProcArrayRemove(procno, InvalidTransactionId).expect("remove");
+}
+
+// other_proc_end at scope exit, also when an assert fails: a failed test must not leave its simulated transaction
+// running in the array, where every later test's snapshot and RunningTransactionData would see it (YBAF on box 36:
+// one failure became three, then a hang). While unwinding, errors are dropped so the original panic is reported.
+struct OtherProcEnd(ProcNumber, TransactionId);
+
+impl Drop for OtherProcEnd {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            let _ = ProcArrayEndTransaction(self.0, self.1);
+            let _ = ProcArrayRemove(self.0, InvalidTransactionId);
+        } else {
+            other_proc_end(self.0, self.1);
+        }
+    }
 }
 
 fn take_snapshot(snap: &mut SnapshotData<'static>, mcx: Mcx<'static>) {
@@ -373,6 +431,67 @@ fn in_progress_finds_cached_subxids() {
     set_transaction_xmin(InvalidTransactionId);
 }
 
+// A caller whose PGPROC is not in the array (a pool thread: InitProcess, no ProcArrayAdd) keeps offset 0 from
+// InitProcGlobal or a stale one; the self-skip must not skip the transaction in that slot (pgrc2 P8: after a
+// restart, the recovered prepared transaction's dummy proc sits at offset 0 and the columnar load dropped its
+// generation as aborted).
+#[test]
+fn in_progress_from_a_proc_outside_the_array_skips_no_other_slot() {
+    let _g = test_lock();
+    setup();
+    let other = claim_other();
+    let xid: TransactionId = 600;
+    other_proc_running(other, xid);
+    let _end = OtherProcEnd(other, xid);
+    let latest = TransamVariables().latestCompletedXid.load(Relaxed);
+    let floor = FullTransactionId::from_epoch_and_xid(0, xid + 1).value;
+    TransamVariables().latestCompletedXid.store(latest.max(floor), Relaxed);
+    let off = GetPGProcByNumber(other).pgxactoff.load(Relaxed);
+
+    let seen = std::thread::spawn(move || {
+        g::SetMyProcPid(4243);
+        lmgr_proc::InitProcess(BackendType::Backend).expect("InitProcess");
+        let mine = lmgr_proc::MyProc().unwrap();
+        GetPGProcByNumber(mine).pgxactoff.store(off, Relaxed);
+        TransactionIdIsInProgress(xid).unwrap()
+    })
+    .join()
+    .unwrap();
+    assert!(seen, "xid {xid} at offset {off} is running");
+}
+
+// The same off-array caller taking a snapshot: the transaction in the slot its offset aliases is running and must be
+// in xip (C's bare self-skip left it out and took its xid as the caller's own).
+#[test]
+fn snapshot_from_a_proc_outside_the_array_keeps_every_running_xid() {
+    let _g = test_lock();
+    setup();
+    let other = claim_other();
+    let xid: TransactionId = 700;
+    other_proc_running(other, xid);
+    let _end = OtherProcEnd(other, xid);
+    let latest = TransamVariables().latestCompletedXid.load(Relaxed);
+    let floor = FullTransactionId::from_epoch_and_xid(0, xid + 1).value;
+    TransamVariables().latestCompletedXid.store(latest.max(floor), Relaxed);
+    let off = GetPGProcByNumber(other).pgxactoff.load(Relaxed);
+
+    let (in_xip, xmin) = std::thread::spawn(move || {
+        g::SetMyProcPid(4244);
+        lmgr_proc::InitProcess(BackendType::Backend).expect("InitProcess");
+        let mine = lmgr_proc::MyProc().unwrap();
+        GetPGProcByNumber(mine).pgxactoff.store(off, Relaxed);
+        let mcx = leaked_mcx();
+        let mut snap = fresh_snapshot(mcx);
+        take_snapshot(&mut snap, mcx);
+        GetPGProcByNumber(mine).xmin.value.store(0, Relaxed);
+        (snap.xip.contains(&xid), snap.xmin)
+    })
+    .join()
+    .unwrap();
+    assert!(in_xip, "xid {xid} at offset {off} is running: it belongs in xip");
+    assert!(TransactionIdPrecedesOrEquals(xmin, xid), "xmin {xmin} covers the running xid {xid}");
+}
+
 #[test]
 fn running_transaction_data_reports_assigned_xids_and_holds_locks() {
     let _g = test_lock();
@@ -511,7 +630,7 @@ fn lock_free_reuse_keeps_older_valid_xmin() {
     set_transaction_xmin(InvalidTransactionId);
 }
 
-/// GL-OLTPREG-1. A reuse attempt that CANNOT succeed must not touch
+/// regression. A reuse attempt that CANNOT succeed must not touch
 /// MyProc->xmin and must not execute the SeqCst fence. Born red at
 /// 2216f2261e: publish-then-verify wrote and retracted the xmin, and paid a
 /// full barrier between them, on EVERY miss — and in a write-heavy workload
@@ -1494,6 +1613,13 @@ fn procarray_add_waits_as_the_executing_backend() {
     ProcArrayRemove(dummy, InvalidTransactionId).expect("remove dummy");
 
     assert!(!waited.is_empty(), "the add never contended for ProcArrayLock");
+    // PGSemaphoreLock sleeps until the holder's release posts it: a 100 ms
+    // hold is one sleep, not a spin (extra_waits counts absorbed wakeups).
+    assert!(
+        waited.len() <= 3,
+        "the contended acquire took {} semaphore locks for one 100 ms hold",
+        waited.len()
+    );
     assert!(
         waited.iter().all(|&p| p == me),
         "contended ProcArrayAdd slept as {waited:?}, expected the executing backend {me}"

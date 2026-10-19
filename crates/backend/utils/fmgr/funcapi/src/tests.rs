@@ -149,6 +149,13 @@ fn install_seams() {
                     typstorage: TYPSTORAGE_EXTENDED,
                     typcollation: 100,
                 }),
+                ANYELEMENTOID => Some(PgTypeShape {
+                    typlen: 4,
+                    typbyval: true,
+                    typalign: TYPALIGN_INT,
+                    typstorage: TYPSTORAGE_PLAIN,
+                    typcollation: InvalidOid,
+                }),
                 _ => None,
             })
         });
@@ -726,4 +733,38 @@ fn call_expr_argtype_covers_all_six_call_families() {
 
     // Non-call families keep C's InvalidOid.
     assert_eq!(get_call_expr_argtype(int_const(1), 0), InvalidOid);
+}
+
+// resolve_polymorphic_tupdesc takes the call's input collation through
+// exprInputCollation (nodeFuncs.c:1088), which covers every call family: a
+// WindowFunc carrier's nondefault inputcollid reaches the polymorphic output
+// column exactly as a FuncExpr's does (pre-fix it fell back to the type's
+// default collation).
+#[test]
+fn polymorphic_tupdesc_takes_window_func_input_collation() {
+    install_seams();
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    for (inputcollid, want) in [(950, 950), (InvalidOid, 100)] {
+        let arg =
+            Node::mk_const(mcx, TEXTOID, -1, inputcollid, -1, Datum::from_i32(0), false, false)
+                .unwrap();
+        let call = Node::mk(
+            mcx,
+            ::nodes::primnodes::WindowFunc {
+                winfnoid: 2147,
+                wintype: TEXTOID,
+                wincollid: inputcollid,
+                inputcollid,
+                args: ::nodes::list::NodeList::make1(mcx, arg).unwrap(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut desc = tupdesc::CreateTemplateTupleDesc(mcx, 1).unwrap();
+        tupdesc::TupleDescInitEntry(&mut desc, 1, Some("x"), ANYELEMENTOID, -1, 0).unwrap();
+        assert!(resolve_polymorphic_tupdesc(&mut desc, &[ANYELEMENTOID], Some(call)).unwrap());
+        assert_eq!(desc.attr(0).atttypid, TEXTOID);
+        assert_eq!(desc.attr(0).attcollation, want, "inputcollid {inputcollid}");
+    }
 }

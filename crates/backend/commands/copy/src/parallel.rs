@@ -245,7 +245,7 @@ fn run_lz4_effective() -> bool {
     run_lz4() && fill_v2()
 }
 
-/// GL-PARQUET-1 inc-2: PGRUST_PARQUET_PARALLEL=1 lets a FORMAT 'parquet'
+/// regression inc-2: PGRUST_PARQUET_PARALLEL=1 lets a FORMAT 'parquet'
 /// COPY engage row-group-major parallel decode INSIDE the parallel sort
 /// pipeline (workers decode whole parquet row groups and spill sorted runs;
 /// the merge/fill/stitch back half is the byte-proven text-path machinery).
@@ -303,7 +303,7 @@ fn memruns_knob() -> MemRuns {
     })
 }
 
-/// GL-LOADDET-1: PGRUST_PARALLEL_COPY_SORT_DETERMINISTIC — make the loaded
+/// regression: PGRUST_PARALLEL_COPY_SORT_DETERMINISTIC — make the loaded
 /// bytes a function of the INPUT ALONE. **DEFAULT ON**; `0`/`off`/`false` is
 /// the kill switch back to the legacy bytes.
 ///
@@ -345,7 +345,7 @@ fn sort_deterministic() -> bool {
 }
 
 /// Memory headroom for the auto-sized mem-run budget: the container-aware
-/// cgroup-hierarchy walk in memheadroom.rs (GL-COPYFAST-1 §3 defect fix —
+/// cgroup-hierarchy walk in memheadroom.rs (regression §3 defect fix —
 /// a leaf reading "max" no longer falls through to node meminfo when an
 /// ancestor slice carries the limit or the hierarchy is namespaced-hidden).
 /// None = no trustworthy signal (auto stays off; the explicit-MB knob is
@@ -378,7 +378,7 @@ fn analyze_inline_flag() -> bool {
 #[derive(Clone, Copy)]
 struct InlineAnalyzePlan {
     targrows: i32,
-    seed: u64,
+    seed: u32,
 }
 
 /// copyfast lever 3: Vitter reservoir over the merge pump's row stream —
@@ -397,7 +397,7 @@ struct StreamSampler {
 }
 
 impl StreamSampler {
-    fn new(targrows: i32, seed: u64) -> StreamSampler {
+    fn new(targrows: i32, seed: u32) -> StreamSampler {
         StreamSampler {
             targrows: targrows.max(1) as usize,
             rstate: commands_analyze::sampling::reservoir_init_selection_state(
@@ -942,7 +942,7 @@ pub(crate) struct ParCopyShared {
     /// file is cleanup-tracked; memory runs free on drop); leader takes them
     /// for the merge.
     ///
-    /// GL-LOADDET-1: each entry carries its INPUT COORDINATE `(task, sub)` —
+    /// regression: each entry carries its INPUT COORDINATE `(task, sub)` —
     /// the morsel index the run was cut from and the run's ordinal within
     /// that morsel. The merge sorts on it, so the merge's tiebreak index is a
     /// function of the input alone. Push order (which is worker-race order:
@@ -952,7 +952,7 @@ pub(crate) struct ParCopyShared {
     /// coordinates are still recorded but the merge keeps push order.
     sort_runs: Mutex<Vec<(u64, u32, RunLoc)>>,
     sort_run_seq: AtomicU64,
-    /// GL-PARQUET-1 inc-2: Some = the morsels are parquet ROW GROUPS
+    /// regression inc-2: Some = the morsels are parquet ROW GROUPS
     /// (workers decode columns and feed the sort pipeline); the text
     /// segmentator/chunk plumbing is bypassed entirely.
     parquet: Option<ParquetPar>,
@@ -1082,7 +1082,7 @@ struct ParCopyWorkerCx<'a, 'mcx> {
     row_cx: MemoryContext,
     /// load-r2 L3-1 sort mode: this worker's (key,row) batch + codec.
     sort_state: Option<WorkerSortState>,
-    /// GL-PARQUET-1 inc-2: reusable per-column decode batches.
+    /// regression inc-2: reusable per-column decode batches.
     pq_batches: Option<Vec<parquet_read::ColumnBatch>>,
 }
 
@@ -1104,7 +1104,7 @@ struct WorkerSortState {
     /// frame bytes at keep time.
     mem_runs: u32,
     mem_bytes: u64,
-    /// GL-LOADDET-1: the input coordinate this worker is currently filling —
+    /// regression: the input coordinate this worker is currently filling —
     /// the morsel index it claimed and the next run ordinal within it. Every
     /// registered run is stamped with it, and the merge orders on it.
     cur_task: u64,
@@ -1142,7 +1142,7 @@ impl ParCopyShared {
             self.begin_task(wcx, g);
             match self.parquet_decode_rg(wcx, g) {
                 Ok(()) => {
-                    // GL-LOADDET-1: cut BEFORE publishing `done` — the run is
+                    // regression: cut BEFORE publishing `done` — the run is
                     // the morsel's own, and the leader must never see a task
                     // complete while part of its rows are still in a batch.
                     self.cut_run_at_task_end(wcx)?;
@@ -1314,7 +1314,7 @@ impl ParCopyShared {
             return Ok(());
         }
         let sort = self.sort.as_ref().expect("spill without sort mode");
-        // GL-LOADDET-1: this run's input coordinate, consumed here so every
+        // regression: this run's input coordinate, consumed here so every
         // registration path (memory keep, memory-refused overflow, plain file
         // spill) stamps the same one and the sub ordinal advances exactly once
         // per run.
@@ -1365,7 +1365,7 @@ impl ParCopyShared {
         Ok(())
     }
 
-    /// GL-LOADDET-1: cut the current run at a morsel boundary. Called once per
+    /// regression: cut the current run at a morsel boundary. Called once per
     /// SUCCESSFULLY processed morsel in sort mode, so a run never spans two
     /// morsels and its content is input-determined. Disarmed, the batch simply
     /// carries into the next morsel (the legacy byte image).
@@ -1380,7 +1380,7 @@ impl ParCopyShared {
         self.spill_worker_batch(st)
     }
 
-    /// GL-LOADDET-1: bind the worker's sort state to the morsel it just
+    /// regression: bind the worker's sort state to the morsel it just
     /// claimed. Every run cut while this is in force carries `(task, sub)`.
     fn begin_task(&self, wcx: &mut ParCopyWorkerCx<'_, '_>, g: u64) {
         if let Some(st) = wcx.sort_state.as_mut() {
@@ -1429,7 +1429,7 @@ impl ParCopyShared {
         Ok((seq, path))
     }
 
-    /// GL-PARQUET-1 inc-2: decode ONE parquet row group (coalesced range
+    /// regression inc-2: decode ONE parquet row group (coalesced range
     /// read + per-page kernel dispatch) and feed every row through the
     /// sort-mode body — constraints, NULL refusal, memcmp-key encode, run
     /// spill — identical to the text arm from the slot onward.
@@ -1690,12 +1690,13 @@ fn worker_drive(shared: &Arc<ParCopyShared>) -> PgResult<()> {
             relname: shared.relname.clone(),
             escontext: None,
             num_errors: 0,
+            in_skip_row_notice: false,
             bytes_processed: 0,
             volatile_defexprs: false,
         };
         let slot = tableam::table_slot_create(mcx, &rel)?;
         let sort_state = shared.sort.as_ref().map(|sp| WorkerSortState {
-            // GL-LOADDET-1: arrival-order tie break inside the run, under the
+            // regression: arrival-order tie break inside the run, under the
             // same knob as the boundary/registry mechanisms — all three must
             // move together or the guarantee is partial.
             batch: if sort_deterministic() {
@@ -1761,7 +1762,7 @@ fn worker_drive(shared: &Arc<ParCopyShared>) -> PgResult<()> {
     // when the statement is already failing (hard error or any recorded
     // data error — the COPY raises regardless; the leader never merges).
     //
-    // GL-LOADDET-1: armed, every morsel already cut its own run, so this is a
+    // regression: armed, every morsel already cut its own run, so this is a
     // no-op on the success path (`spill_worker_batch` returns immediately on an
     // empty batch). It stays as the disarmed path's tail flush AND as the
     // belt-and-braces path for any future morsel exit that skips the cut — the
@@ -1831,7 +1832,7 @@ fn merge_sorted_runs(
     let sort = shared.sort.as_ref().expect("merge without sort mode");
     let mut stamped =
         std::mem::take(&mut *shared.sort_runs.lock().unwrap_or_else(|p| p.into_inner()));
-    // GL-LOADDET-1: the merge's run index IS its tiebreak for key-equal rows,
+    // regression: the merge's run index IS its tiebreak for key-equal rows,
     // so order the inputs by input coordinate, not by the worker race that
     // appended them. `(task, sub)` is unique (one worker owns a morsel) and
     // input-major, so this is a total, dop-independent order.
@@ -2381,7 +2382,7 @@ fn admit<'mcx>(
         refuse!("dop < 1");
     }
 
-    // GL-PARQUET-1 inc-2: parquet row-group morsels. Sort mode is REQUIRED —
+    // regression inc-2: parquet row-group morsels. Sort mode is REQUIRED —
     // in the sort pipeline the columnar-store RG seams are decided at the
     // merge fill, so worker task shape cannot move them; order-preserving
     // parquet parallelism would cut RGs at parquet row-group boundaries
@@ -2499,7 +2500,7 @@ pub(crate) fn copy_from_parallel<'mcx>(
     let inline_analyze = if analyze_inline_flag() {
         if sort.is_some() {
             let targrows = commands_analyze::inline_analyze_targrows(rel)?;
-            let seed = pg_prng::global_prng(|p| p.next_u64());
+            let seed = pg_prng::global_prng(|p| p.next_u32());
             ptrace(&format!("analyze inline engaged targrows={targrows}"));
             Some(InlineAnalyzePlan { targrows, seed })
         } else {
@@ -2703,7 +2704,7 @@ fn ceremony(
         let mut input_done = false;
         let mut closed = false;
         let mut bytes_read = 0u64;
-        // GL-PARQUET-1 inc-2: parquet morsels are row-group indexes known
+        // regression inc-2: parquet morsels are row-group indexes known
         // from the footer — publish the whole task list up front and close
         // the source; the read pump below never runs (input_done).
         if let Some(pq) = &shared.parquet {

@@ -743,7 +743,7 @@ fn subxact_cleanup_drops_only_deeper_scans() {
     hash_destroy(table);
 }
 
-// GL-VACGUARD-1 row 5: the freeList spinlock's contended path must go through
+// regression row 5: the freeList spinlock's contended path must go through
 // C's perform_spin_delay backoff (s_lock.c:97), not an unbounded busy-spin.
 //
 // The seam IS the observation point, which is what makes this deterministic: the
@@ -796,4 +796,16 @@ fn freelist_spin_uses_perform_spin_delay_backoff() {
         "contended acquire completed without any backoff call — it busy-spun"
     );
     assert_eq!(LOCKWORD.load(Ordering::Relaxed), 1, "acquire must leave the lock held");
+}
+
+// dynahash.c:596: a long nelem is divided across the freelists before it is
+// narrowed to int, so a 2^31-element partitioned table asks for 2^26 per
+// freelist (not one element each from a wrapped negative nelem).
+#[test]
+fn freelist_shares_divide_before_narrowing() {
+    assert_eq!(freelist_shares(2147483648, 32), (67108864, 67108864));
+    assert_eq!(freelist_shares(100, 32), (7, 3));
+    assert_eq!(freelist_shares(100, 1), (100, 100));
+    assert_eq!(freelist_shares(0, 32), (1, 1));
+    assert_eq!(freelist_shares(5, 32), (1, 1));
 }

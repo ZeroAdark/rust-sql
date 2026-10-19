@@ -279,9 +279,18 @@ fn fill_hba_line(
     srf.putvalues(&values, &nulls)
 }
 
+fn token_datum(mcx: Mcx<'_>, t: &AuthToken) -> PgResult<Datum> {
+    let bytes = t.raw.as_deref().unwrap_or(t.string.as_bytes());
+    Ok(varlena_result(varlena::cstring_to_text(mcx, bytes)?))
+}
+
 fn auth_token_array(mcx: Mcx<'_>, tokens: &[AuthToken]) -> PgResult<Datum> {
-    let refs: Vec<&str> = tokens.iter().map(|t| t.string.as_str()).collect();
-    text_array_datum(mcx, &refs)
+    let mut datums: Vec<Datum> = Vec::with_capacity(tokens.len());
+    for t in tokens {
+        datums.push(token_datum(mcx, t)?);
+    }
+    let img = arrayfuncs::construct_array(mcx, &datums, TEXTOID, -1, false, b'i')?;
+    Ok(image_datum(img))
 }
 
 fn fill_hba_view(srf: &mut MaterializedSRF<'_>, mcx: Mcx<'_>) -> PgResult<()> {
@@ -358,9 +367,9 @@ fn fill_ident_line(
     if let Some(ident) = ident {
         values[i] = text_datum(mcx, &ident.usermap)?;
         i += 1;
-        values[i] = text_datum(mcx, &ident.system_user.string)?;
+        values[i] = token_datum(mcx, &ident.system_user)?;
         i += 1;
-        values[i] = text_datum(mcx, &ident.pg_user.string)?;
+        values[i] = token_datum(mcx, &ident.pg_user)?;
         i += 1;
     } else {
         for slot in nulls.iter_mut().take(NUM_PG_IDENT_FILE_MAPPINGS_ATTS - 1).skip(3) {

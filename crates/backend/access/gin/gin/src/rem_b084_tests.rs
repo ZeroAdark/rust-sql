@@ -28,7 +28,7 @@ use ::types_rel::{
 };
 use ::types_tuple::itemptr::{InvalidOffsetNumber, ItemPointerData};
 use ::types_tuple::tupdesc::CompactAttribute;
-use ::types_tuple::TupleDescData;
+use ::types_tuple::{FormData_pg_attribute, TupleDescData};
 
 use crate::btree::{ginFinishOldSplitAt, Frame, GinStack};
 use crate::datapage::{gin_data_page_add_posting_item, DataBtree};
@@ -108,6 +108,28 @@ pub(crate) fn install() {
         }
         if !lock_seams::lock_release::is_installed() {
             lock_seams::lock_release::set(|_tag, _mode, _s| Ok(true));
+        }
+        if !syscache_seams::lookup_pg_type_shape::is_installed() {
+            // initGinState reads the key type's typstorage (ginutil.c:125-128).
+            syscache_seams::lookup_pg_type_shape::set(|typid| {
+                Ok(match typid {
+                    ::types_core::TEXTOID => Some(::types_tuple::PgTypeShape {
+                        typlen: -1,
+                        typbyval: false,
+                        typalign: b'i' as i8,
+                        typstorage: b'x' as i8,
+                        typcollation: ::types_core::catalog::DEFAULT_COLLATION_OID,
+                    }),
+                    ::types_core::INT4OID => Some(::types_tuple::PgTypeShape {
+                        typlen: 4,
+                        typbyval: true,
+                        typalign: b'i' as i8,
+                        typstorage: b'p' as i8,
+                        typcollation: InvalidOid,
+                    }),
+                    _ => None,
+                })
+            });
         }
         if !syscache_seams::lookup_pg_amproc::is_installed() {
             // A tsvector_ops-shaped opclass (procs 1-4 present, no proc 5/6)
@@ -202,6 +224,17 @@ fn tsvector_tupdesc(mcx: Mcx<'_>) -> TupleDescData<'_> {
         attnullability: 0,
         attalignby: 4,
     });
+    let mut attrs = PgVec::new_in(mcx);
+    attrs.push(FormData_pg_attribute {
+        atttypid: ::types_core::TEXTOID,
+        attlen: -1,
+        attnum: 1,
+        atttypmod: -1,
+        attbyval: false,
+        attalign: b'i' as i8,
+        attstorage: b'x' as i8,
+        ..Default::default()
+    });
     TupleDescData {
         natts: 1,
         tdtypeid: 0,
@@ -209,7 +242,7 @@ fn tsvector_tupdesc(mcx: Mcx<'_>) -> TupleDescData<'_> {
         tdrefcount: 1,
         constr: None,
         compact_attrs: compact,
-        attrs: PgVec::new_in(mcx),
+        attrs,
     }
 }
 
@@ -408,7 +441,11 @@ fn delete_page_wal_record_is_inside_critical_section() {
     assert_eq!(dirty.len(), 3, "parent, left and deleted page are dirtied: {dirty:?}");
     assert_all_inside_crit_section("MarkBufferDirty", &dirty);
     assert_eq!(init_small::globals::CritSectionCount(), 0, "critical section left open");
-    assert_eq!(opaque_flags(page_bytes_of(2)), GIN_DELETED);
+    assert_eq!(
+        opaque_flags(page_bytes_of(2)),
+        GIN_DATA | GIN_LEAF | GIN_COMPRESSED | GIN_DELETED,
+        "GinPageSetDeleted keeps the page type bits"
+    );
     assert_eq!(stats.pages_deleted, 1);
     assert_eq!(fake_bufmgr::pins(), 0, "pins leaked");
 }

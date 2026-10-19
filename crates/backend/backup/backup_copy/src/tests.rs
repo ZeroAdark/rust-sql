@@ -54,6 +54,19 @@ fn install_fixtures() {
         });
         seam::end_tup_output::set(|_tstate| {
             EVENTS.with(|e| e.borrow_mut().push(Event::End));
+            let poisoned = EVENTS.with(|e| {
+                e.borrow().iter().any(|ev| {
+                    matches!(ev, Event::Row(vs)
+                        if vs.iter().any(|v| matches!(v, Some(ResultValue::Text(s)) if s == "/poison")))
+                })
+            });
+            if poisoned {
+                return Err(Box::new(
+                    ::types_error::PgError::error("character with byte sequence 0xe6 0x97 0xa5 in encoding \"UTF8\" has no equivalent in encoding \"LATIN1\"")
+                        .with_sqlstate(types_error::ERRCODE_UNTRANSLATABLE_CHARACTER),
+                ));
+            }
+            Ok(())
         });
     });
 }
@@ -74,6 +87,32 @@ fn format_lsn_matches_c() {
     assert_eq!(format_lsn(0), "0/0");
     assert_eq!(format_lsn(0x0000_0001_ABCD_EF12), "1/ABCDEF12");
     assert_eq!(format_lsn(0xDEAD_BEEF_0000_0010), "DEADBEEF/10");
+}
+
+// printsimple.c:96: a tablespace path the client encoding cannot represent
+// fails the result-set send as an ERROR that begin_backup propagates.
+#[test]
+fn tablespace_list_send_failure_propagates() {
+    let ctx = setup();
+    let mcx = ctx.mcx();
+
+    let mut sink = bbsink_copystream_new(mcx, true);
+    let mut state = BbsinkState {
+        tablespaces: vec![
+            TablespaceInfo { oid: 16384, path: Some("/poison".into()), rpath: None, size: 0 },
+            TablespaceInfo { oid: 0, path: None, rpath: None, size: -1 },
+        ],
+        tablespace_num: 0,
+        bytes_done: 0,
+        bytes_total: 0,
+        bytes_total_is_valid: false,
+        startptr: 0x0000_0001_0000_00A0,
+        starttli: 7,
+    };
+
+    let err = ::sink::bbsink_begin_backup(&mut sink, &mut state, 8192)
+        .expect_err("untranslatable tablespace path must be an ERROR");
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_UNTRANSLATABLE_CHARACTER);
 }
 
 #[test]

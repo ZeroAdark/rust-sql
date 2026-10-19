@@ -505,6 +505,19 @@ fn send_vc(ns: SocketAddr, query: &[u8], seconds: u32) -> Option<Vec<u8>> {
     }
 }
 
+// send_dg's per-enquiry budget (glibc res_send.c): keyed on the position in
+// the nameserver list, identical on every retry pass.
+fn enquiry_seconds(retrans: u32, ns: usize, nscount: usize) -> u32 {
+    let mut seconds = retrans.checked_shl(ns as u32).unwrap_or(0);
+    if ns > 0 {
+        seconds /= nscount as u32;
+    }
+    if seconds == 0 {
+        seconds = 1;
+    }
+    seconds
+}
+
 // res_send: the retry/nameserver schedule of glibc's __res_context_send.
 fn res_send(conf: &ResolvConf, query: &[u8]) -> Option<Vec<u8>> {
     let nscount = conf.nameservers.len();
@@ -519,13 +532,7 @@ fn res_send(conf: &ResolvConf, query: &[u8]) -> Option<Vec<u8>> {
     for attempt in 0..conf.retry {
         for k in 0..nscount {
             let ns = conf.nameservers[(start + k) % nscount];
-            let mut seconds = conf.retrans << attempt;
-            if attempt > 0 {
-                seconds /= nscount as u32;
-            }
-            if seconds == 0 {
-                seconds = 1;
-            }
+            let seconds = enquiry_seconds(conf.retrans, k, nscount);
             let reply = match send_dg(ns, query, seconds) {
                 Dg::Answer(r) => r,
                 Dg::Timeout | Dg::Error => continue,
@@ -734,6 +741,15 @@ mod dnssrv_tests {
         assert!(ldap_dn2domain("dc=a,").is_err());
         assert!(ldap_dn2domain("=a").is_err());
         assert!(ldap_dn2domain("dc=\"unterminated").is_err());
+    }
+
+    #[test]
+    fn enquiry_budget_is_keyed_on_the_nameserver_position() {
+        assert_eq!(enquiry_seconds(5, 0, 3), 5);
+        assert_eq!(enquiry_seconds(5, 1, 3), 3);
+        assert_eq!(enquiry_seconds(5, 2, 3), 6);
+        assert_eq!(enquiry_seconds(1, 1, 3), 1);
+        assert_eq!(enquiry_seconds(0, 0, 1), 1);
     }
 
     #[test]

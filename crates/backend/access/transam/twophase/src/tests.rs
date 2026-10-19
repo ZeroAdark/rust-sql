@@ -435,6 +435,12 @@ fn gid_helpers() {
     // sscanf-shaped: "%u" consumes the digits, the reconstruction rejects
     // the non-canonical spelling; a zero xid raises 08P01 (twophase.c:2688).
     assert!(!crate::IsTwoPhaseTransactionGidForSubid(3, "pg_gid_+3_77").unwrap());
+    // sscanf %u skips isspace(), VT and FF included: the digits still parse
+    // (the canonical spelling then mismatches; a zero xid still errors).
+    assert!(!crate::IsTwoPhaseTransactionGidForSubid(3, "pg_gid_3_\x0b77").unwrap());
+    assert!(!crate::IsTwoPhaseTransactionGidForSubid(3, "pg_gid_\x0c3_77").unwrap());
+    let err = crate::IsTwoPhaseTransactionGidForSubid(3, "pg_gid_3_\x0b0").unwrap_err();
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_PROTOCOL_VIOLATION);
     assert!(!crate::IsTwoPhaseTransactionGidForSubid(3, "pg_gid_3_077").unwrap());
     let err = crate::IsTwoPhaseTransactionGidForSubid(3, "pg_gid_3_0").unwrap_err();
     assert_eq!(err.sqlstate(), types_error::ERRCODE_PROTOCOL_VIOLATION);

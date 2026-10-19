@@ -42,6 +42,7 @@ fn descriptor<'m>(mcx: mcx::Mcx<'m>, checks: bool) -> Rc<TupleDescData<'m>> {
                 defval: mcx::PgVec::new_in(mcx),
                 check,
                 missing: mcx::PgVec::new_in(mcx),
+                missing_store: mcx::PgVec::new_in(mcx),
                 num_defval: 0,
                 num_check: u16::from(checks),
                 relchecks: i16::from(checks),

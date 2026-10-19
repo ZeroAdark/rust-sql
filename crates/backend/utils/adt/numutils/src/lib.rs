@@ -35,10 +35,12 @@ fn strtoint_lines(typname: &str) -> (i32, i32) {
 
 #[cold]
 #[inline(never)]
-fn invalid_syntax_err(input: &str, typname: &'static str) -> PgError {
-    PgError::error(format!(
-        "invalid input syntax for type {typname}: \"{input}\""
-    ))
+fn invalid_syntax_err(input: &[u8], typname: &'static str) -> PgError {
+    PgError::error_bytes(
+        &format!("invalid input syntax for type {typname}: \""),
+        input,
+        "\"",
+    )
     .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
     .with_location(
         "numutils.c",
@@ -49,10 +51,12 @@ fn invalid_syntax_err(input: &str, typname: &'static str) -> PgError {
 
 #[cold]
 #[inline(never)]
-fn out_of_range_err(input: &str, typname: &'static str) -> PgError {
-    PgError::error(format!(
-        "value \"{input}\" is out of range for type {typname}"
-    ))
+fn out_of_range_err(input: &[u8], typname: &'static str) -> PgError {
+    PgError::error_bytes(
+        "value \"",
+        input,
+        &format!("\" is out of range for type {typname}"),
+    )
     .with_sqlstate(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE)
     .with_location(
         "numutils.c",
@@ -221,7 +225,7 @@ fn strtoint_slow_inner(b: &[u8], neg_abs: u64) -> Result<(u64, bool), NumErr> {
 #[cold]
 #[inline(never)]
 fn strtoint_oor(
-    s: &str,
+    s: &[u8],
     typname: &'static str,
     escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<i64> {
@@ -231,13 +235,13 @@ fn strtoint_oor(
 #[cold]
 #[inline(never)]
 fn strtoint_slow(
-    s: &str,
+    s: &[u8],
     neg_abs: u64,
     max: u64,
     typname: &'static str,
     escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<i64> {
-    let result = strtoint_slow_inner(s.as_bytes(), neg_abs).and_then(|(tmp, neg)| {
+    let result = strtoint_slow_inner(s, neg_abs).and_then(|(tmp, neg)| {
         if neg {
             if tmp > neg_abs {
                 return Err(NumErr::OutOfRange);
@@ -270,12 +274,18 @@ fn swar_parse8(mut v: u64) -> u32 {
 }
 
 macro_rules! strtoint {
-    ($plain:ident, $safe:ident, $ity:ty, $typname:literal) => {
+    ($plain:ident, $safe:ident, $safe_bytes:ident, $ity:ty, $typname:literal) => {
         pub fn $plain(s: &str) -> PgResult<$ity> {
-            $safe(s, None)
+            $safe_bytes(s.as_bytes(), None)
         }
 
         pub fn $safe(s: &str, escontext: Option<&mut SoftErrorContext>) -> PgResult<$ity> {
+            $safe_bytes(s.as_bytes(), escontext)
+        }
+
+        // Raw cstring bytes (SQL_ASCII / non-UTF-8 input): C's messages quote
+        // them verbatim.
+        pub fn $safe_bytes(s: &[u8], escontext: Option<&mut SoftErrorContext>) -> PgResult<$ity> {
             const NEG_ABS: u64 = <$ity>::MIN.unsigned_abs() as u64;
             const MAX: u64 = <$ity>::MAX as u64;
             const GUARD: u64 = NEG_ABS / 10;
@@ -284,7 +294,7 @@ macro_rules! strtoint {
             // docs/optimizations/numutils-parity.md.
             const BREAK_OOR: u64 = (GUARD + 1) * 10;
 
-            let b = s.as_bytes();
+            let b = s;
             let len = b.len();
             let mut i = 0usize;
             let mut neg = false;
@@ -361,33 +371,13 @@ macro_rules! strtoint {
     };
 }
 
-strtoint!(pg_strtoint16, pg_strtoint16_safe, i16, "smallint");
-strtoint!(pg_strtoint32, pg_strtoint32_safe, i32, "integer");
+strtoint!(pg_strtoint16, pg_strtoint16_safe, pg_strtoint16_safe_bytes, i16, "smallint");
+strtoint!(pg_strtoint32, pg_strtoint32_safe, pg_strtoint32_safe_bytes, i32, "integer");
 
-// pg_strtoint32 over raw cstring bytes (SQL_ASCII carries non-UTF-8): the
-// C message quotes the bytes verbatim.
 pub fn pg_strtoint32_bytes(s: &[u8]) -> PgResult<i32> {
-    match core::str::from_utf8(s) {
-        Ok(s) => pg_strtoint32(s),
-        Err(_) => {
-            // C overflows on the digit run before it reaches the non-ASCII
-            // byte: the ASCII prefix decides between 22003 and 22P02.
-            let ascii = s.iter().position(|&b| b >= 0x80).unwrap_or(s.len());
-            // SAFETY: bytes below 0x80 are ASCII, hence valid UTF-8.
-            let prefix = unsafe { core::str::from_utf8_unchecked(&s[..ascii]) };
-            let oor = matches!(pg_strtoint32(prefix), Err(e) if e.sqlstate() == ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
-            let (mut msg, tail, code) = if oor {
-                (b"value \"".to_vec(), b"\" is out of range for type integer".as_slice(), ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE)
-            } else {
-                (b"invalid input syntax for type integer: \"".to_vec(), b"\"".as_slice(), ERRCODE_INVALID_TEXT_REPRESENTATION)
-            };
-            msg.extend_from_slice(s);
-            msg.extend_from_slice(tail);
-            Err(Box::new(PgError::error_raw_message(msg).with_sqlstate(code)))
-        }
-    }
+    pg_strtoint32_safe_bytes(s, None)
 }
-strtoint!(pg_strtoint64, pg_strtoint64_safe, i64, "bigint");
+strtoint!(pg_strtoint64, pg_strtoint64_safe, pg_strtoint64_safe_bytes, i64, "bigint");
 
 // C strtoul/strtou64 base-0 model + the uint*in_subr checks; cold (oid/xid
 // input paths). When `endloc` the unconsumed tail is returned, else only
@@ -466,25 +456,35 @@ fn uintin_subr<'a>(s: &'a str, is_u32: bool, endloc: bool) -> Result<(u64, &'a s
     Ok((value, &s[endptr..]))
 }
 
+// C reports these from the shared subr, so the wire R/L fields name
+// uint32in_subr / uint64in_subr and numutils.c's ereport lines (18.6).
 fn uintin_report<'a>(
     r: Result<(u64, &'a str), NumErr>,
     s: &'a str,
     typname: &str,
+    is_u32: bool,
     escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<(u64, &'a str)> {
+    let (funcname, syntax_line, range_line) = if is_u32 {
+        ("uint32in_subr", 918, 963)
+    } else {
+        ("uint64in_subr", 1004, 1010)
+    };
     match r {
         Ok(v) => Ok(v),
         Err(NumErr::OutOfRange) => ereturn(
             escontext,
             (0, ""),
             PgError::error(format!("value \"{s}\" is out of range for type {typname}"))
-                .with_sqlstate(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                .with_sqlstate(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE)
+                .with_location("numutils.c", range_line, funcname),
         ),
         Err(NumErr::InvalidSyntax) => ereturn(
             escontext,
             (0, ""),
             PgError::error(format!("invalid input syntax for type {typname}: \"{s}\""))
-                .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION),
+                .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
+                .with_location("numutils.c", syntax_line, funcname),
         ),
     }
 }
@@ -495,7 +495,7 @@ pub fn uint32in_subr<'a>(
     typname: &str,
     escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<(u32, &'a str)> {
-    let (v, rest) = uintin_report(uintin_subr(s, true, endloc), s, typname, escontext)?;
+    let (v, rest) = uintin_report(uintin_subr(s, true, endloc), s, typname, true, escontext)?;
     Ok((v as u32, rest))
 }
 
@@ -505,7 +505,7 @@ pub fn uint64in_subr<'a>(
     typname: &str,
     escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<(u64, &'a str)> {
-    uintin_report(uintin_subr(s, false, endloc), s, typname, escontext)
+    uintin_report(uintin_subr(s, false, endloc), s, typname, false, escontext)
 }
 
 fn decimal_length32(v: u32) -> usize {

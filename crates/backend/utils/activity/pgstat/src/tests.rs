@@ -1,4 +1,5 @@
 use core::cell::Cell;
+use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use pgsync::{Mutex, MutexGuard};
 
 use init_small::globals::SetMyDatabaseId;
@@ -11,6 +12,8 @@ use crate::pending::{
 };
 use crate::relation::{self, PgStat_TableCounts};
 use crate::{checkpointer, slru, xact};
+
+static BACKEND_STATUS_CLEARS: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
     static NEST_LEVEL: Cell<i32> = const { Cell::new(1) };
@@ -33,7 +36,9 @@ fn setup() -> MutexGuard<'static, ()> {
         xact_seams::get_current_sub_transaction_id::set(|| 1);
         xact_seams::get_current_transaction_stop_timestamp::set(|| NOW.with(|c| c.get()));
         xact_seams::is_transaction_or_transaction_block::set(|| false);
-        backend_status_seams::pgstat_clear_backend_status_snapshot::set(|| {});
+        backend_status_seams::pgstat_clear_backend_status_snapshot::set(|| {
+            BACKEND_STATUS_CLEARS.fetch_add(1, Relaxed);
+        });
         install_replslot_seams();
         crate::init_seams();
     });
@@ -440,6 +445,27 @@ fn init_relation_gates_on_relkind_and_track_counts() {
 }
 
 #[test]
+fn drop_relation_keeps_transaction_counters_when_tracking_is_disabled() {
+    let _lock = setup();
+    let relid = 2022;
+    relation::pgstat_count_heap_insert(relid, false, 3);
+    relation::pgstat_count_heap_update(relid, false, false, false);
+    relation::pgstat_count_heap_delete(relid, false);
+    crate::set_pgstat_track_counts(false);
+
+    relation::pgstat_drop_relation(relid, false);
+
+    let counts = relation::find_tabstat_entry(relid).unwrap();
+    assert_eq!(counts.tuples_inserted, 3);
+    assert_eq!(counts.tuples_updated, 1);
+    assert_eq!(counts.tuples_deleted, 1);
+    let ctx = MemoryContext::new("test");
+    let drops = xact::pgstat_get_transactional_drops(ctx.mcx(), true).unwrap();
+    assert!(drops.iter().any(|item| item.objid == u64::from(relid)));
+    xact::AtEOXact_PgStat(false, false);
+}
+
+#[test]
 fn slru_counters_and_flush() {
     let _lock = setup();
     assert_eq!(slru::pgstat_get_slru_index("transaction"), 6);
@@ -642,7 +668,7 @@ fn setup_function_seams() {
     static ONCE: pgsync::Once = pgsync::Once::new();
     ONCE.call_once(|| {
         inval_seams::accept_invalidation_messages::set(|| Ok(()));
-        syscache_seams::search_syscache_exists_procoid::set(|oid| Ok(oid != 66_666));
+        syscache_seams::search_syscache_exists_procoid::set(|oid| Ok(oid != 66_666 && oid != 66_667));
     });
 }
 
@@ -690,6 +716,63 @@ fn function_usage_dropped_function_errors() {
     let err = crate::function::pgstat_init_function_usage(66_666).unwrap_err();
     assert_eq!(err.sqlstate(), types_error::ERRCODE_UNDEFINED_FUNCTION);
     assert!(crate::find_funcstat_entry(66_666).is_none());
+}
+
+// pgstat_function.c:110: the dropped-function probe runs only when the
+// SHARED entry was created now; an entry flushed by an earlier transaction
+// means the call proceeds even if pg_proc no longer has the function.
+#[test]
+fn function_usage_existing_shared_entry_skips_drop_probe() {
+    let _lock = setup();
+    setup_function_seams();
+    let key = PgStat_HashKey {
+        kind: pending::PGSTAT_KIND_FUNCTION,
+        dboid: 5,
+        objid: 66_667,
+    };
+    assert!(crate::shmem::ensure_entry_for_pending(key));
+    let fcu = crate::function::pgstat_init_function_usage(66_667).unwrap();
+    crate::function::pgstat_end_function_usage(&fcu, true);
+    assert_eq!(crate::find_funcstat_entry(66_667).unwrap().numcalls, 1);
+    // The pending entry alone never counts as "created".
+    let fcu = crate::function::pgstat_init_function_usage(66_667).unwrap();
+    crate::function::pgstat_end_function_usage(&fcu, true);
+    pending::with_state(|st| st.delete_pending_entry(key));
+    crate::shmem::drop_entry(key);
+    let err = crate::function::pgstat_init_function_usage(66_667).unwrap_err();
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_UNDEFINED_FUNCTION);
+}
+
+// pgstat_xact.c:363-370: a stale shared entry under a newly created object's
+// key is reset with a WARNING (and the database reset timestamp bumped).
+#[test]
+fn create_transactional_resets_stale_entry_with_warning() {
+    let _lock = setup();
+    let key = relation::relation_key(6100, false);
+    crate::shmem::ensure_entry_for_pending(key);
+    crate::shmem::update_relation_entry(key, |t| t.numscans = 3);
+    crate::shmem::clear_snapshot();
+    let db_ts_before = crate::pgstat_fetch_stat_dbentry(5).map(|d| d.stat_reset_timestamp);
+    advance_clock(10);
+    let log = b091_capture_log(|| {
+        xact::pgstat_create_transactional(PGSTAT_KIND_RELATION, 5, 6100)
+    });
+    assert_eq!(
+        log,
+        vec![b091_warning("resetting existing statistics for kind relation, db=5, oid=6100")]
+    );
+    crate::shmem::clear_snapshot();
+    assert_eq!(crate::pgstat_fetch_stat_tabentry_ext(false, 6100).unwrap().numscans, 0);
+    let db_ts_after = crate::pgstat_fetch_stat_dbentry(5).unwrap().stat_reset_timestamp;
+    assert_ne!(Some(db_ts_after), db_ts_before);
+    assert_eq!(db_ts_after, NOW.with(|c| c.get()));
+    // A fresh key warns nothing.
+    let log = b091_capture_log(|| {
+        xact::pgstat_create_transactional(PGSTAT_KIND_RELATION, 5, 6101)
+    });
+    assert!(log.is_empty());
+    xact::AtEOXact_PgStat(true, false);
+    crate::shmem::drop_entry(key);
 }
 
 // Fresh per-test data dir so a stale statsfile from an earlier run is never
@@ -898,6 +981,75 @@ fn checkpointer_write_sync_time_seams_accumulate() {
     assert_eq!(after.sync_time - before.sync_time, 45);
 }
 
+// pgstat_checkpointer.c:71: publishing nonzero checkpointer counters also
+// flushes the checkpointer's pending IO (CheckpointWriteDelay reports only
+// through pgstat_report_checkpointer between write batches).
+#[test]
+fn checkpointer_report_flushes_pending_io() {
+    use crate::io::{self, IOContext, IOObject, IOOp};
+    let _lock = setup();
+    miscinit::SetMyBackendType(types_core::BackendType::Checkpointer);
+    let idx = |s: &io::PgStat_IO| {
+        s.stats[types_core::BackendType::Checkpointer as usize].counts[IOObject::Relation as usize]
+            [IOContext::IOCONTEXT_NORMAL as usize][IOOp::Write as usize]
+    };
+    let base = idx(&io::export_io_stats());
+    io::pgstat_count_io_op(IOObject::Relation, IOContext::IOCONTEXT_NORMAL, IOOp::Write, 3, 24576);
+    checkpointer::pgstat_report_checkpointer();
+    assert_eq!(idx(&io::export_io_stats()), base, "nothing pending: no flush");
+    checkpointer::with_pending_checkpointer_stats(|s| s.buffers_written += 3);
+    checkpointer::pgstat_report_checkpointer();
+    assert_eq!(idx(&io::export_io_stats()), base + 3);
+    miscinit::SetMyBackendType(types_core::BackendType::Backend);
+}
+
+// pgstat_relation.c:271-272 / 366-367: vacuum and analyze reports flush the
+// backend's pending IO to the shared and per-backend stores right away.
+#[test]
+fn vacuum_and_analyze_reports_flush_pending_io() {
+    use crate::io::{self, IOContext, IOObject, IOOp};
+    let _lock = setup_io();
+    init_small::globals::SetMyProcNumber(43);
+    crate::backend::pgstat_create_backend(43);
+    let shared_hits = || {
+        io::export_io_stats().stats[types_core::BackendType::Backend as usize].counts
+            [IOObject::Relation as usize][IOCONTEXT_NORMAL_IDX][IOOp::Hit as usize]
+    };
+    let backend_hits = || {
+        crate::pgstat_clear_snapshot();
+        crate::backend::pgstat_fetch_stat_backend(43).unwrap().io_stats.counts
+            [IOObject::Relation as usize][IOCONTEXT_NORMAL_IDX][IOOp::Hit as usize]
+    };
+    let base = shared_hits();
+    io::pgstat_count_io_op(IOObject::Relation, IOContext::IOCONTEXT_NORMAL, IOOp::Hit, 5, 0);
+    relation::pgstat_report_vacuum(7101, false, 10, 0, NOW.with(|c| c.get()));
+    assert_eq!(shared_hits(), base + 5);
+    assert_eq!(backend_hits(), 5);
+    io::pgstat_count_io_op(IOObject::Relation, IOContext::IOCONTEXT_NORMAL, IOOp::Hit, 2, 0);
+    relation::pgstat_report_analyze(7101, false, b'r', true, 10, 0, true, NOW.with(|c| c.get()));
+    assert_eq!(shared_hits(), base + 7);
+    assert_eq!(backend_hits(), 7);
+    crate::shmem::drop_entry(crate::pending::PgStat_HashKey {
+        kind: pending::PGSTAT_KIND_BACKEND,
+        dboid: 0,
+        objid: 43,
+    });
+}
+
+// pgstat.c:926: a forced snapshot clear (stats_fetch_consistency changed)
+// goes through pgstat_clear_snapshot, which also discards the backend
+// activity snapshot -- not only the cumulative-stats caches.
+#[test]
+fn forced_snapshot_clear_discards_backend_activity_snapshot() {
+    let _lock = setup();
+    let before = BACKEND_STATUS_CLEARS.load(Relaxed);
+    crate::shmem::force_snapshot_clear_on_next_access();
+    checkpointer::pgstat_fetch_stat_checkpointer();
+    assert_eq!(BACKEND_STATUS_CLEARS.load(Relaxed), before + 1);
+    checkpointer::pgstat_fetch_stat_checkpointer();
+    assert_eq!(BACKEND_STATUS_CLEARS.load(Relaxed), before + 1, "cleared once per force");
+}
+
 #[test]
 fn checkpointer_and_bgwriter_report_apply_pending() {
     let _lock = setup();
@@ -918,12 +1070,13 @@ fn wal_flush_without_installed_usage_seam_is_noop() {
 }
 
 fn install_replslot_seams() {
-    slot_seams::named_replication_slot_info::set(|name, _need_lock| {
-        Ok(match name {
+    slot_seams::with_named_replication_slot_info::set(|name, body| {
+        let (index, is_logical) = match name {
             "logslot" => (3, true),
             "physlot" => (4, false),
             _ => (-1, false),
-        })
+        };
+        body(index, is_logical)
     });
     slot_seams::replication_slot_name::set(|index| {
         Ok((index == 3).then(|| {

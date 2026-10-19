@@ -246,7 +246,7 @@ impl RowCodec {
 
 /// Bounded (key, row) accumulator. `sort()` orders entries by memcmp key.
 ///
-/// GL-LOADDET-1: key-equal entries are NOT byte-equal entries (the payload
+/// regression: key-equal entries are NOT byte-equal entries (the payload
 /// columns differ), so their relative order is an output byte surface. A
 /// `stable` batch breaks those ties by ARRIVAL order; the legacy batch leaves
 /// them to pdqsort's pivot walk over whatever the batch happened to hold.
@@ -255,19 +255,19 @@ pub struct SortBatch {
     arena: Vec<u8>,
     /// (entry offset, entry len incl. key) in arena.
     index: Vec<(u64, u32)>,
-    /// GL-LOADDET-1: break key ties by arrival order (see `sort`).
+    /// regression: break key ties by arrival order (see `sort`).
     stable: bool,
 }
 
 impl SortBatch {
     /// Legacy (key-only, unstable) tie order. Kept as the default so the
-    /// determinism kill switch reproduces the pre-GL-LOADDET-1 byte image
+    /// determinism kill switch reproduces the pre-regression byte image
     /// exactly, and so the DST/unit corpora keep their recorded orders.
     pub fn new(key_w: usize) -> SortBatch {
         SortBatch { key_w, arena: Vec::new(), index: Vec::new(), stable: false }
     }
 
-    /// GL-LOADDET-1: arrival-order tie break — the deterministic batch.
+    /// regression: arrival-order tie break — the deterministic batch.
     pub fn new_stable(key_w: usize) -> SortBatch {
         SortBatch { stable: true, ..SortBatch::new(key_w) }
     }
@@ -298,7 +298,7 @@ impl SortBatch {
 
     /// Sort the batch into key order.
     ///
-    /// GL-LOADDET-1 (`stable`): the arena offset is monotone in push order
+    /// regression (`stable`): the arena offset is monotone in push order
     /// (every push appends), so `(key, offset)` is a TOTAL order that
     /// reproduces a stable sort without storing a second index — the tie
     /// compare is reached only on an actual key tie.
@@ -1037,7 +1037,7 @@ impl RunReader {
 
 /// Heap entry: min-heap by (key, run index) — the run index breaks key ties.
 ///
-/// GL-LOADDET-1: this comment used to add "(none exist on the benchmark key
+/// regression: this comment used to add "(none exist on the benchmark key
 /// set)". They do exist, and the run index only makes the merge deterministic
 /// if the run ORDER is itself deterministic — which it was not, because the
 /// registry was appended to in worker-completion order. The caller
@@ -2091,7 +2091,7 @@ mod tests {
         assert_eq!(p_arena, ref_arena, "prefetch V2 row bytes diverge");
     }
 
-    /// GL-LOADDET-1: the stable batch orders key-tied entries by ARRIVAL, and
+    /// regression: the stable batch orders key-tied entries by ARRIVAL, and
     /// the legacy batch demonstrably does not — a determinism knob whose two
     /// arms cannot be told apart would be a knob over nothing.
     #[test]

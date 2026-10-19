@@ -39,12 +39,14 @@ struct GistVacState<'a, 'cb, 'mcx> {
     empty_leaf_set: std::collections::BTreeSet<BlockNumber>,
 }
 
-fn vacuum_delay_point() -> PgResult<()> {
-    crate::check_for_interrupts()?;
-    if init_small::globals::VacuumCostActive() {
-        vacuum_seams::vacuum_delay_point::call(false)?;
+// gistvacuum.c:248/492 call vacuum_delay_point unconditionally, so an
+// autovacuum worker's pending config reload can arm cost delays mid-scan;
+// unit rigs without seams_init keep the bare interrupt check.
+pub(crate) fn vacuum_delay_point() -> PgResult<()> {
+    if vacuum_seams::vacuum_delay_point::is_installed() {
+        return vacuum_seams::vacuum_delay_point::call(false);
     }
-    Ok(())
+    crate::check_for_interrupts()
 }
 
 // vac_tid_reaped over the sorted dead-TID image.

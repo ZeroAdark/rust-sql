@@ -154,7 +154,7 @@ impl<'mcx> DeparseContext<'mcx> {
             window_clause: None,
             varprefix: false,
             pretty_flags,
-            wrap_column: -1,
+            wrap_column: crate::viewdef::WRAP_COLUMN_DEFAULT,
             indent_level: 0,
             colnames_visible: true,
             in_group_by: false,
@@ -218,10 +218,12 @@ pub fn deparse_expression_pretty<'mcx>(
 ) -> PgResult<String> {
     let mut ctx = DeparseContext::new(mcx, pretty_flags);
     if relid != InvalidOid {
-        let relname = lsyscache::get_rel_name(mcx, relid)?
-            .expect("deparse_context_for: relation exists")
-            .as_str()
-            .to_owned();
+        // ruleutils.c:13171 get_relation_name: a vanished pg_class row is a
+        // catchable elog(ERROR).
+        let Some(relname) = lsyscache::get_rel_name(mcx, relid)? else {
+            return Err(crate::cache_lookup_failed("relation", relid));
+        };
+        let relname = relname.as_str().to_owned();
         ctx.namespaces.push(Rc::new(query::deparse_context_for(mcx, &relname, relid)?));
     }
     get_rule_expr(expr, &mut ctx, showimplicit)?;

@@ -494,3 +494,32 @@ fn slot_state_file_io_reports_wait_events() {
         ]
     );
 }
+
+// slot.c:186-212: ReplicationSlotsShmemSize is max_replication_slots *
+// sizeof(ReplicationSlot) (288 on LP64; offsetof(replication_slots) == 0) and
+// ReplicationSlotsShmemInit registers it as the "ReplicationSlot Ctl"
+// ShmemIndex row pg_shmem_allocations lists (audit regression).
+#[test]
+fn shmem_init_registers_replication_slot_ctl_in_shmem_index() {
+    static ROWS: std::sync::Mutex<Vec<(String, usize)>> = std::sync::Mutex::new(Vec::new());
+    let ours = !shmem_seams::shmem_init_struct::is_installed();
+    if ours {
+        shmem_seams::shmem_init_struct::set(|name, size| {
+            ROWS.lock().unwrap().push((name.to_string(), size));
+            let layout = std::alloc::Layout::from_size_align(size.max(1), 128).unwrap();
+            // SAFETY: non-zero size; leaked like C shmem.
+            let p = unsafe { std::alloc::alloc_zeroed(layout) };
+            assert!(!p.is_null());
+            Ok((p, false))
+        });
+    }
+    let n = walsender_config::max_replication_slots();
+    assert!(n > 0);
+    assert_eq!(crate::ReplicationSlotsShmemSize(), n as usize * 288);
+    ROWS.lock().unwrap().clear();
+    crate::register_shmem_ctl().unwrap();
+    let rows = ROWS.lock().unwrap();
+    if ours {
+        assert_eq!(rows.as_slice(), &[("ReplicationSlot Ctl".to_string(), n as usize * 288)]);
+    }
+}

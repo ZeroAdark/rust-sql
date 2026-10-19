@@ -113,7 +113,7 @@ fn shutdown_request_reaches_named_pmchild_seam() {
 }
 
 // ---------------------------------------------------------------------------
-// GL-GANGWEDGE-1: the shutdown-stall watchdog predicate.
+// regression: the shutdown-stall watchdog predicate.
 // ---------------------------------------------------------------------------
 
 /// Every shutdown state the watchdog is responsible for, i.e. every state a
@@ -570,6 +570,125 @@ mod b032 {
         assert_eq!(e.detail, None);
     }
 
+    fn io_worker_test_setup() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            install_seams();
+            shmem::init_seams();
+            init_small::globals::SetMaxBackends(16);
+            procsignal::ProcSignalShmemInit();
+            guc_tables::vars::io_method.install_if_absent(guc_tables::GucVarAccessors {
+                get: || guc_tables::consts::IOMETHOD_WORKER,
+                set: |_| {},
+            });
+            guc_tables::vars::io_workers.install_if_absent(guc_tables::GucVarAccessors {
+                get: || 1,
+                set: |_| {},
+            });
+            pmchild_seams::release_postmaster_child_slot::set(|_| true);
+        });
+    }
+
+    /// `captured` with every DEBUG level interesting (log_min_messages is
+    /// thread-local, so this never leaks into a sibling test).
+    fn debug_captured(f: impl FnOnce()) -> Vec<PgError> {
+        let prior = elog::config::log_min_messages();
+        elog::config::set_log_min_messages(types_error::DEBUG5);
+        let logs = captured(f);
+        elog::config::set_log_min_messages(prior);
+        logs
+    }
+    const IO_WORKER_PID: pid_t = 515_151;
+
+    #[test]
+    fn io_worker_normal_exit_is_not_logged() {
+        // postmaster.c:2505-2512 maybe_reap_io_worker: exit status 0/1 frees
+        // the slot and re-levels the pool without a LogChildExit line.
+        io_worker_test_setup();
+        let _g = SHUTDOWN_FLAGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for exitstatus in [0, 1 << 8] {
+            fresh_pm();
+            with_pm(|pm| {
+                pm.pm_state = PMState::PM_RUN;
+                pm.io_worker_children[0] =
+                    Some(PmChild { child_slot: 7, bkend_type: BackendType::IoWorker, pid: IO_WORKER_PID });
+                pm.io_worker_count = 1;
+            });
+            let logs = debug_captured(|| reap_io_worker(7, IO_WORKER_PID, exitstatus).unwrap());
+            assert!(
+                !logs.iter().any(|e| e.message.starts_with("io worker (PID")),
+                "got {:?}",
+                messages(&logs)
+            );
+            assert_eq!(with_pm(|pm| pm.io_worker_count), 0);
+            assert!(with_pm(|pm| pm.io_worker_children[0].is_none()));
+        }
+        fresh_pm();
+    }
+
+    #[test]
+    fn io_worker_surplus_is_killed_without_signal_child_diagnostic() {
+        // postmaster.c:4411: a surplus IO worker gets a bare kill(SIGUSR2),
+        // not signal_child's DEBUG3 line.
+        io_worker_test_setup();
+        let _g = SHUTDOWN_FLAGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        fresh_pm();
+        with_pm(|pm| {
+            pm.pm_state = PMState::PM_RUN;
+            for i in 0..2 {
+                pm.io_worker_children[i] = Some(PmChild {
+                    child_slot: 7 + i as i32,
+                    bkend_type: BackendType::IoWorker,
+                    pid: IO_WORKER_PID + i as pid_t,
+                });
+            }
+            pm.io_worker_count = 2;
+        });
+        let logs = debug_captured(serverloop::maybe_adjust_io_workers);
+        assert!(
+            !logs.iter().any(|e| e.message.starts_with("sending signal")),
+            "got {:?}",
+            messages(&logs)
+        );
+        fresh_pm();
+    }
+
+    #[test]
+    fn rotate_syslogger_logs_signal_child_line() {
+        // postmaster.c:3755/3760 route the rotation through signal_child,
+        // whose DEBUG3 line (:3435-3439) names the logger child.
+        let logger = PmChild { child_slot: 3, bkend_type: BackendType::Logger, pid: 616_161 };
+        let logs = debug_captured(|| rotate_syslogger(&logger));
+        let e = logs
+            .iter()
+            .find(|e| e.message.starts_with("sending signal"))
+            .unwrap_or_else(|| panic!("no signal_child line in {:?}", messages(&logs)));
+        assert_eq!(e.level, types_error::DEBUG3);
+        // The numeric value is platform-specific (10 on Linux, 30 on macOS).
+        assert_eq!(
+            e.message,
+            format!("sending signal {}/SIGUSR1 to logger process with pid 616161", libc::SIGUSR1)
+        );
+        let loc = e.location.as_ref().expect("location");
+        assert_eq!((loc.lineno, loc.funcname.as_deref()), (3439, Some("signal_child")));
+    }
+
+    #[test]
+    fn update_pm_state_reports_c_source_line() {
+        // postmaster.c:3253-3254: the elog's __LINE__ is 3254.
+        let _g = SHUTDOWN_FLAGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        fresh_pm();
+        let logs = debug_captured(|| statemachine::UpdatePMState(PMState::PM_STARTUP));
+        let e = logs
+            .iter()
+            .find(|e| e.message.starts_with("updating PMState"))
+            .unwrap_or_else(|| panic!("no UpdatePMState line in {:?}", messages(&logs)));
+        assert_eq!(e.message, "updating PMState from PM_INIT to PM_STARTUP");
+        let loc = e.location.as_ref().expect("location");
+        assert_eq!((loc.lineno, loc.funcname.as_deref()), (3254, Some("UpdatePMState")));
+        fresh_pm();
+    }
+
     #[test]
     fn start_child_fork_failure_message_matches_c() {
         // postmaster.c:3966-3968: could not fork "%s" process: %m, with
@@ -584,6 +703,60 @@ mod b032 {
             logs.iter().any(|e| e.level == LOG && e.message == expected),
             "expected {expected:?}, got {:?}",
             messages(&logs)
+        );
+    }
+
+    #[test]
+    fn bgworker_fork_failure_message_matches_c() {
+        // postmaster.c:4162: could not fork background worker process: %m
+        let logs = captured(|| statemachine::log_bgworker_fork_failure(libc::EAGAIN));
+        let expected = format!(
+            "could not fork background worker process: {}",
+            elog::errno::strerror(libc::EAGAIN)
+        );
+        assert!(
+            logs.iter().any(|e| e.level == LOG && e.message == expected),
+            "expected {expected:?}, got {:?}",
+            messages(&logs)
+        );
+    }
+
+    #[test]
+    fn external_pid_file_failures_end_in_strerror() {
+        // postmaster.c:1316-1321: both write_stderr lines end in ": %m".
+        let e = std::io::Error::from_raw_os_error(libc::ENOENT);
+        assert_eq!(
+            main_entry::external_pid_file_failure("postgres", "could not write", "/nope/pid", &e),
+            format!(
+                "postgres: could not write external PID file \"/nope/pid\": {}\n",
+                elog::errno::strerror(libc::ENOENT)
+            )
+        );
+        assert_eq!(
+            main_entry::external_pid_file_failure(
+                "postgres",
+                "could not change permissions of",
+                "/nope/pid",
+                &e
+            ),
+            format!(
+                "postgres: could not change permissions of external PID file \"/nope/pid\": {}\n",
+                elog::errno::strerror(libc::ENOENT)
+            )
+        );
+    }
+
+    #[test]
+    fn reaping_dead_processes_is_debug4() {
+        // postmaster.c:2240: DEBUG4, so log_min_messages=debug2 stays silent.
+        let prev = elog::config::log_min_messages();
+        elog::config::set_log_min_messages(types_error::DEBUG5);
+        let logs = captured(log_reaping_dead_processes);
+        elog::config::set_log_min_messages(prev);
+        assert!(
+            logs.iter().any(|e| e.level == DEBUG4 && e.message == "reaping dead processes"),
+            "got {:?}",
+            logs.iter().map(|e| (e.level, e.message.clone())).collect::<Vec<_>>()
         );
     }
 
@@ -614,4 +787,110 @@ mod b032 {
             messages(&logs)
         );
     }
+}
+
+/// postmaster.c:599 getopt(3): bundled no-argument flags (`-Fs`), inline
+/// and following option arguments, `--name=value`, `--`.
+#[test]
+fn postmaster_getopt_expands_bundled_short_options() {
+    use main_entry::{getopt_tokens, GetoptError};
+    let argv = |s: &str| s.split(' ').map(str::to_string).collect::<Vec<_>>();
+    let toks = getopt_tokens(&argv("-D dir -Fs -C log_statement_stats")).unwrap();
+    assert_eq!(
+        toks,
+        vec![
+            ('D', Some("dir".to_string())),
+            ('F', None),
+            ('s', None),
+            ('C', Some("log_statement_stats".to_string())),
+        ]
+    );
+    let toks = getopt_tokens(&argv("-p5432 -sFc work_mem=4MB --port=5 -ijD/x")).unwrap();
+    assert_eq!(
+        toks,
+        vec![
+            ('p', Some("5432".to_string())),
+            ('s', None),
+            ('F', None),
+            ('c', Some("work_mem=4MB".to_string())),
+            ('-', Some("port=5".to_string())),
+            ('i', None),
+            ('j', None),
+            ('D', Some("/x".to_string())),
+        ]
+    );
+    assert_eq!(getopt_tokens(&argv("-F --")).unwrap(), vec![('F', None)]);
+    assert_eq!(getopt_tokens(&argv("-F -- x")), Err(GetoptError::NonOption("x".to_string())));
+    assert_eq!(getopt_tokens(&argv("-F x")), Err(GetoptError::NonOption("x".to_string())));
+    assert_eq!(getopt_tokens(&argv("-")), Err(GetoptError::NonOption("-".to_string())));
+    assert_eq!(getopt_tokens(&argv("-sD")), Err(GetoptError::RequiresArgument('D')));
+    assert_eq!(getopt_tokens(&argv("-Fq")), Err(GetoptError::UnknownOption('q')));
+}
+
+/// postmaster.c:650: getopt(3) is incremental, so `-c bogus=1 -Z` fails on
+/// the unrecognized GUC before the illegal option is ever seen — the tokens
+/// ahead of the lexical failure are returned for application first.
+#[test]
+fn postmaster_getopt_keeps_tokens_ahead_of_a_lexical_failure() {
+    use main_entry::{getopt_tokens_partial, GetoptError};
+    let argv = |s: &str| s.split(' ').map(str::to_string).collect::<Vec<_>>();
+    assert_eq!(
+        getopt_tokens_partial(&argv("-D dir -c bogus=1 -Z")),
+        (
+            vec![('D', Some("dir".to_string())), ('c', Some("bogus=1".to_string()))],
+            Some(GetoptError::UnknownOption('Z'))
+        )
+    );
+    assert_eq!(
+        getopt_tokens_partial(&argv("-F -- x")),
+        (vec![('F', None)], Some(GetoptError::NonOption("x".to_string())))
+    );
+    assert_eq!(getopt_tokens_partial(&argv("-sD")), (vec![('s', None)], Some(GetoptError::RequiresArgument('D'))));
+    assert_eq!(getopt_tokens_partial(&argv("-Fs")), (vec![('F', None), ('s', None)], None));
+}
+
+/// postmaster.c:662: -d goes through atoi(), so a numeric prefix counts.
+#[test]
+fn postmaster_d_option_parses_like_atoi() {
+    use main_entry::c_atoi;
+    assert_eq!(c_atoi("2junk"), 2);
+    assert_eq!(c_atoi(" 5"), 5);
+    assert_eq!(c_atoi("-3"), -3);
+    assert_eq!(c_atoi("junk"), 0);
+    assert_eq!(c_atoi(""), 0);
+    assert_eq!(c_atoi("99999999999"), i32::MAX);
+}
+
+/// postmaster.c:599 getopt(3) diagnostics (libc names argv[0] verbatim) and
+/// the help hint that follows every option error (:754-758 for a stray
+/// argument); progname is get_progname(argv[0]).
+#[test]
+fn postmaster_getopt_failure_messages_match_c() {
+    use main_entry::{getopt_failure_message, GetoptError};
+    let argv0 = "/usr/local/pgsql/bin/pgx";
+    assert_eq!(
+        getopt_failure_message(argv0, "pgx", &GetoptError::UnknownOption('q')),
+        "/usr/local/pgsql/bin/pgx: illegal option -- q\nTry \"pgx --help\" for more information.\n"
+    );
+    assert_eq!(
+        getopt_failure_message(argv0, "pgx", &GetoptError::RequiresArgument('D')),
+        "/usr/local/pgsql/bin/pgx: option requires an argument -- D\nTry \"pgx --help\" for more information.\n"
+    );
+    assert_eq!(
+        getopt_failure_message(argv0, "pgx", &GetoptError::NonOption("x".to_string())),
+        "pgx: invalid argument: \"x\"\nTry \"pgx --help\" for more information.\n"
+    );
+}
+
+/// postmaster.c:880-897 dumps environ byte-for-byte; a non-UTF-8 entry must
+/// not abort the boot.
+#[test]
+fn environment_dump_tolerates_non_utf8_entries() {
+    use std::os::unix::ffi::OsStrExt;
+    let key = "PGRUST_TEST_BATCH149_BADENV";
+    std::env::set_var(key, std::ffi::OsStr::from_bytes(b"a\xff\xfeb"));
+    let dump = main_entry::environment_dump();
+    std::env::remove_var(key);
+    assert!(dump.starts_with("initial environment dump:\n"), "{dump:?}");
+    assert!(dump.contains(&format!("\n{key}=a\u{fffd}\u{fffd}b")), "{dump:?}");
 }

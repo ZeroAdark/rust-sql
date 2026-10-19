@@ -69,6 +69,17 @@ fn fastpath_groups_default_is_four() {
 }
 
 #[test]
+fn fastpath_groups_unsigned_nextpower2_before_clamp() {
+    assert_eq!(fast_path_lock_groups(10), 1);
+    assert_eq!(fast_path_lock_groups(64), 4);
+    assert_eq!(fast_path_lock_groups(65), 8);
+    assert_eq!(fast_path_lock_groups(16384), 1024);
+    assert_eq!(fast_path_lock_groups(1073741824), 1024);
+    assert_eq!(fast_path_lock_groups(1073741825), 1024);
+    assert_eq!(fast_path_lock_groups(i32::MAX), 1024);
+}
+
+#[test]
 fn initialize_max_backends_sums_and_gates() {
     install_test_gucs();
     // Boot values: 100 + 16 + 16 + 10 + 2 (max_connections + autovacuum_worker_slots

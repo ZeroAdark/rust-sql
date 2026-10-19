@@ -276,12 +276,15 @@ pub(crate) fn ATExecAttachPartition<'mcx>(
         .expect("PartitionBoundSpec");
 
     let key = partcache::RelationGetPartitionKey(rel)?;
+    // partbounds.c:2900/4303 read the parent with omit_detached=false: a
+    // pending-detach partition still overlaps and still bounds the DEFAULT.
+    let pdesc_all = partdesc::RelationGetPartitionDesc(rel, false)?;
     partbounds::check_new_partition_bound(
         mcx,
         attachrel.name(),
         &key,
-        pdesc.boundinfo.as_ref(),
-        &pdesc.oids,
+        pdesc_all.boundinfo.as_ref(),
+        &pdesc_all.oids,
         spec,
         Some(query_string.as_bytes()),
     )?;
@@ -299,8 +302,8 @@ pub(crate) fn ATExecAttachPartition<'mcx>(
         mcx,
         &key,
         rel.rd_id,
-        pdesc.boundinfo.as_ref(),
-        &pdesc.oids,
+        pdesc_all.boundinfo.as_ref(),
+        &pdesc_all.oids,
         spec,
     )?;
 

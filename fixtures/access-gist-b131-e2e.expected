@@ -5,7 +5,7 @@
 CREATE DATABASE b131e2e TEMPLATE template0 ENCODING 'UTF8';
 \c b131e2e
 \set VERBOSITY verbose
--- fp-gist-gistget#1: an index-only scan hands back the fetched value in its
+-- regression: an index-only scan hands back the fetched value in its
 -- original (uncompressed) form, as C's gistFetchTuple heap_form_tuple does.
 CREATE EXTENSION btree_gist;
 CREATE TABLE b131_t(x text);
@@ -50,7 +50,7 @@ RESET enable_seqscan;
 RESET enable_bitmapscan;
 DROP TABLE b131_t;
 DROP TABLE b131_t2;
--- fp-gist-b1#1: an open GiST scan owns a "GiST scan context" under
+-- regression: an open GiST scan owns a "GiST scan context" under
 -- ExecutorState with the temporary context, the page data context (index-only
 -- scans) and, from the second rescan on, the queue context as children.
 CREATE TABLE b131_p(p point, v int);

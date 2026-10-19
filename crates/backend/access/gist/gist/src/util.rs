@@ -7,7 +7,7 @@ use ::mcx::{Mcx, PgVec};
 use ::nbtree::itup::{index_form_tuple, index_getattr, maxalign, ItupBuf};
 use ::types_core::{
     AttrNumber, BlockNumber, ForkNumber, InvalidBlockNumber, OffsetNumber,
-    XLogRecPtr, BLCKSZ, RELPERSISTENCE_TEMP,
+    XLogRecPtr, RELPERSISTENCE_TEMP,
 };
 use ::types_error::{PgError, PgResult, ERRCODE_INDEX_CORRUPTED, ERRCODE_INTERNAL_ERROR};
 use ::types_gist::{
@@ -160,7 +160,7 @@ pub fn gistcheckpage(rel: &Relation<'_>, pin: &BufferPin) -> PgResult<()> {
             pin.block_number()
         )));
     }
-    if BLCKSZ - page.pd_special() as usize != ::types_gist::SizeOfGistPageOpaque {
+    if page.special_size() as usize != ::types_gist::SizeOfGistPageOpaque {
         return Err(index_corrupted(format!(
             "index \"{}\" contains corrupted page at block {}",
             rel.name(),
@@ -756,6 +756,7 @@ pub fn gistPageRecyclable(page: &PageRef<'_>) -> PgResult<bool> {
 #[cfg(test)]
 mod page_recyclable_tests {
     use super::*;
+    use ::types_core::BLCKSZ;
     use ::types_core::xact::FullTransactionId;
     use ::types_storage::bufpage::PageMut;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -806,6 +807,7 @@ mod page_recyclable_tests {
 #[cfg(test)]
 mod copy_page_item_tests {
     use super::*;
+    use ::types_core::BLCKSZ;
     use ::mcx::MemoryContext;
     use ::types_storage::bufpage::PageMut;
 

@@ -36,15 +36,15 @@ fn division_by_zero() -> PgError {
 
 #[cold]
 #[inline(never)]
-fn value_out_of_range_err(input: &str) -> PgError {
-    PgError::error(format!("value \"{input}\" is out of range for type money"))
+fn value_out_of_range_err(input: &[u8]) -> PgError {
+    PgError::error_bytes("value \"", input, "\" is out of range for type money")
         .with_sqlstate(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE)
 }
 
 #[cold]
 #[inline(never)]
-fn invalid_syntax_err(input: &str) -> PgError {
-    PgError::error(format!("invalid input syntax for type money: \"{input}\""))
+fn invalid_syntax_err(input: &[u8]) -> PgError {
+    PgError::error_bytes("invalid input syntax for type money: \"", input, "\"")
         .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
 }
 
@@ -85,7 +85,8 @@ fn nonempty_or(sym: &'static [u8], default: &'static [u8]) -> &'static [u8] {
     }
 }
 
-pub fn cash_in(str: &str, escontext: Option<&mut SoftErrorContext>) -> PgResult<Cash> {
+pub fn cash_in(str: impl AsRef<[u8]>, escontext: Option<&mut SoftErrorContext>) -> PgResult<Cash> {
+    let str = str.as_ref();
     let lconvert = pglc_localeconv()?;
     let fpoint = clamp_fpoint(lconvert);
     let dsymbol = dsymbol_of(lconvert);
@@ -94,7 +95,7 @@ pub fn cash_in(str: &str, escontext: Option<&mut SoftErrorContext>) -> PgResult<
     let psymbol = nonempty_or(lconvert.positive_sign, b"+");
     let nsymbol = nonempty_or(lconvert.negative_sign, b"-");
 
-    let b = str.as_bytes();
+    let b = str;
     let mut i = 0usize;
     let mut sgn: i64 = 1;
 

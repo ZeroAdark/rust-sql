@@ -10,6 +10,8 @@ use crate::{loc, CONF_FILE_MAX_DEPTH};
 pub struct FileHandle {
     pub content: Vec<u8>,
     pub depth: i32,
+    // errno of the read failure that ended the content (C: ferror(file)).
+    pub read_errno: Option<i32>,
 }
 
 #[inline]
@@ -101,6 +103,7 @@ pub(crate) fn make_auth_token(token: &[u8], quoted: bool) -> AuthToken {
         quoted,
         regex: false,
         lossy,
+        raw: lossy.then(|| token.to_vec()),
     }
 }
 
@@ -127,7 +130,10 @@ pub(crate) fn regcomp_auth_token(
         return Ok(0); // nothing to compile
     }
 
-    let pattern = &token.string.as_bytes()[1..];
+    // C compiles the file bytes (pg_mb2wchar_with_len over token->string + 1);
+    // at authentication time the encoding is SQL_ASCII, so a non-UTF-8
+    // pattern byte is one code point that matches the same identity byte.
+    let pattern = &crate::token_bytes(token)[1..];
     let cx = mcx::MemoryContext::new("regcomp_auth_token");
     let wstr = mbutils_seams::pg_mb2wchar_with_len::call(cx.mcx(), pattern)?;
     match regex_core_seams::pg_regcomp::call(&wstr, REG_ADVANCED, types_core::catalog::C_COLLATION_OID)? {
@@ -158,8 +164,10 @@ pub(crate) fn regcomp_auth_token(
 
 // regexec_auth_token (hba.c:348): Ok(true) = match, Ok(false) = REG_NOMATCH,
 // Err(msg) = hard regexec failure (the caller raises its own ereport).
+// `matchstr` is the identity's bytes (C: const char *match, strlen'd into
+// pg_wchars): a non-UTF-8 system user matches the pattern byte for byte.
 pub(crate) fn regexec_auth_token(
-    matchstr: &str,
+    matchstr: &[u8],
     token: &AuthToken,
     pmatch: &mut [::regex::RegMatch],
 ) -> PgResult<Result<bool, String>> {
@@ -167,8 +175,7 @@ pub(crate) fn regexec_auth_token(
 
     debug_assert!(token.regex && token.string.starts_with('/'));
     let cx = mcx::MemoryContext::new("regexec_auth_token");
-    let wpat =
-        mbutils_seams::pg_mb2wchar_with_len::call(cx.mcx(), &token.string.as_bytes()[1..])?;
+    let wpat = mbutils_seams::pg_mb2wchar_with_len::call(cx.mcx(), &crate::token_bytes(token)[1..])?;
     // Recompile of a parse-validated pattern (see regcomp_auth_token). C
     // executes the stored regex_t and cannot fail here; a recompile
     // refusal (engine state diverged since parse time) is surfaced as a
@@ -181,7 +188,7 @@ pub(crate) fn regexec_auth_token(
         RegcompResult::Compiled(re) => re,
         RegcompResult::Failed(f) => return Ok(Err(f.message)),
     };
-    let wstr = mbutils_seams::pg_mb2wchar_with_len::call(cx.mcx(), matchstr.as_bytes())?;
+    let wstr = mbutils_seams::pg_mb2wchar_with_len::call(cx.mcx(), matchstr)?;
     let result = match regex_core_seams::pg_regexec::call(&re, &wstr, 0, pmatch)? {
         RegexecResult::Matched => Ok(true),
         RegexecResult::NoMatch => Ok(false),
@@ -209,8 +216,14 @@ pub fn open_auth_file(
         return Ok(None);
     }
 
-    match std::fs::read(filename) {
-        Ok(content) => Ok(Some(FileHandle { content, depth })),
+    match std::fs::File::open(filename) {
+        Ok(mut file) => {
+            let mut content = Vec::new();
+            let read_errno = std::io::Read::read_to_end(&mut file, &mut content)
+                .err()
+                .map(|e| e.raw_os_error().unwrap_or(0));
+            Ok(Some(FileHandle { content, depth, read_errno }))
+        }
         Err(e) => {
             let errno = e.raw_os_error().unwrap_or(0);
             ereport(elevel)

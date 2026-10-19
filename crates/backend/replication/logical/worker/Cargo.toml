@@ -67,6 +67,7 @@ heapam = { path = "../../../access/heap/heapam" }
 nodemodifytable = { path = "../../../executor/nodemodifytable" }
 origin = { path = "../../origin" }
 pg_inherits = { path = "../../../catalog/pg_inherits" }
+resowner = { path = "../../../utils/resowner/resowner" }
 relcache = { path = "../../../utils/cache/relcache" }
 trigger = { path = "../../../commands/trigger" }
 types_trigger = { path = "../../../../_support/types/types_trigger" }

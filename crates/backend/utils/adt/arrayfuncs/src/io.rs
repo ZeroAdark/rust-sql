@@ -506,16 +506,12 @@ fn read_array_str<'mcx>(
             }
             ArrayTok::Delim => {
                 if !expect_delim {
-                    return soft(
-                        escontext,
-                        malformed(
-                            orig,
-                            &alloc::format!(
-                                "Unexpected \"{}\" character.",
-                                meta.typdelim as char
-                            ),
-                        ),
-                    );
+                    // arrayfuncs.c:704 errdetail %c emits the single raw
+                    // typdelim byte (DELIMITER is not restricted to ASCII).
+                    let mut detail = b"Unexpected \"".to_vec();
+                    detail.push(meta.typdelim as u8);
+                    detail.extend_from_slice(b"\" character.");
+                    return soft(escontext, malformed(orig, "").with_detail_raw(detail));
                 }
                 expect_delim = false;
             }

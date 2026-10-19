@@ -196,7 +196,18 @@ fn GetColumnDefCollationPos(
     let result = if let Some(cc) = coldef.collClause {
         let cc = cc.as_collate_clause().expect("CollateClause");
         location = cc.location;
-        catalog_namespace::get_collation_oid_list(&cc.collname, false)?
+        catalog_namespace::get_collation_oid_list(&cc.collname, false).map_err(|e| {
+            let pos = parser_small1::parser_errposition_source(
+                source,
+                location,
+                mbutils::GetDatabaseEncoding(),
+            );
+            if pos > 0 {
+                Box::new(e.with_cursor_position(pos))
+            } else {
+                e
+            }
+        })?
     } else if coldef.collOid != types_core::InvalidOid {
         coldef.collOid
     } else {
@@ -419,17 +430,7 @@ pub fn DefineRelation<'mcx>(
     let inherit_oids = inheritance::lookup_inherit_oids(mcx, stmt, parent_lockmode)?;
     let parent_oid = if stmt.partbound.is_some() {
         assert_eq!(inherit_oids.len(), 1);
-        // tablecmds.c MergeAttributes: object_ownercheck(RelationRelationId,
-        // parent) applies to PARTITION OF exactly as to INHERITS.
-        let parent = inherit_oids[0];
-        if !aclchk::object_ownercheck(types_core::RELATION_RELATION_ID, parent, miscinit::GetUserId())? {
-            let relkind = lsyscache::get_rel_relkind(parent)?;
-            let relname = lsyscache::get_rel_name(mcx, parent)?
-                .map(|n| n.as_str().to_owned())
-                .unwrap_or_default();
-            aclchk::aclcheck_error(aclchk::ACLCHECK_NOT_OWNER, get_relkind_objtype(relkind as u8), &relname)?;
-        }
-        Some(parent)
+        Some(inherit_oids[0])
     } else {
         None
     };
@@ -678,6 +679,19 @@ pub fn DefineRelation<'mcx>(
                     .with_sqlstate(types_error::ERRCODE_WRONG_OBJECT_TYPE),
                 ));
             }
+            // tablecmds.c:2745 MergeAttributes: object_ownercheck(RelationRelationId,
+            // parent) applies to PARTITION OF exactly as to INHERITS.
+            if !aclchk::object_ownercheck(
+                types_core::RELATION_RELATION_ID,
+                parent_oid,
+                miscinit::GetUserId(),
+            )? {
+                aclchk::aclcheck_error(
+                    aclchk::ACLCHECK_NOT_OWNER,
+                    get_relkind_objtype(parent.rd_rel.relkind as u8),
+                    parent.name(),
+                )?;
+            }
             // newattmap: parent attno (1-based) -> child attno, 0 for
             // dropped parent columns (C MergeAttributes newattmap).
             let mut newattmap: mcx::PgVec<'mcx, AttrNumber> =
@@ -796,6 +810,7 @@ pub fn DefineRelation<'mcx>(
                 }
                 let j = child_attno as usize - 1;
                 let att = desc.attr_mut(j);
+                att.attndims = 0;
                 att.attnotnull = parent_att.attnotnull;
                 att.attgenerated = parent_att.attgenerated;
                 // Partitions are an integral part of the parent and inherit
@@ -1016,35 +1031,27 @@ pub fn DefineRelation<'mcx>(
     // C StoreConstraints runs inside heap_create_with_catalog: inherited
     // cooked CHECKs, generation expressions and cooked column defaults land
     // before pg_inherits rows.
+    let mut stored_defaults: mcx::PgVec<'mcx, (AttrNumber, types_nodes::Node<'mcx>)> =
+        mcx::PgVec::new_in(mcx);
     if let Some(m) = &merged {
-        inheritance::store_inherited_checks(mcx, relation_id, &m.checks)?;
-        if !m.gendefs.is_empty() {
-            xact::CommandCounterIncrement()?;
-            let rel = table::table_open(mcx, relation_id, types_rel::NoLock)?;
-            for &(attnum, expr) in m.gendefs.iter() {
-                pg_attrdef::StoreAttrDefault(mcx, &rel, attnum, expr, false)?;
-            }
-            table::table_close(rel, types_rel::NoLock)?;
-        }
+        stored_defaults.extend(m.gendefs.iter().copied());
     }
-    if !cooked_defaults.is_empty() {
+    stored_defaults.extend(cooked_defaults.iter().copied());
+    stored_defaults.extend(partition_gendefs.iter().copied());
+    stored_defaults.sort_by_key(|&(attnum, _)| attnum);
+    if !stored_defaults.is_empty() {
         xact::CommandCounterIncrement()?;
         let rel = table::table_open(mcx, relation_id, types_rel::NoLock)?;
-        for &(attnum, expr) in cooked_defaults.iter() {
+        for &(attnum, expr) in stored_defaults.iter() {
             pg_attrdef::StoreAttrDefault(mcx, &rel, attnum, expr, false)?;
         }
         table::table_close(rel, types_rel::NoLock)?;
+    }
+    if let Some(m) = &merged {
+        inheritance::store_inherited_checks(mcx, relation_id, &m.checks)?;
     }
     if !partition_checks.is_empty() {
         inheritance::store_inherited_checks(mcx, relation_id, &partition_checks)?;
-    }
-    if !partition_gendefs.is_empty() {
-        xact::CommandCounterIncrement()?;
-        let rel = table::table_open(mcx, relation_id, types_rel::NoLock)?;
-        for &(attnum, expr) in partition_gendefs.iter() {
-            pg_attrdef::StoreAttrDefault(mcx, &rel, attnum, expr, false)?;
-        }
-        table::table_close(rel, types_rel::NoLock)?;
     }
 
     // Cook raw column DEFAULT and GENERATED expressions BEFORE processing the
@@ -1109,12 +1116,15 @@ pub fn DefineRelation<'mcx>(
             let spec = bound
                 .as_variant::<types_nodes::rawnodes::PartitionBoundSpec>()
                 .expect("PartitionBoundSpec");
+            // partbounds.c:2900 builds its own descriptor with
+            // omit_detached=false: a pending-detach partition still overlaps.
+            let pdesc_all = partdesc::RelationGetPartitionDesc(&parent, false)?;
             partbounds::check_new_partition_bound(
                 mcx,
                 relname,
                 &key,
-                pdesc.boundinfo.as_ref(),
-                &pdesc.oids,
+                pdesc_all.boundinfo.as_ref(),
+                &pdesc_all.oids,
                 spec,
                 Some(query_string.as_bytes()),
             )?;

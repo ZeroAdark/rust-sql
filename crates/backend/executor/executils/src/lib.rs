@@ -200,6 +200,7 @@ pub fn with_subplan_compile_env_parent<'mcx, R>(
             agg: None,
             rtable: Some(rtable),
             parent_subplan_tlist,
+            errpos: Some(executor_errposition_erased),
         }
     });
     f(env)
@@ -512,6 +513,10 @@ pub fn exec_eval_expr_with_subplans_outer_slot<'mcx>(
     ecxt: EcxtId,
     outer: ExecSlotId,
 ) -> PgResult<::datum::NullableDatum> {
+    // Key evaluation runs in the per-tuple context (C MJEvalOuterValues /
+    // ExecHashGetHashValue switch to ecxt_per_tuple_memory).
+    // SAFETY: the per-tuple context object outlives the plan (reset-only).
+    unsafe { state.arm_result_mcx_raw(estate.ecxt(ecxt).per_tuple_mcx()) };
     let mut resume: Option<execexpr::Resume> = None;
     loop {
         let outcome = {
@@ -540,6 +545,8 @@ pub fn exec_eval_expr_with_subplans_inner_slot<'mcx>(
     ecxt: EcxtId,
     inner: ExecSlotId,
 ) -> PgResult<::datum::NullableDatum> {
+    // SAFETY: the per-tuple context object outlives the plan (reset-only).
+    unsafe { state.arm_result_mcx_raw(estate.ecxt(ecxt).per_tuple_mcx()) };
     let mut resume: Option<execexpr::Resume> = None;
     loop {
         let outcome = {
@@ -635,13 +642,16 @@ mcx::forget_safe_struct!(TrigInstrName<'_> { tgname, tgconstraint });
 pub struct ResultRelTrigInstr<'mcx> {
     pub relid: ::types_core::Oid,
     pub kind: TrigInstrRelKind,
+    /// ri_RootResultRelInfo != NULL: never matched by the after-trigger
+    /// queue's rootRelInfo = NULL lookup (execMain.c:1368-1389).
+    pub root: bool,
     pub relname: ::mcx::PgString<'mcx>,
     pub triggers: PgVec<'mcx, TrigInstrName<'mcx>>,
     pub instr: PgVec<'mcx, Instrumentation>,
 }
 // SAFETY: instr is an arena PgVec of the no-drop Copy Instrumentation (the
 // es_instrumentation exemption below) — exempt.
-mcx::forget_safe_struct!(ResultRelTrigInstr<'_> { relid, kind, relname, triggers; instr });
+mcx::forget_safe_struct!(ResultRelTrigInstr<'_> { relid, kind, root, relname, triggers; instr });
 
 impl<'mcx> ResultRelTrigInstr<'mcx> {
     /// InitResultRelInfo's trigger-instrumentation leg (execMain.c:1263-1274)
@@ -651,6 +661,7 @@ impl<'mcx> ResultRelTrigInstr<'mcx> {
         mcx: Mcx<'mcx>,
         instrument_options: i32,
         kind: TrigInstrRelKind,
+        root: bool,
         relid: ::types_core::Oid,
         relname: &str,
         trigdesc: Option<&::types_trigger::TriggerDesc<'_>>,
@@ -677,6 +688,7 @@ impl<'mcx> ResultRelTrigInstr<'mcx> {
         Ok(ResultRelTrigInstr {
             relid,
             kind,
+            root,
             relname: ::mcx::PgString::from_str_in(relname, mcx)?,
             triggers,
             instr,
@@ -955,6 +967,9 @@ pub struct EStateData<'mcx> {
     pub es_sort_instrumentation: PgVec<'mcx, (i32, TuplesortInstrumentation)>,
     pub es_incsort_instrumentation: PgVec<'mcx, (i32, IncrementalSortInfo)>,
     pub es_hash_instrumentation: PgVec<'mcx, (i32, HashInstrumentation)>,
+    /// (rti, ri_BatchSize) per foreign INSERT result relation
+    /// (nodeModifyTable.c:5229), read back by EXPLAIN ANALYZE.
+    pub es_fdw_batch_sizes: PgVec<'mcx, (u32, i32)>,
     /// (plan_node_id, nsearches); C's IndexScanInstrumentation, hoisted.
     pub es_index_instrumentation: PgVec<'mcx, (i32, u64)>,
     /// (plan_node_id, stats); C's BitmapHeapScanState.stats, hoisted for the
@@ -972,6 +987,7 @@ pub struct EStateData<'mcx> {
     /// C es_subplanstates[i]->chgParam: pending initplan rescans, applied
     /// at ExecSetParamPlan's first ExecProcNode.
     pub es_subplan_chg: PgVec<'mcx, ::types_nodes::bitmapset::Bitmapset<'mcx>>,
+    pub es_rescan_chg_scratch: PgVec<'mcx, ::types_nodes::bitmapset::Bitmapset<'mcx>>,
     /// Raw ParallelContext ids this executor created and has not destroyed
     /// (ExecData's abort-path drop joins exactly these workers).
     pub es_parallel_pcxts: PgVec<'mcx, u64>,
@@ -983,6 +999,11 @@ pub struct EStateData<'mcx> {
     /// Droppy SubPlan expr states: explicit take+drop at executor end.
     pub es_subplan_expr_states:
         PgVec<'mcx, (core::ptr::NonNull<()>, unsafe fn(core::ptr::NonNull<()>))>,
+    /// Sorted `(paramid << 32) | state index` over every state's allParam,
+    /// covering the first `es_subplan_param_indexed` states: a rescan visits
+    /// only the SubPlans its changed params reach, not all of them.
+    pub es_subplan_param_index: PgVec<'mcx, u64>,
+    pub es_subplan_param_indexed: usize,
     /// cteParam -> shared CTE state; the leader installs, followers replay.
     pub es_cte_shared: PgVec<'mcx, Option<CteShared>>,
     pub es_worktable_shared: PgVec<'mcx, Option<WorkTableShared>>,
@@ -993,7 +1014,7 @@ pub struct EStateData<'mcx> {
     es_per_tuple_exprcontext: Option<EcxtId>,
     pub es_sourceText: Option<&'mcx str>,
     pub es_use_parallel_mode: bool,
-    /// GL-FIXCOUNT-2: this execution's plan tree HAS been parallel-wired —
+    /// regression: this execution's plan tree HAS been parallel-wired —
     /// some scan node received its shared `ParallelTableScanDescShared`
     /// through `ExecParallelInitializeDSM` (leader) or
     /// `ExecParallelInitializeWorker` (worker). Published by the scan-node
@@ -1046,7 +1067,7 @@ pub struct EStateData<'mcx> {
     /// structurally unaffected. Default false (EPQ/worker estates stay on
     /// the slow path).
     pub es_lane_leaf_fast: bool,
-    /// GL-ROWMODE-1: per-execution dedup bitmask for the row-mode OWNED
+    /// regression: per-execution dedup bitmask for the row-mode OWNED
     /// engagement trace (bit = lanev2 ShapeClass discriminant; bit 63 is the
     /// instrumented-execution note). The OWNED verdict/tick cadence is per
     /// pull (row-mode law §3.3) and stays per pull — but the TRACE line is
@@ -1396,6 +1417,7 @@ impl<'mcx> EStateData<'mcx> {
             es_sort_instrumentation: PgVec::new_in(mcx),
             es_incsort_instrumentation: PgVec::new_in(mcx),
             es_hash_instrumentation: PgVec::new_in(mcx),
+            es_fdw_batch_sizes: PgVec::new_in(mcx),
             es_index_instrumentation: PgVec::new_in(mcx),
             es_bitmap_instrumentation: PgVec::new_in(mcx),
             es_worker_instrument: PgVec::new_in(mcx),
@@ -1404,12 +1426,15 @@ impl<'mcx> EStateData<'mcx> {
             es_exprcontexts: PgVec::new_in(mcx),
             es_subplanstates: PgVec::new_in(mcx),
             es_subplan_chg: PgVec::new_in(mcx),
+            es_rescan_chg_scratch: PgVec::new_in(mcx),
             es_parallel_pcxts: PgVec::new_in(mcx),
             es_param_subplans: PgVec::new_in(mcx),
             es_subplan_hook: None,
             es_subplan_init_hook: None,
             es_subplan_eval_hook: None,
             es_subplan_expr_states: PgVec::new_in(mcx),
+            es_subplan_param_index: PgVec::new_in(mcx),
+            es_subplan_param_indexed: 0,
             es_cte_shared: PgVec::new_in(mcx),
             es_worktable_shared: PgVec::new_in(mcx),
             es_cte_proc_hook: None,
@@ -1460,6 +1485,7 @@ impl<'mcx> EStateData<'mcx> {
             // Portal-registered lists are materialized images (params.rs
             // Entry::hooked): no paramCompile hook rides with them.
             param_callback: None,
+            param_expanded: None,
         }
     }
 
@@ -1846,6 +1872,7 @@ impl<'mcx> EStateData<'mcx> {
     pub fn register_trig_instrument(
         &mut self,
         kind: TrigInstrRelKind,
+        root: bool,
         relid: ::types_core::Oid,
         relname: &str,
         trigdesc: Option<&::types_trigger::TriggerDesc<'_>>,
@@ -1857,6 +1884,7 @@ impl<'mcx> EStateData<'mcx> {
             self.es_query_cxt,
             self.es_instrument,
             kind,
+            root,
             relid,
             relname,
             trigdesc,
@@ -1867,8 +1895,11 @@ impl<'mcx> EStateData<'mcx> {
 
     /// ExecGetTriggerResultRel's search (execMain.c:1372-1420): the first
     /// registered result relation for `relid`, in C's list order.
+    /// ExecGetTriggerResultRel's lookup with rootRelInfo = NULL
+    /// (execMain.c:1368-1389): a child result relation carrying
+    /// ri_RootResultRelInfo never matches.
     pub fn trig_instrument_index(&self, relid: ::types_core::Oid) -> Option<usize> {
-        self.es_trig_instrument.iter().position(|e| e.relid == relid)
+        self.es_trig_instrument.iter().position(|e| e.relid == relid && !e.root)
     }
 
     // ExecCloseResultRelations index/trigger lanes are loud upstream.
@@ -1972,7 +2003,7 @@ mcx::forget_safe_struct!(
         es_trig_target_relations, es_insert_pending_result_relations,
         es_param_list_info, es_param_list_hooked, es_param_stable, es_queryEnv, es_processed,
         es_total_processed, es_direct_returning_slot,
-        es_top_eflags, es_instrument, es_finished, es_subplanstates, es_subplan_chg, es_parallel_pcxts,
+        es_top_eflags, es_instrument, es_finished, es_subplanstates, es_subplan_chg, es_subplan_param_index, es_subplan_param_indexed, es_rescan_chg_scratch, es_parallel_pcxts,
         es_param_subplans, es_per_tuple_exprcontext,
         es_sourceText, es_use_parallel_mode, es_parallel_scan_wired,
         es_parallel_workers_to_launch,
@@ -2001,7 +2032,7 @@ mcx::forget_safe_struct!(
         es_runtime_ea_pipelines, es_engine_events,
         es_agg_instrumentation,
         es_sort_instrumentation, es_incsort_instrumentation,
-        es_hash_instrumentation, es_index_instrumentation,
+        es_hash_instrumentation, es_fdw_batch_sizes, es_index_instrumentation,
         es_bitmap_instrumentation, es_worker_instrument,
         es_subplan_hook, es_subplan_init_hook,
         es_subplan_eval_hook, es_subplan_expr_states, es_cte_proc_hook,
@@ -2071,6 +2102,14 @@ impl<'mcx> core::ops::DerefMut for StandaloneExprContext<'mcx> {
     fn deref_mut(&mut self) -> &mut ExprContextData<'mcx> {
         &mut self.0
     }
+}
+
+/// [`executor_errposition`] over a `SubplanCompileEnv`'s erased estate.
+pub fn executor_errposition_erased(estate: core::ptr::NonNull<()>, location: i32) -> i32 {
+    // SAFETY: the env's estate is a live EStateData for the whole compile
+    // (with_subplan_compile_env / ExecInitSubPlan), read-only here.
+    let es = unsafe { estate.cast::<EStateData<'_>>().as_ref() };
+    executor_errposition(Some(es), location)
 }
 
 /// `executor_errposition`: 1-based char position for errposition(), else 0.

@@ -12,7 +12,7 @@ use crate::public::{DictSubState, TsLexeme};
 //   deserialize_deflist (int_value Some iff C made a T_Integer node).
 pub struct DictInitData<'mcx> {
     pub mcx: Mcx<'mcx>,
-    pub dict_options: PgVec<'mcx, (PgVec<'mcx, u8>, PgVec<'mcx, u8>)>,
+    pub dict_options: PgVec<'mcx, (PgVec<'mcx, u8>, Option<PgVec<'mcx, u8>>)>,
     pub int_options: PgVec<'mcx, Option<i64>>,
     // Set by the init method when its state owns anything outside `mcx`
     // (compiled regexes, Rc handles, stemmer envs). The entry owner runs it on
@@ -26,7 +26,7 @@ pub type DictDropFn = unsafe fn(usize);
 impl<'mcx> DictInitData<'mcx> {
     pub fn new(
         mcx: Mcx<'mcx>,
-        dict_options: PgVec<'mcx, (PgVec<'mcx, u8>, PgVec<'mcx, u8>)>,
+        dict_options: PgVec<'mcx, (PgVec<'mcx, u8>, Option<PgVec<'mcx, u8>>)>,
         int_options: PgVec<'mcx, Option<i64>>,
     ) -> Self {
         DictInitData { mcx, dict_options, int_options, drop_fn: Cell::new(None) }
@@ -52,7 +52,28 @@ pub unsafe fn lexize_result_ref<'a>(addr: usize) -> Option<&'a LexizeResult<'a>>
     }
 }
 
-pub fn def_get_boolean(name: &[u8], value: &[u8], int_value: Option<i64>) -> PgResult<bool> {
+// defGetString (define.c:36): the value is read only when the init method
+// asks for it, so a valueless option fails where C's does.
+pub fn def_get_string<'a>(name: &[u8], value: &'a Option<PgVec<'_, u8>>) -> PgResult<&'a [u8]> {
+    match value {
+        Some(v) => Ok(v.as_slice()),
+        None => Err(PgError::error(format!(
+            "{} requires a parameter",
+            String::from_utf8_lossy(name)
+        ))
+        .with_sqlstate(ERRCODE_SYNTAX_ERROR)
+        .into()),
+    }
+}
+
+pub fn def_get_boolean(
+    name: &[u8],
+    value: Option<&[u8]>,
+    int_value: Option<i64>,
+) -> PgResult<bool> {
+    let Some(value) = value else {
+        return Ok(true);
+    };
     match int_value {
         Some(0) => return Ok(false),
         Some(1) => return Ok(true),

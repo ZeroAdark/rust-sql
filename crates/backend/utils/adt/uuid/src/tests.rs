@@ -609,3 +609,14 @@ fn uuid_out_results_do_not_alias_across_fmgrinfos() {
     assert_eq!(cs(d1), b"00000000-0000-0000-0000-000000000001");
     assert_eq!(cs(d2), b"00000000-0000-0000-0000-000000000002");
 }
+
+// uuid.c:193 quotes the input bytes verbatim (SQL_ASCII high bytes).
+#[test]
+fn invalid_input_message_keeps_non_utf8_bytes() {
+    let err = uuid_in(b"\xff", None).unwrap_err();
+    assert_eq!(err.message_raw.as_deref(), Some(&b"invalid input syntax for type uuid: \"\xff\""[..]));
+    assert_eq!(err.sqlstate(), ERRCODE_INVALID_TEXT_REPRESENTATION);
+    let err = uuid_in(b"zz", None).unwrap_err();
+    assert_eq!(err.message(), "invalid input syntax for type uuid: \"zz\"");
+    assert!(err.message_raw.is_none());
+}

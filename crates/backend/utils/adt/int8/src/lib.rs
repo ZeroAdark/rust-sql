@@ -8,7 +8,7 @@ mod tests;
 
 use alloc::boxed::Box;
 
-use ::numutils::{pg_lltoa, pg_strtoint64_safe};
+use ::numutils::{pg_lltoa, pg_strtoint64_safe_bytes};
 use ::types_error::{
     PgError, PgResult, SoftErrorContext, ERRCODE_DIVISION_BY_ZERO,
     ERRCODE_INVALID_PARAMETER_VALUE, ERRCODE_INVALID_PRECEDING_OR_FOLLOWING_SIZE,
@@ -86,11 +86,14 @@ fn oid_out_of_range(line: i32, funcname: &'static str) -> Box<PgError> {
     out_of_range("OID out of range", line, funcname)
 }
 
-#[track_caller]
 #[cold]
 #[inline(never)]
-fn division_by_zero() -> Box<PgError> {
-    Box::new(PgError::error("division by zero").with_sqlstate(ERRCODE_DIVISION_BY_ZERO))
+fn division_by_zero(line: i32, funcname: &'static str) -> Box<PgError> {
+    Box::new(
+        PgError::error("division by zero")
+            .with_sqlstate(ERRCODE_DIVISION_BY_ZERO)
+            .with_location("int8.c", line, funcname),
+    )
 }
 
 #[track_caller]
@@ -117,8 +120,8 @@ fn float4_fits_in_int64(num: f32) -> bool {
     num >= min && num < -min
 }
 
-pub fn int8in(num: &str, escontext: Option<&mut SoftErrorContext>) -> PgResult<i64> {
-    pg_strtoint64_safe(num, escontext)
+pub fn int8in(num: impl AsRef<[u8]>, escontext: Option<&mut SoftErrorContext>) -> PgResult<i64> {
+    pg_strtoint64_safe_bytes(num.as_ref(), escontext)
 }
 
 // Encodes into the caller's buffer (AGENTS rule 8); the fmgr-shaped cstring
@@ -229,7 +232,7 @@ pub fn int8mul(arg1: i64, arg2: i64) -> PgResult<i64> {
 #[inline]
 pub fn int8div(arg1: i64, arg2: i64) -> PgResult<i64> {
     if arg2 == 0 {
-        return Err(division_by_zero());
+        return Err(division_by_zero(514, "int8div"));
     }
     // INT64_MIN / -1 traps; division by -1 is negation.
     if arg2 == -1 {
@@ -252,7 +255,7 @@ pub fn int8abs(arg1: i64) -> PgResult<i64> {
 #[inline]
 pub fn int8mod(arg1: i64, arg2: i64) -> PgResult<i64> {
     if arg2 == 0 {
-        return Err(division_by_zero());
+        return Err(division_by_zero(572, "int8mod"));
     }
     // INT64_MIN % -1 traps on some machines; the answer is zero.
     if arg2 == -1 {
@@ -390,7 +393,7 @@ pub fn int84mul(arg1: i64, arg2: i32) -> PgResult<i64> {
 #[inline]
 pub fn int84div(arg1: i64, arg2: i32) -> PgResult<i64> {
     if arg2 == 0 {
-        return Err(division_by_zero());
+        return Err(division_by_zero(972, "int84div"));
     }
     if arg2 == -1 {
         if arg1 == PG_INT64_MIN {
@@ -431,7 +434,7 @@ pub fn int48mul(arg1: i32, arg2: i64) -> PgResult<i64> {
 #[inline]
 pub fn int48div(arg1: i32, arg2: i64) -> PgResult<i64> {
     if arg2 == 0 {
-        return Err(division_by_zero());
+        return Err(division_by_zero(1052, "int48div"));
     }
     // No overflow is possible.
     Ok(arg1 as i64 / arg2)
@@ -467,7 +470,7 @@ pub fn int82mul(arg1: i64, arg2: i16) -> PgResult<i64> {
 #[inline]
 pub fn int82div(arg1: i64, arg2: i16) -> PgResult<i64> {
     if arg2 == 0 {
-        return Err(division_by_zero());
+        return Err(division_by_zero(1114, "int82div"));
     }
     if arg2 == -1 {
         if arg1 == PG_INT64_MIN {
@@ -508,7 +511,7 @@ pub fn int28mul(arg1: i16, arg2: i64) -> PgResult<i64> {
 #[inline]
 pub fn int28div(arg1: i16, arg2: i64) -> PgResult<i64> {
     if arg2 == 0 {
-        return Err(division_by_zero());
+        return Err(division_by_zero(1194, "int28div"));
     }
     // No overflow is possible.
     Ok(arg1 as i64 / arg2)

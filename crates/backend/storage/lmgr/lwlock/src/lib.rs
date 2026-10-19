@@ -402,7 +402,16 @@ fn InitializeLWLocks(locks: &mut [LWLockPadded]) -> Vec<NamedLWLockTrancheRange>
     })
 }
 
-pub fn InitLWLockAccess() {}
+// C backends inherit LWLockTrancheNames[] from the postmaster's fork
+// image (lwlock.c:493-496); a backend thread starts with an empty vector,
+// so re-run the named-tranche registration here.
+pub fn InitLWLockAccess() {
+    if let Some(table) = MAIN_LWLOCKS.get() {
+        for range in table.named_tranches() {
+            LWLockRegisterTranche(range.tranche_id, range.name());
+        }
+    }
+}
 
 /// Crash-cycle reset in place (notes/crash-restart-design.md): re-arm every
 /// published lock. Tranche ids are boot-stable (named requests fixed before

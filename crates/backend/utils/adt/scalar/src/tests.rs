@@ -409,3 +409,14 @@ fn currtid_qualified_name_split() {
     assert_eq!(split(&("a".repeat(61) + "éé")), Some(vec!["a".repeat(61) + "é"]));
     assert_eq!(split(&("a".repeat(64))), Some(vec!["a".repeat(63)]));
 }
+
+// tid.c:72 quotes the input bytes verbatim (SQL_ASCII high bytes).
+#[test]
+fn tid_syntax_message_keeps_non_utf8_bytes() {
+    let err = crate::builtins::tid_syntax(b"(\xff");
+    assert_eq!(err.message_raw.as_deref(), Some(&b"invalid input syntax for type tid: \"(\xff\""[..]));
+    assert_eq!(err.sqlstate(), ::types_error::ERRCODE_INVALID_TEXT_REPRESENTATION);
+    let err = crate::builtins::tid_syntax(b"(1");
+    assert_eq!(err.message(), "invalid input syntax for type tid: \"(1\"");
+    assert!(err.message_raw.is_none());
+}

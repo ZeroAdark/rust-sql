@@ -47,3 +47,4 @@ funcapi = { path = "../../utils/fmgr/funcapi" }
 tupdesc = { path = "../../access/common/tupdesc" }
 guc_seams = { path = "../../utils/misc/guc_seams" }
 guc_tables = { path = "../../utils/misc/guc_tables" }
+mbutils = { path = "../../utils/mb/mbutils" }

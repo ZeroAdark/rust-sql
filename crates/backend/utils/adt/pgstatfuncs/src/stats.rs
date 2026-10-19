@@ -322,6 +322,9 @@ pub fn fc_pg_stat_get_progress_info(
     let flinfo = flinfo.expect("pg_stat_get_progress_info: resolved FmgrInfo required");
 
     let cmd = crate::arg_text_str(fcinfo, 0)?;
+    // pgstatfuncs.c:258: the backend-status snapshot is taken before the
+    // command name is validated.
+    let num_backends = backend_status::pgstat_fetch_stat_numbackends();
     let cmdtype = if cmd.eq_ignore_ascii_case("VACUUM") {
         PROGRESS_COMMAND_VACUUM
     } else if cmd.eq_ignore_ascii_case("ANALYZE") {
@@ -345,7 +348,6 @@ pub fn fc_pg_stat_get_progress_info(
     let mcx = unsafe { fcinfo.result_mcx_detached() };
     let mut srf = funcapi::InitMaterializedSRF(mcx, flinfo, fcinfo, 0)?;
 
-    let num_backends = backend_status::pgstat_fetch_stat_numbackends();
     for curr in 1..=num_backends {
         let Some(be) = backend_status::pgstat_get_local_beentry_by_index(curr) else {
             continue;

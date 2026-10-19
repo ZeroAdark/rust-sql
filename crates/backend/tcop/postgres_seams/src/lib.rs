@@ -110,7 +110,7 @@ seam_core::seam!(
 );
 
 seam_core::tap!(
-    // Serial-lease v2 safe-point admission (GL-SLEASE-2; pgrust extension —
+    // Serial-lease v2 safe-point admission (regression; pgrust extension —
     // no C counterpart). ProcessInterrupts calls it after the holdoff /
     // crit-section gates on every drain; installed by seams_init ONLY when
     // the lease is armed (PGRUST_RUNTIME_SERIAL_LEASE=1), so the unarmed
@@ -119,7 +119,7 @@ seam_core::tap!(
 );
 
 // ---------------------------------------------------------------------------
-// GL-STMTTASK-1 — the statement-as-task PROTOCOL ARM (not a seam call: a
+// regression — the statement-as-task PROTOCOL ARM (not a seam call: a
 // statement-scoped thread-local handshake between the two sides of the
 // seam boundary). exec_simple_query (tcop) arms exactly one statement's
 // top-level portal run; the executor's statement-task hook consumes the
@@ -127,7 +127,7 @@ seam_core::tap!(
 // sides production-link (tcop reaches the executor only through seam
 // crates; the executor cannot name tcop).
 // ---------------------------------------------------------------------------
-/// GL-STMTTASK-2 quantum-yield experiment (coordinator/Michael-chartered,
+/// regression quantum-yield experiment (coordinator/Michael-chartered,
 /// DEFAULT OFF): the CHECK_FOR_INTERRUPTS hot path calls [`stmt_yield::tick`]
 /// — one thread-local bool load + predictable branch when disarmed (armed
 /// only inside a statement-task span with `PGRUST_STMT_TASK_YIELD` on).
@@ -176,7 +176,7 @@ pub mod stmt_task_arm {
         matches!(v.map(str::trim), Some("1") | Some("on"))
     }
 
-    /// `PGRUST_STMT_TASK` — the GL-STMTTASK-1 master knob (kill knob for
+    /// `PGRUST_STMT_TASK` — the regression master knob (kill knob for
     /// the statement-as-task executor arm). ONE authority: both the tcop
     /// arm site and the executor hook resolve through this cell.
     pub fn stmt_task_enabled() -> bool {

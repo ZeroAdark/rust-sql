@@ -9,6 +9,24 @@ use types_guc::GucContext::PGC_INTERNAL;
 use types_guc::GucSource::PGC_S_DYNAMIC_DEFAULT;
 use types_storage::{PGShmemHeader, PGShmemMagic};
 
+/// `shmem_startup_hook_type` (ipci.c:58).
+pub type ShmemStartupHook = fn() -> PgResult<()>;
+
+// shmem_startup_hook (ipci.c:58): the _PG_init chain, in registration order.
+pgsync::process_global! {
+    static SHMEM_STARTUP_HOOKS: pgsync::Mutex<Vec<ShmemStartupHook>> = pgsync::Mutex::new(Vec::new());
+}
+
+/// `shmem_startup_hook = hook` in a library's `_PG_init`.
+pub fn register_shmem_startup_hook(hook: ShmemStartupHook) {
+    SHMEM_STARTUP_HOOKS.lock().unwrap_or_else(|p| p.into_inner()).push(hook);
+}
+
+fn run_shmem_startup_hooks() -> PgResult<()> {
+    let hooks = SHMEM_STARTUP_HOOKS.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    hooks.iter().try_for_each(|hook| hook())
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -154,8 +172,7 @@ pub fn CreateSharedMemoryAndSemaphores(fastpath_lock_groups_per_backend: i32) ->
     }));
     dsm_core::dsm::dsm_postmaster_startup(shim)?;
 
-    // shmem_startup_hook: none can exist, preload libraries are unported.
-    Ok(())
+    run_shmem_startup_hooks()
 }
 
 pub fn CreateOrAttachShmemStructs(cfg: &ProcGlobalConfig) -> PgResult<()> {
@@ -167,6 +184,10 @@ pub fn CreateOrAttachShmemStructs(cfg: &ProcGlobalConfig) -> PgResult<()> {
     varsup::VarsupShmemInit();
     transam_xlog::XLOGShmemInit();
     xlogprefetcher::XLogPrefetchShmemInit();
+    // XLogRecoveryShmemInit (xlogrecovery.c:465-470): the control block's
+    // fields are xlogrecovery statics; the "XLOG Recovery Ctl" ShmemIndex row
+    // is C's.
+    shmem::ShmemInitStruct("XLOG Recovery Ctl", xlogrecovery::XLogRecoveryShmemSize())?;
     clog::CLOGShmemInit()?;
     commit_ts::CommitTsShmemInit()?;
     subtrans::SUBTRANSShmemInit()?;
@@ -179,6 +200,13 @@ pub fn CreateOrAttachShmemStructs(cfg: &ProcGlobalConfig) -> PgResult<()> {
     if !g::IsUnderPostmaster() {
         lmgr_proc::InitProcGlobal(cfg);
     }
+    // InitProcGlobal (proc.c:221-380) carves its header, PGPROC arrays,
+    // fast-path arrays and ProcStructLock through ShmemInitStruct; the live
+    // structures are lmgr_proc statics, the ShmemIndex rows are C's.
+    shmem::ShmemInitStruct("Proc Header", lmgr_proc::C_SIZEOF_PROC_HDR)?;
+    shmem::ShmemInitStruct("PGPROC structures", lmgr_proc::PGProcShmemSize(cfg)?)?;
+    shmem::ShmemInitStruct("Fast-Path Lock Array", lmgr_proc::FastPathLockShmemSize(cfg)?)?;
+    shmem::ShmemInitStruct("ProcStructLock spinlock", lmgr_proc::C_SIZEOF_SLOCK_T)?;
     procarray::ProcArrayShmemInit();
     backend_status_seams::backend_status_shmem_init::call()?;
     twophase::TwoPhaseShmemInit()?;
@@ -197,13 +225,16 @@ pub fn CreateOrAttachShmemStructs(cfg: &ProcGlobalConfig) -> PgResult<()> {
     slot::ReplicationSlotsShmemInit();
     origin::ReplicationOriginShmemInit()?;
     walsender::WalSndShmemInit(cfg.max_wal_senders)?;
-    walsummarizer::WalSummarizerShmemInit();
     walreceiverfuncs::WalRcvShmemInit()?;
+    walsummarizer::WalSummarizerShmemInit();
     pgarch::PgArchShmemInit()?;
     slotsync::SlotSyncShmemInit()?;
     nbtree::BTreeShmemInit()?;
     syncscan::SyncScanShmemInit()?;
     commands_async::AsyncShmemInit()?;
+    // StatsShmemInit (pgstat_shmem.c:155-162): the stats store is pgstat's
+    // mutex-guarded map; the "Shared Memory Stats" ShmemIndex row is C's.
+    shmem::ShmemInitStruct("Shared Memory Stats", pgstat::shmem::StatsShmemSize()?)?;
     waitevent::custom::WaitEventCustomShmemInit()?;
     aio_core::AioShmemInit()?;
 
@@ -264,7 +295,8 @@ pub fn ResetShmemAfterCrash() -> PgResult<()> {
     waitevent::custom::WaitEventCustomShmemResetAfterCrash();
     aio_core::AioShmemResetAfterCrash()?;
 
-    dsm_core::dsm::dsm_postmaster_startup_after_crash()
+    dsm_core::dsm::dsm_postmaster_startup_after_crash()?;
+    run_shmem_startup_hooks()
 }
 
 pub fn InitializeShmemGUCs(fastpath_lock_groups_per_backend: i32) -> PgResult<()> {

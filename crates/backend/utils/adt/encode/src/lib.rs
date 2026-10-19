@@ -225,11 +225,14 @@ fn b64_unexpected_eq() -> Box<PgError> {
 #[inline(never)]
 fn b64_invalid_symbol(s: &[u8]) -> PgResult<Box<PgError>> {
     let n = (mbutils_seams::pg_mblen_range::call(s)? as usize).min(s.len());
+    // C's %.*s stops at a NUL inside the mbchar (encode.c:377).
+    let n = s[..n].iter().position(|&b| b == 0).unwrap_or(n);
     Ok(Box::new(
-        PgError::error(format!(
-            "invalid symbol \"{}\" found while decoding base64 sequence",
-            String::from_utf8_lossy(&s[..n])
-        ))
+        PgError::error_bytes(
+            "invalid symbol \"",
+            &s[..n],
+            "\" found while decoding base64 sequence",
+        )
         .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE),
     ))
 }

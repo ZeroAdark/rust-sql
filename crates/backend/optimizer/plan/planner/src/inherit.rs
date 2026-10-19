@@ -388,7 +388,7 @@ fn expand_single_inheritance_child<'mcx>(
         let prc = *run.rowmark(prc_id);
         let mark_type = {
             let child_rte = run.rte(child_rti as usize);
-            crate::prep::select_rowmark_type(child_rte, prc.strength)
+            crate::prep::select_rowmark_type(run.mcx, child_rte, prc.strength)?
         };
         let child_mark = PlanRowMark {
             rti: child_rti,
@@ -547,7 +547,7 @@ struct RowidSnap<'mcx> {
     rowids: PgVec<'mcx, (Node<'mcx>, types_pathnodes::Relids<'mcx>)>,
 }
 
-fn copy_var<'mcx>(mcx: Mcx<'mcx>, v: &Var<'mcx>) -> PgResult<Var<'mcx>> {
+pub(crate) fn copy_var<'mcx>(mcx: Mcx<'mcx>, v: &Var<'mcx>) -> PgResult<Var<'mcx>> {
     Ok(Var {
         varno: v.varno,
         varattno: v.varattno,

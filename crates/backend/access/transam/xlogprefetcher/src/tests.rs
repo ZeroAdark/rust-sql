@@ -423,7 +423,7 @@ fn shmem_reset_zeroes_counters_and_gauges() {
 // xlogprefetcher.c:319-322 XLogPrefetchShmemInit: ShmemInitStruct
 // ("XLogPrefetchStats", sizeof(XLogPrefetchStats)) registers the ShmemIndex
 // row pg_shmem_allocations lists (C 18.6: size 72); the pre-fix port only
-// filled a OnceLock. Audit fp-transam-xlogprefetcher#1.
+// filled a OnceLock. Audit regression.
 #[test]
 fn shmem_init_registers_xlog_prefetch_stats_in_shmem_index() {
     rig();

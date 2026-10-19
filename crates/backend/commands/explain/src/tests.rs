@@ -1667,3 +1667,23 @@ fn foreign_scan_names_match_c() {
     assert_eq!(crate::node::foreign_scan_names(CMD_DELETE), ("Foreign Delete", "Foreign Scan", "Delete"));
     assert_eq!(crate::node::foreign_scan_names(CMD_UTILITY), ("???", "Foreign Scan", "???"));
 }
+
+#[test]
+fn property_float_spells_infinity_like_c() {
+    install_fixtures();
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let mut es = NewExplainState(mcx).unwrap();
+    es.format = EXPLAIN_FORMAT_JSON;
+    ExplainBeginOutput(&mut es);
+    ExplainPropertyFloat("Total Cost", None, f64::INFINITY, 2, &mut es);
+    ExplainPropertyFloat("Startup Cost", None, f64::NEG_INFINITY, 2, &mut es);
+    ExplainPropertyFloat("Plan Rows", None, 2.5, 0, &mut es);
+    ExplainEndOutput(&mut es);
+    let out = String::from_utf8(es.str.as_bytes().to_vec()).unwrap();
+    assert!(out.contains("\"Total Cost\": Infinity"), "{out}");
+    assert!(out.contains("\"Startup Cost\": -Infinity"), "{out}");
+    assert!(out.contains("\"Plan Rows\": 2"), "{out}");
+    assert_eq!(crate::format::fmt_float(f64::INFINITY, 2), "Infinity");
+    assert_eq!(crate::format::fmt_float(0.005, 2), "0.01");
+}

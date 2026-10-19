@@ -11,14 +11,20 @@
 use std::ffi::CString;
 
 use pgrc2_format::dirlayout::table_dir_name;
-use types_core::{ForkNumber, ProcNumber};
+use types_core::{ForkNumber, ProcNumber, INVALID_PROC_NUMBER};
 use types_error::{PgError, PgResult};
 use types_storage::storage::RelFileLocator;
 
 /// The per-table pgrcolumnar2 directory path for a relation's locator.
 pub fn table_dir_path(locator: RelFileLocator, backend: ProcNumber) -> String {
     let main = relpath::GetRelationPath(locator, backend, ForkNumber::MAIN_FORKNUM);
-    let dir_name = table_dir_name(locator.relNumber as u64);
+    // Temp relations carry relpath's `t<procNumber>_` namespace prefix so
+    // two backends holding the same relfilenumber never share a directory.
+    let dir_name = if backend == INVALID_PROC_NUMBER {
+        table_dir_name(locator.relNumber as u64)
+    } else {
+        format!("pgrc2_t{backend}_{}", locator.relNumber)
+    };
     match main.rfind('/') {
         Some(i) => format!("{}/{}", &main[..i], dir_name),
         // A bare relative main path (global tablespace shapes still carry

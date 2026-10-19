@@ -23,6 +23,7 @@ unicode_category = { path = "../../../../common/unicode_category" }
 wchar = { path = "../../../../common/wchar" }
 lsyscache = { path = "../../cache/lsyscache" }
 varlena = { path = "../varlena" }
+format_type = { path = "../format_type" }
 pg_locale_seams = { path = "../pg_locale_seams" }
 pg_database_seams = { path = "../../../catalog/pg_database_seams" }
 syscache_seams = { path = "../../cache/syscache_seams" }

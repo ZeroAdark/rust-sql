@@ -43,21 +43,26 @@ struct Uncommitted<'mcx> {
 
 mcx::bind!(UncommittedTy => Uncommitted<'mcx>);
 
+struct UncommittedSlot {
+    cleanup_registered: bool,
+    owner: Option<core::mem::ManuallyDrop<mcx::McxOwned<UncommittedTy>>>,
+}
+
 thread_local! {
-    static UNCOMMITTED: RefCell<Option<core::mem::ManuallyDrop<mcx::McxOwned<UncommittedTy>>>> = const {
-        RefCell::new(None)
+    static UNCOMMITTED: RefCell<UncommittedSlot> = const {
+        RefCell::new(UncommittedSlot { cleanup_registered: false, owner: None })
     };
 }
 
 fn clear_uncommitted() {
-    let old = UNCOMMITTED.with(|cell| cell.borrow_mut().take());
+    let old = UNCOMMITTED.with(|cell| cell.borrow_mut().owner.take());
     if let Some(owner) = old {
         drop(core::mem::ManuallyDrop::into_inner(owner));
     }
 }
 
 fn read_uncommitted<R>(f: impl for<'mcx> FnOnce(Option<&Uncommitted<'mcx>>) -> R) -> R {
-    UNCOMMITTED.with(|cell| match cell.borrow().as_ref() {
+    UNCOMMITTED.with(|cell| match cell.borrow().owner.as_ref() {
         Some(owner) => owner.with(|state| f(Some(state))),
         None => f(None),
     })
@@ -66,14 +71,17 @@ fn read_uncommitted<R>(f: impl for<'mcx> FnOnce(Option<&Uncommitted<'mcx>>) -> R
 fn with_uncommitted<R>(f: impl for<'mcx> FnOnce(&mut Uncommitted<'mcx>) -> R) -> PgResult<R> {
     UNCOMMITTED.with(|cell| {
         let mut slot = cell.borrow_mut();
-        if slot.is_none() {
+        if slot.owner.is_none() {
             let owner = mcx::McxOwned::try_new(mcx::MemoryContext::new("UncommittedEnums"), |mcx| {
                 Ok(Uncommitted { mcx, types: None, values: None })
             })?;
-            *slot = Some(core::mem::ManuallyDrop::new(owner));
-            mcx::register_session_cleanup(Box::new(clear_uncommitted));
+            slot.owner = Some(core::mem::ManuallyDrop::new(owner));
+            if !slot.cleanup_registered {
+                mcx::register_session_cleanup(Box::new(clear_uncommitted));
+                slot.cleanup_registered = true;
+            }
         }
-        Ok(slot.as_mut().unwrap().with_mut(f))
+        Ok(slot.owner.as_mut().unwrap().with_mut(f))
     })
 }
 
@@ -92,12 +100,10 @@ fn EnumTypeUncommitted(typ_id: Oid) -> bool {
     read_uncommitted(|u| u.is_some_and(|u| u.types.as_ref().is_some_and(|v| v.contains(&typ_id))))
 }
 
+// pg_enum.c:726: the lists live in TopTransactionContext, so nothing of
+// them survives the transaction.
 pub fn AtEOXact_Enum() {
-    UNCOMMITTED.with(|cell| {
-        if let Some(owner) = cell.borrow_mut().as_mut() {
-            owner.with_mut(|u| { u.types = None; u.values = None; });
-        }
-    });
+    clear_uncommitted();
 }
 
 pub fn SerializeUncommittedEnums() -> (Vec<Oid>, Vec<Oid>) {
@@ -724,7 +730,7 @@ mod tests {
         }
     }
 
-    // pg_enum.c:459-477: a rejected BEFORE/AFTER (fp-catalog-pg_enum#2) must
+    // pg_enum.c:459-477: a rejected BEFORE/AFTER (regression) must
     // leave the preset OID for the next plain ADD VALUE; it is consumed once.
     #[test]
     fn next_pg_enum_oid_survives_rejected_neighbor_and_is_taken_once() {
@@ -746,7 +752,7 @@ mod tests {
         assert_eq!(SerializeUncommittedEnums(), (vec![], vec![]));
         RestoreUncommittedEnums(&[], &[]).unwrap();
         AtEOXact_Enum();
-        UNCOMMITTED.with(|cell| assert!(cell.borrow().is_none()));
+        UNCOMMITTED.with(|cell| assert!(cell.borrow().owner.is_none()));
     }
 
     #[test]
@@ -781,7 +787,7 @@ mod tests {
             assert_eq!(value[16383], 7);
         }).unwrap();
         clear_uncommitted();
-        UNCOMMITTED.with(|cell| assert!(cell.borrow().is_none()));
+        UNCOMMITTED.with(|cell| assert!(cell.borrow().owner.is_none()));
     }
 
     #[test]

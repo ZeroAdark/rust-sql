@@ -161,6 +161,10 @@ pub struct BTArrayKeyInfo<'mcx> {
     pub sksup: Option<SkipSupportData>,
     pub low_compare: Option<ScanKeyData>,
     pub high_compare: Option<ScanKeyData>,
+    // The by-ref skip array's current sk_argument storage: C datumCopy/pfree
+    // pairs on every element change; the arena cannot free, so one buffer is
+    // reused instead (capacity-bounded, not scan-visited-keys-bounded).
+    pub skip_arg: PgVec<'mcx, u8>,
 }
 
 

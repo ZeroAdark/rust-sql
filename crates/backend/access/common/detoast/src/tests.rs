@@ -151,6 +151,34 @@ fn lz4_decompress_roundtrip_full_and_slice() {
 }
 
 #[test]
+fn lz4_slice_decodes_every_prefix_of_long_matches_and_literals() {
+    let ctx = MemoryContext::new("t");
+    let mut input = b"abcdefgh".repeat(5000);
+    input.extend(sample(3000));
+    input.extend(std::iter::repeat(b'z').take(70000));
+    input.extend(sample(500));
+    let image = lz4_image(&input);
+    for len in [0, 1, 3, 7, 8, 9, 100, 40000, 40001, 43000, 100000, input.len() - 1] {
+        let out = toast_decompress_datum_slice(ctx.mcx(), &image, len as i32).unwrap();
+        assert_eq!(&out[VARHDRSZ..], &input[..len], "slice {len}");
+        assert_eq!(varsize_4b(&out), len + VARHDRSZ);
+    }
+}
+
+#[test]
+fn lz4_slice_of_truncated_stream_is_corrupt() {
+    let ctx = MemoryContext::new("t");
+    let input = sample(4000);
+    let mut image = lz4_image(&input);
+    let n = image.len();
+    image.truncate(n - 5);
+    let hdr = (((image.len() as u32) << 2) | 0x02).to_ne_bytes();
+    image[..VARHDRSZ].copy_from_slice(&hdr);
+    let err = toast_decompress_datum_slice(ctx.mcx(), &image, 3999).unwrap_err();
+    assert_eq!(err.message(), "compressed lz4 data is corrupt");
+}
+
+#[test]
 fn corrupt_lz4_stream_errors_with_data_corrupted() {
     let ctx = MemoryContext::new("t");
     let input = sample(4000);

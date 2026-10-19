@@ -1,7 +1,7 @@
 -- bugs/batch-65-backend-catalog: catalog fixes, expected captured from C 18.6
 -- except where marked hand-verified.
 \set VERBOSITY verbose
--- fp-commands-policy#1: policy.c:1229 get_relation_policy_oid passes the
+-- regression: policy.c:1229 get_relation_policy_oid passes the
 -- name to nameeq unchanged; a 64-byte name never matches a 63-byte policy.
 CREATE TABLE b65_t(i int);
 DO $$BEGIN EXECUTE format('CREATE POLICY %I ON b65_t USING (true)', repeat('p',63)); END$$;
@@ -9,7 +9,7 @@ SELECT * FROM pg_get_object_address('policy', ARRAY['public','b65_t',repeat('p',
 SELECT * FROM pg_get_object_address('policy', ARRAY['public','b65_t',repeat('p',65)], ARRAY[]::text[]);
 SELECT classid, objsubid, objid = (SELECT oid FROM pg_policy WHERE polname = repeat('p',63)) AS same FROM pg_get_object_address('policy', ARRAY['public','b65_t',repeat('p',63)], ARRAY[]::text[]);
 DROP TABLE b65_t;
--- fp-catalog-pg_type#1 (pg-also-bug, hand-verified): pg_type.c:973 cuts the
+-- regression (pg-also-bug, hand-verified): pg_type.c:973 cuts the
 -- range name at 52 bytes inside a multibyte character; pgrust clips on a
 -- character boundary so the multirange name stays valid UTF-8.
 DO $$ BEGIN EXECUTE format('CREATE TYPE %I AS RANGE (subtype = int4)', repeat('a', 51) || 'é'); END $$;

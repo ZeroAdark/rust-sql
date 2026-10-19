@@ -151,7 +151,11 @@ pub fn init_seams() {
         planner(mcx, parse, query_string, cursor_options, bound_params)
     });
     // find_simplified_clause's gate (rangetypes.c): volatile / subplan /
-    // >10*cpu_operator_cost elemExprs must not be evaluated twice.
+    // >10*cpu_operator_cost elemExprs must not be evaluated twice. Deliberate
+    // divergence from rangetypes.c:2910 cost_qual_eval_node(root): with the
+    // root, a ScalarArrayOpExpr over an array column costed during targetlist
+    // preprocessing reaches examine_variable before the base rels exist and
+    // C fails with XX000 "no relation entry for relid" (UPSTREAM-BUGS #33).
     clauses_seams::expr_safe_to_evaluate_twice::set(|node| {
         if clauses::contain_volatile_functions(node)? || clauses::contain_subplans(node)? {
             return Ok(false);

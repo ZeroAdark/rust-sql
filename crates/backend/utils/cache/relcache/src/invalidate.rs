@@ -524,6 +524,7 @@ pub fn AtEOXact_RelationCache(isCommit: bool) -> PgResult<()> {
     with_state(|st| {
         st.eoxact_list_len = 0;
         st.eoxact_list_overflowed = false;
+        crate::prune_stale_refs(st);
     });
     Ok(())
 }

@@ -9,10 +9,9 @@ fn syntax_error(msg: impl Into<String>) -> PgError {
     PgError::error(msg.into()).with_sqlstate(ERRCODE_SYNTAX_ERROR)
 }
 
-// pg_mblen does not validate; the range-clamped path only Errs on overrun,
-// where the clamped length is the slice length (dead path falls to s.len()).
-fn pg_mblen_cstr(s: &[u8]) -> i32 {
-    mbutils::pg_mblen_range(s).unwrap_or(s.len() as i32)
+// mbutils.c pg_mblen_cstr: a character running past the terminator is 22021.
+fn pg_mblen_cstr(s: &[u8]) -> PgResult<i32> {
+    mbutils::pg_mblen_range(s)
 }
 
 pub fn numdesc_prepare(num: &mut NUMDesc, key_id: i32, is_action: bool) -> PgResult<()> {
@@ -242,7 +241,7 @@ pub fn parse_format(
         if pos < str.len() && str[pos] != 0 {
             if (flags & STD_FLAG) != 0 && str[pos] != b'"' {
                 if !b"-./,':; ".contains(&str[pos]) {
-                    let chlen = pg_mblen_cstr(&str[pos..]) as usize;
+                    let chlen = pg_mblen_cstr(&str[pos..])? as usize;
                     let bad = String::from_utf8_lossy(&str[pos..pos + chlen]).into_owned();
                     return Err(PgError::error(format!(
                         "invalid datetime format separator: \"{bad}\""
@@ -274,7 +273,7 @@ pub fn parse_format(
                     if str[pos] == b'\\' && pos + 1 < str.len() && str[pos + 1] != 0 {
                         pos += 1;
                     }
-                    let chlen = pg_mblen_cstr(&str[pos..]) as usize;
+                    let chlen = pg_mblen_cstr(&str[pos..])? as usize;
                     let mut node = FormatNode {
                         typ: NODE_TYPE_CHAR,
                         ..Default::default()
@@ -288,7 +287,7 @@ pub fn parse_format(
                 if str[pos] == b'\\' && pos + 1 < str.len() && str[pos + 1] == b'"' {
                     pos += 1;
                 }
-                let chlen = pg_mblen_cstr(&str[pos..]) as usize;
+                let chlen = pg_mblen_cstr(&str[pos..])? as usize;
                 let mut character = [0u8; MAX_MULTIBYTE_CHAR_LEN + 1];
                 character[..chlen].copy_from_slice(&str[pos..pos + chlen]);
                 nodes.push(FormatNode {

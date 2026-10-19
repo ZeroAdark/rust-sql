@@ -66,7 +66,7 @@ fn setting_tuple(mcx: Mcx<'_>, desc: &TupleDescData<'_>, conf: &GucVariable) -> 
     let mut values = [Datum::null(); NUM_PG_SETTINGS_ATTS];
     let mut nulls = [false; NUM_PG_SETTINGS_ATTS];
 
-    values[0] = text_datum(mcx, gen.name)?;
+    values[0] = text_datum(mcx, &gen.name)?;
     values[1] = text_datum(mcx, &ShowGUCOption(conf, false))?;
     opt_text_datum(mcx, get_config_unit_name(gen.flags), &mut values, &mut nulls, 2)?;
     values[3] = text_datum(mcx, config_group_names[gen.group as usize])?;
@@ -291,6 +291,15 @@ pub fn fc_show_config_by_name_missing_ok(
     config_by_name(fcinfo, missing_ok)
 }
 
+// guc_funcs.c set_config_by_name: text_to_cstring, so the value the GUC
+// machinery sees ends at the datum's first NUL.
+fn cstring_bytes(b: &[u8]) -> &[u8] {
+    match b.iter().position(|&c| c == 0) {
+        Some(n) => &b[..n],
+        None => b,
+    }
+}
+
 pub fn fc_set_config_by_name(
     _flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
@@ -305,13 +314,13 @@ pub fn fc_set_config_by_name(
     }
     // SAFETY: nullness checked; non-null text args are live varlenas.
     let name = unsafe { fcinfo.arg_varlena_packed(0)? };
-    let name = String::from_utf8_lossy(name.data()).into_owned();
+    let name = String::from_utf8_lossy(cstring_bytes(name.data())).into_owned();
     let value = if b.isnull {
         None
     } else {
         // SAFETY: as above.
         let v = unsafe { fcinfo.arg_varlena_packed(1)? };
-        Some(String::from_utf8_lossy(v.data()).into_owned())
+        Some(String::from_utf8_lossy(cstring_bytes(v.data())).into_owned())
     };
     let is_local = !c.isnull && c.value.as_bool();
     let action: GucAction = if is_local { GUC_ACTION_LOCAL } else { GUC_ACTION_SET };

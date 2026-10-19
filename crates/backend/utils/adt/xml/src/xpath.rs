@@ -130,6 +130,25 @@ unsafe fn xpathobj_to_xmlarray(
     }
 }
 
+// xml.c:4449 "%s" of the text payloads: their bytes verbatim (SQL_ASCII
+// high bytes).
+#[cold]
+fn namespace_registration_failed(name: &[u8], uri: &[u8]) -> PgError {
+    match (core::str::from_utf8(name), core::str::from_utf8(uri)) {
+        (Ok(name), Ok(uri)) => PgError::error(format!(
+            "could not register XML namespace with name \"{name}\" and URI \"{uri}\""
+        )),
+        _ => {
+            let mut msg = b"could not register XML namespace with name \"".to_vec();
+            msg.extend_from_slice(name);
+            msg.extend_from_slice(b"\" and URI \"");
+            msg.extend_from_slice(uri);
+            msg.push(b'"');
+            PgError::error_raw_message(msg)
+        }
+    }
+}
+
 /// C `xpath_internal` (xml.c:4323). `namespaces` is the flattened text[]
 /// image (None for xmlexists). Returns the match count; fills `collect` with
 /// xmltype payloads when given.
@@ -213,6 +232,7 @@ pub fn xpath_internal(
                 (x.xmlFreeDoc)(doc);
             }
             (x.xmlFreeParserCtxt)(ctxt);
+            crate::errhandler::flush_xml_warnings();
             return Err(
                 xml_ereport("could not parse XML document", ERRCODE_INVALID_XML_DOCUMENT).into(),
             );
@@ -257,12 +277,7 @@ pub fn xpath_internal(
             let u = cstr(uri);
             if (x.xmlXPathRegisterNs)(xpathctx, n.as_ptr(), u.as_ptr()) != 0 {
                 cleanup(core::ptr::null_mut(), core::ptr::null_mut(), xpathctx);
-                return Err(PgError::error(format!(
-                    "could not register XML namespace with name \"{}\" and URI \"{}\"",
-                    String::from_utf8_lossy(name),
-                    String::from_utf8_lossy(uri)
-                ))
-                .into());
+                return Err(namespace_registration_failed(name, uri).into());
             }
         }
 

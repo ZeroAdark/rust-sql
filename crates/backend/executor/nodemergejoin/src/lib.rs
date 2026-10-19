@@ -386,9 +386,8 @@ fn eval_outer_values<'mcx>(
         if v.isnull {
             // A fill-outer join must still emit NULL-keyed outers.
             if i == 0 && !node.clauses[0].ssup.ssup_nulls_first && !node.mj_FillOuter {
-                return Ok(MJEvalResult::EndOfJoin);
-            }
-            if result == MJEvalResult::Matchable {
+                result = MJEvalResult::EndOfJoin;
+            } else if result == MJEvalResult::Matchable {
                 result = MJEvalResult::NonMatchable;
             }
         }
@@ -421,9 +420,8 @@ fn eval_inner_values<'mcx>(
         node.clauses[i].risnull = v.isnull;
         if v.isnull {
             if i == 0 && !node.clauses[0].ssup.ssup_nulls_first && !node.mj_FillInner {
-                return Ok(MJEvalResult::EndOfJoin);
-            }
-            if result == MJEvalResult::Matchable {
+                result = MJEvalResult::EndOfJoin;
+            } else if result == MJEvalResult::Matchable {
                 result = MJEvalResult::NonMatchable;
             }
         }

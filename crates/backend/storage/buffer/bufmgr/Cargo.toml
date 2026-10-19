@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 aio_core = { path = "../../aio/aio_core" }
+shmem = { path = "../../ipc/shmem" }
 bufmgr_seams = { path = "../bufmgr_seams" }
 datum = { path = "../../../../_support/types/datum" }
 dynahash = { path = "../../../utils/hash/dynahash" }
@@ -53,6 +54,7 @@ ps_status_seams = { path = "../../../utils/misc/ps_status_seams" }
 timestamp_seams = { path = "../../../utils/adt/timestamp_seams" }
 
 [dev-dependencies]
+types_tuple = { path = "../../../../_support/types/types_tuple" }
 relpath = { path = "../../../../common/relpath" }
 shmem_seams = { path = "../../ipc/shmem_seams" }
 pg_sema = { path = "../../../port/pg_sema" }

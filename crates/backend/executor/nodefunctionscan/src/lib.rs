@@ -600,7 +600,6 @@ fn run_value_per_call<'mcx>(
     ecxt: ::executils::EcxtId,
     arg_mcx: &mut ::mcx::MemoryContext,
 ) -> PgResult<Tuplestore> {
-    let work_mem = init_small::globals::work_mem();
     let mut allowed = SFRM_ValuePerCall | SFRM_Materialize | SFRM_Materialize_Preferred;
     if random_access {
         allowed |= SFRM_Materialize_Random;
@@ -644,6 +643,9 @@ fn run_value_per_call<'mcx>(
         }
     }
 
+    // execSRF.c:264 reads work_mem after the arguments ran (a set_config
+    // argument raising it governs this store).
+    let work_mem = init_small::globals::work_mem();
     let mut store = Tuplestore::begin_heap(random_access, false, work_mem);
     if all_null_skip {
         // execSRF.c no_function_result: a strict function skipped for a NULL
@@ -665,14 +667,16 @@ fn run_value_per_call<'mcx>(
         return Ok(store);
     }
 
-    let mut set_desc: Option<TupleDescData<'mcx>> = None;
+    // execSRF.c:428 FreeTupleDesc's this after each materialization;
+    // argContext is reset at the next one.
+    let mut set_desc: Option<TupleDescData<'_>> = None;
     let mut first_time = true;
     loop {
         // C parity (execSRF.c ExecMakeTableFunctionResult loop top): an SRF
         // materialize fill produces its WHOLE result set here — without this
         // the fill is cancel/die-deaf for its entire duration (the incumbent
         // path wedges on user cancel, and a statement-task chase can never
-        // land — GL-STMTTASK-1 found it via a wedged gang board). The
+        // land — regression found it via a wedged gang board). The
         // pending-flag pre-test is the tuplestore cfi() shape: one TLS read
         // per row; the seam dispatch only on a pending interrupt (also keeps
         // seam-less unit-test processes runnable).
@@ -741,7 +745,7 @@ fn run_value_per_call<'mcx>(
                         &mut set_desc,
                         result,
                         fcinfo.isnull,
-                        estate.es_query_cxt,
+                        arg_mcx.mcx(),
                         estate.ecxt(ecxt).per_tuple_mcx(),
                     )?;
                 } else {

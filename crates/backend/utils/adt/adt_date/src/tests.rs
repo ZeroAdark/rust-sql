@@ -14,6 +14,29 @@ fn gmt_session() {
         elog::init_seams();
         fd::init_seams();
         xact_seams::get_current_sub_transaction_id::set(|| 1);
+        // extract_date's error path names the type through format_type_be:
+        // a visible pg_catalog.date.
+        syscache_seams::lookup_pg_type_typcache_shape::set(|typid| {
+            Ok((typid == types_core::catalog::DATEOID).then(|| {
+                let mut typname = types_tuple::NameData::default();
+                typname.namestrcpy("date");
+                syscache_seams::PgTypeTypcacheShape {
+                    typname,
+                    typlen: 4,
+                    typbyval: true,
+                    typalign: b'i' as i8,
+                    typstorage: b'p' as i8,
+                    typtype: b'b' as i8,
+                    typisdefined: true,
+                    typrelid: types_core::InvalidOid,
+                    typsubscript: types_core::InvalidOid,
+                    typelem: types_core::InvalidOid,
+                    typarray: types_core::InvalidOid,
+                    typcollation: types_core::InvalidOid,
+                }
+            }))
+        });
+        namespace_seams::type_is_visible::set(|_| Ok(true));
     });
     tz::pg_timezone_initialize().unwrap();
 }
@@ -644,3 +667,4 @@ fn date_out_results_do_not_alias_across_carriers() {
     assert_eq!(cstr(d2), expect(1));
     assert_ne!(expect(0), expect(1));
 }
+

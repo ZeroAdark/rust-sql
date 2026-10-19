@@ -41,6 +41,23 @@ fn invalid_datetime(msg: impl Into<String>) -> PgError {
     PgError::error(msg.into()).with_sqlstate(ERRCODE_INVALID_DATETIME_FORMAT)
 }
 
+// formatting.c:2272/:2603 "invalid value \"%s\" for \"%s\"": the source
+// bytes verbatim (a SQL_ASCII database or a byteain alias can hand over
+// non-UTF-8 bytes).
+#[cold]
+fn invalid_value(value: &[u8], node_name: &str) -> PgError {
+    let e = match core::str::from_utf8(value) {
+        Ok(value) => PgError::error(format!("invalid value \"{value}\" for \"{node_name}\"")),
+        Err(_) => {
+            let mut msg = b"invalid value \"".to_vec();
+            msg.extend_from_slice(value);
+            msg.extend_from_slice(format!("\" for \"{node_name}\"").as_bytes());
+            PgError::error_raw_message(msg)
+        }
+    };
+    e.with_sqlstate(ERRCODE_INVALID_DATETIME_FORMAT)
+}
+
 pub fn is_next_separator(nodes: &[FormatNode], idx: usize) -> bool {
     let n = &nodes[idx];
     if n.typ == NODE_TYPE_END {
@@ -205,12 +222,7 @@ pub fn from_char_parse_int_len(
     if cur.pos == init {
         errsave(
             escontext.as_deref_mut(),
-            invalid_datetime(format!(
-                "invalid value \"{}\" for \"{}\"",
-                String::from_utf8_lossy(&copy),
-                node_name
-            ))
-            .with_detail("Value must be an integer."),
+            invalid_value(&copy, node_name).with_detail("Value must be an integer."),
         )?;
         return Ok(None);
     }
@@ -462,11 +474,9 @@ pub fn from_char_seq_search<'mcx>(
             .iter()
             .position(|&c| is_scanner_space(c))
             .unwrap_or_else(|| rest.iter().position(|&c| c == 0).unwrap_or(rest.len()));
-        let copy = String::from_utf8_lossy(&rest[..cut]).into_owned();
-
         errsave(
             escontext,
-            invalid_datetime(format!("invalid value \"{copy}\" for \"{node_name}\"")).with_detail(
+            invalid_value(&rest[..cut], node_name).with_detail(
                 "The given value did not match any of the allowed values for this field.",
             ),
         )?;

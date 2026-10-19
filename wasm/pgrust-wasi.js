@@ -1,8 +1,8 @@
-// pgrust-wasi.js — hand-rolled WASI preview1 host for the pgrust-fast
+// pgrust-wasi.js — hand-rolled WASI preview1 host for the pgrust
 // wasm32-wasip1 single-user `postgres.wasm` module, over an in-memory VFS.
 //
 // This replaces the pgrust-harness.js `pgvfs::host_*` layer the site used for
-// the old wasm32/64-unknown-unknown builds: pgrust-fast builds postgres.wasm
+// the old wasm32/64-unknown-unknown builds: pgrust builds postgres.wasm
 // for wasm32-wasip1 (panic=unwind lowered through standard Wasm exception
 // handling), so the module's entire import surface is the 33
 // `wasi_snapshot_preview1` functions enumerated below — no env::* stubs at

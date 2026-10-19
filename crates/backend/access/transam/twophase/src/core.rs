@@ -808,7 +808,7 @@ pub fn IsTwoPhaseTransactionGidForSubid(subid: Oid, gid: &str) -> PgResult<bool>
 fn scan_u32(s: &str) -> (Option<u32>, &str) {
     let b = s.as_bytes();
     let mut i = 0;
-    while i < b.len() && b[i].is_ascii_whitespace() {
+    while i < b.len() && matches!(b[i], b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
         i += 1;
     }
     let mut neg = false;

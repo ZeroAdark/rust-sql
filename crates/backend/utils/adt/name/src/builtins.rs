@@ -14,9 +14,9 @@ use types_tuple::NameData;
 use crate::NAMELEN;
 
 fn arg_name(fcinfo: &Fcinfo, i: usize) -> NameData {
-    // SAFETY: catalog args of these strict fns are non-null name blocks.
+    // SAFETY: catalog args of these strict fns are non-null names or cstring keys.
     NameData {
-        data: *unsafe { fcinfo.arg_name(i) },
+        data: unsafe { crate::name_block_from_ptr(fcinfo.arg_ptr(i)) },
     }
 }
 

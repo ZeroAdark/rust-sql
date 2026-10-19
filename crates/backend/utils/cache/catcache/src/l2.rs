@@ -186,7 +186,7 @@ pub(crate) fn build_negative(cache_id: i32, probes: &[CatCKey<'_>; 4]) -> PgResu
     let mut byref_len = 0usize;
     for i in 0..nkeys as usize {
         if matches!(kinds[i], CCFastKind::Name | CCFastKind::Text | CCFastKind::OidVector) {
-            byref_len += probes[i].bytes().len();
+            byref_len += crate::stored_key_bytes(kinds[i], &probes[i]).len();
         }
     }
     let buf = AlignedBytes::new_zeroed(byref_len)?;
@@ -196,7 +196,7 @@ pub(crate) fn build_negative(cache_id: i32, probes: &[CatCKey<'_>; 4]) -> PgResu
         keys[i] = match kinds[i] {
             CCFastKind::Char | CCFastKind::Int2 | CCFastKind::Int4 => probes[i].word(),
             _ => {
-                let b = probes[i].bytes();
+                let b = crate::stored_key_bytes(kinds[i], &probes[i]);
                 // SAFETY: `buf` has room for all by-ref payloads (summed above).
                 unsafe {
                     core::ptr::copy_nonoverlapping(b.as_ptr(), buf.as_ptr().add(off), b.len());

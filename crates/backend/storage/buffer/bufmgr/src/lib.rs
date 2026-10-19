@@ -496,6 +496,7 @@ pub fn init_seams() {
         )
     });
     bufmgr_seams::read_buffer_batched::set(ReadBufferBatched);
+    bufmgr_seams::forget_batch_credit::set(read::ForgetBatchCredit);
     bufmgr_seams::read_buffer_extended::set(ReadBufferExtended);
     bufmgr_seams::prefetch_buffer::set(|rel, forknum, blkno| {
         Ok(!matches!(

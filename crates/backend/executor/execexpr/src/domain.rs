@@ -155,29 +155,30 @@ pub fn domain_prepare_constraints(domain_type: Oid) -> PgResult<()> {
 }
 
 fn ensure_memo(domain_type: Oid) -> PgResult<()> {
-    let present = with_state(|st| st.memos.contains_key(&domain_type));
-    if !present {
-        let cref = typcache::DomainConstraintRef::init(domain_type)?;
-        let mut memo = DomainMemo {
-            cref,
-            dcc_addr: usize::MAX,
-            typlen: 0,
-            checks: Vec::new(),
-        };
-        let mcx = with_state(|st| st.mcx);
-        rebuild_memo(&mut memo, mcx)?;
-        with_state(|st| st.memos.insert(domain_type, memo));
-    } else {
-        let (changed, mcx) = with_state(|st| {
-            let memo = st.memos.get_mut(&domain_type).unwrap();
-            (memo.cref.update(), st.mcx)
-        });
-        if changed? {
-            let mut memo = with_state(|st| st.memos.remove(&domain_type)).unwrap();
+    // The memo leaves the map while its constraints refresh: update() plans
+    // the CHECK expressions, whose constant folding may run a function that
+    // re-enters this engine (domains.c:145 holds no lock across the reload).
+    let mcx = with_state(|st| st.mcx);
+    let memo = match with_state(|st| st.memos.remove(&domain_type)) {
+        None => {
+            let cref = typcache::DomainConstraintRef::init(domain_type)?;
+            let mut memo = DomainMemo {
+                cref,
+                dcc_addr: usize::MAX,
+                typlen: 0,
+                checks: Vec::new(),
+            };
             rebuild_memo(&mut memo, mcx)?;
-            with_state(|st| st.memos.insert(domain_type, memo));
+            memo
         }
-    }
+        Some(mut memo) => {
+            if memo.cref.update()? {
+                rebuild_memo(&mut memo, mcx)?;
+            }
+            memo
+        }
+    };
+    with_state(|st| st.memos.insert(domain_type, memo));
     Ok(())
 }
 

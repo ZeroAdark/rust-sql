@@ -61,6 +61,9 @@ pub struct SerialControlData {
 }
 
 struct SerialControlPtr(*mut SerialControlData);
+
+const C_SIZEOF_SERIAL_CONTROL_DATA: usize = 16;
+const _: () = assert!(std::mem::size_of::<SerialControlData>() <= C_SIZEOF_SERIAL_CONTROL_DATA);
 // SAFETY: all accesses go through SerialControlLock (C's discipline).
 unsafe impl Send for SerialControlPtr {}
 unsafe impl Sync for SerialControlPtr {}
@@ -146,12 +149,21 @@ pub fn SerialInit() -> PgResult<()> {
     }
 
     if SERIAL_CONTROL.get().is_none() {
-        // Set control information to reflect empty SLRU.
-        let c = Box::leak(Box::new(SerialControlData {
-            headPage: -1,
-            headXid: InvalidTransactionId,
-            tailXid: InvalidTransactionId,
-        }));
+        // predicate.c:827: ShmemInitStruct("SerialControlData", sizeof(SerialControlData)).
+        let (raw, found) = shmem::ShmemInitStruct("SerialControlData", C_SIZEOF_SERIAL_CONTROL_DATA)?;
+        let c = raw as *mut SerialControlData;
+        if !found {
+            // SAFETY: a fresh cache-line-aligned block of C_SIZEOF_SERIAL_CONTROL_DATA
+            // bytes, which holds a SerialControlData; set control information
+            // to reflect empty SLRU.
+            unsafe {
+                c.write(SerialControlData {
+                    headPage: -1,
+                    headXid: InvalidTransactionId,
+                    tailXid: InvalidTransactionId,
+                })
+            };
+        }
         let _ = SERIAL_CONTROL.set(SerialControlPtr(c));
     }
     Ok(())

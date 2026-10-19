@@ -60,9 +60,6 @@ const Anum_pg_attribute_attgenerated: usize = 16;
 const Anum_pg_attribute_attcollation: usize = 20;
 
 const AttributeRelidNumIndexId: Oid = 2659;
-const InheritsRelationId: Oid = 2611;
-const InheritsParentIndexId: Oid = 2187;
-const Anum_pg_inherits_inhparent: usize = 2;
 const Anum_pg_class_relnatts: usize = 19;
 const CollationRelationId: Oid = 3456;
 pub(crate) const NamespaceRelationId: Oid = 2615;
@@ -1627,7 +1624,7 @@ fn ATRewriteCatalogs<'mcx>(
                             fires_when,
                             skip_system,
                             cmd.recurse,
-                            types_rel::ShareRowExclusiveLock,
+                            lockmode,
                         )?;
                         // tablecmds.c:17254 ATExecEnableDisableTrigger
                         objectaccess::InvokeObjectPostAlterHook(
@@ -4018,7 +4015,7 @@ fn ATPrepChangePersistence<'mcx>(
 ) -> PgResult<()> {
     match rel.rd_rel.relpersistence {
         types_core::catalog::RELPERSISTENCE_TEMP => {
-            return Err(Box::new(
+            return Err(Box::new(with_errtable(
                 PgError::new(
                     ERROR,
                     format!(
@@ -4028,7 +4025,10 @@ fn ATPrepChangePersistence<'mcx>(
                     ),
                 )
                 .with_sqlstate(ERRCODE_INVALID_TABLE_DEFINITION),
-            ));
+                mcx,
+                rel.rd_rel.relnamespace,
+                rel.name(),
+            )));
         }
         types_core::catalog::RELPERSISTENCE_PERMANENT if to_logged => return Ok(()),
         types_core::RELPERSISTENCE_UNLOGGED if !to_logged => return Ok(()),
@@ -4101,6 +4101,20 @@ fn ATPrepChangePersistence<'mcx>(
         if foreignrelid == rel.rd_id {
             continue;
         }
+        // SAFETY: as above.
+        let conname = unsafe {
+            types_tuple::heap_getattr(
+                tup,
+                pg_constraint::Anum_pg_constraint_conname as i32,
+                desc,
+                &mut isnull,
+            )
+        };
+        // SAFETY: a NOT NULL name column is a NAMEDATALEN buffer.
+        let conname = unsafe { core::slice::from_raw_parts(conname.as_usize() as *const u8, 64) };
+        let conname =
+            String::from_utf8_lossy(&conname[..conname.iter().position(|&b| b == 0).unwrap_or(64)])
+                .into_owned();
         let foreignrel =
             relation_seams::relation_open::call(mcx, foreignrelid, types_rel::AccessShareLock)?;
         let foreign_permanent =
@@ -4108,28 +4122,40 @@ fn ATPrepChangePersistence<'mcx>(
         let fname = foreignrel.name().to_string();
         if to_logged && !foreign_permanent {
             return Err(Box::new(
-                PgError::new(
-                    ERROR,
-                    format!(
-                        "could not change table \"{}\" to logged because it references \
-                         unlogged table \"{fname}\"",
-                        rel.name()
-                    ),
+                with_errtable(
+                    PgError::new(
+                        ERROR,
+                        format!(
+                            "could not change table \"{}\" to logged because it references \
+                             unlogged table \"{fname}\"",
+                            rel.name()
+                        ),
+                    )
+                    .with_sqlstate(ERRCODE_INVALID_TABLE_DEFINITION),
+                    mcx,
+                    rel.rd_rel.relnamespace,
+                    rel.name(),
                 )
-                .with_sqlstate(ERRCODE_INVALID_TABLE_DEFINITION),
+                .with_constraint_name(conname),
             ));
         }
         if !to_logged && foreign_permanent {
             return Err(Box::new(
-                PgError::new(
-                    ERROR,
-                    format!(
-                        "could not change table \"{}\" to unlogged because it references \
-                         logged table \"{fname}\"",
-                        rel.name()
-                    ),
+                with_errtable(
+                    PgError::new(
+                        ERROR,
+                        format!(
+                            "could not change table \"{}\" to unlogged because it references \
+                             logged table \"{fname}\"",
+                            rel.name()
+                        ),
+                    )
+                    .with_sqlstate(ERRCODE_INVALID_TABLE_DEFINITION),
+                    mcx,
+                    rel.rd_rel.relnamespace,
+                    rel.name(),
                 )
-                .with_sqlstate(ERRCODE_INVALID_TABLE_DEFINITION),
+                .with_constraint_name(conname),
             ));
         }
         foreignrel.close(types_rel::AccessShareLock)?;
@@ -4429,8 +4455,8 @@ pub(crate) fn ATExecSetNotNull<'mcx>(
         is_no_inherit = true;
     }
     let name_storage;
-    let con_name: &str = match conname {
-        Some(n) => n,
+    let con_name: &[u8] = match conname {
+        Some(n) => n.as_bytes(),
         None => {
             name_storage = pg_constraint::ChooseConstraintName(
                 mcx,
@@ -4440,7 +4466,7 @@ pub(crate) fn ATExecSetNotNull<'mcx>(
                 rel.rd_rel.relnamespace,
                 &[],
             )?;
-            name_storage.as_str()
+            &name_storage
         }
     };
     create_notnull_constraint(
@@ -4462,7 +4488,9 @@ pub(crate) fn ATExecSetNotNull<'mcx>(
                 mcx,
                 wqueue,
                 &childrel,
-                Some(con_name),
+                // Children take the parent's name through the &str
+                // recursion surface: typed refusal for a non-UTF-8 clip.
+                Some(pg_constraint::generated_name_utf8(con_name, "not-null constraint")?),
                 col_name,
                 recurse,
                 true,
@@ -4482,7 +4510,7 @@ fn create_notnull_constraint<'mcx>(
     wqueue: &mut Wqueue<'mcx>,
     rel: &Relation<'mcx>,
     attnum: AttrNumber,
-    con_name: &str,
+    con_name: &[u8],
     is_local: bool,
     is_no_inherit: bool,
     initially_valid: bool,
@@ -4924,10 +4952,7 @@ fn dropconstraint_internal<'mcx>(
                 .expect("colname saved for NOT NULL constraint");
             match find_notnull_constraint_by_colname(mcx, childrelid, col)? {
                 Some(nn) => nn_con_shape(&nn),
-                None => panic!(
-                    "cache lookup failed for not-null constraint on column \"{col}\" of \
-                     relation {childrelid}"
-                ),
+                None => return Err(child_notnull_constraint_lookup_failed(col, childrelid)),
             }
         } else {
             match pg_constraint::findConstraintByName(mcx, childrelid, con.name_str())? {
@@ -4950,13 +4975,13 @@ fn dropconstraint_internal<'mcx>(
         if childcon.contype != pg_constraint::CONSTRAINT_CHECK
             && childcon.contype != pg_constraint::CONSTRAINT_NOTNULL
         {
-            panic!("inherited constraint is not a CHECK or not-null constraint");
+            return Err(inherited_constraint_not_check_or_notnull());
         }
         if childcon.coninhcount <= 0 {
-            panic!(
-                "relation {childrelid} has non-inherited constraint \"{}\"",
-                childcon.name_str()
-            );
+            return Err(crate::inheritance::non_inherited_constraint(
+                childrelid,
+                childcon.name_str(),
+            ));
         }
         if recurse {
             if childcon.coninhcount == 1 && !childcon.conislocal {
@@ -5069,6 +5094,8 @@ fn ATExecSetStatistics<'mcx>(
             )?;
         }
     }
+    let attrelation =
+        table::table_open(mcx, types_core::ATTRIBUTE_RELATION_ID, RowExclusiveLock)?;
     let attnum = match cmd.name {
         Some(col_name) => {
             let Some((attnum, _)) = attname_lookup(mcx, rel.rd_id, col_name, false)? else {
@@ -5145,7 +5172,7 @@ fn ATExecSetStatistics<'mcx>(
         )],
     )?;
     objectaccess::InvokeObjectPostAlterHook(RELATION_RELATION_ID, rel.rd_id, attnum as i32)?;
-    Ok(())
+    attrelation.close(RowExclusiveLock)
 }
 
 fn ATExecSetStorage<'mcx>(
@@ -5204,6 +5231,7 @@ fn ATExecSetCompression<'mcx>(
         .as_string()
         .expect("AT_SetCompression String")
         .sval;
+    let attrel = table::table_open(mcx, types_core::ATTRIBUTE_RELATION_ID, RowExclusiveLock)?;
     let Some((attnum, _)) = attname_lookup(mcx, rel.rd_id, col_name, false)? else {
         return Err(undefined_column(col_name, &relname));
     };
@@ -5225,6 +5253,7 @@ fn ATExecSetCompression<'mcx>(
         attnum,
         &[(Anum_pg_attribute_attcompression, Datum::from_i8(cmethod))],
     )?;
+    attrel.close(RowExclusiveLock)?;
     xact::CommandCounterIncrement()
 }
 
@@ -5524,14 +5553,17 @@ fn ATExecValidateConstraint<'mcx>(
                 lockmode,
             )?;
             // QueueNNConstraintValidation: attnotnull was set by the invalid
-            // ADD, so set_attnotnull reduces to its relcache-inval arm.
+            // ADD, so set_attnotnull reduces to its safety check and the
+            // relcache-inval arm.
+            CheckAlterTableIsSafe(rel)?;
             debug_assert!(rel.rd_att.attr(con.notnull_attnum as usize - 1).attnotnull);
             let tabidx = ATGetQueueEntry(mcx, wqueue, rel);
             wqueue[tabidx].verify_new_notnull = true;
             inval::invalidate::CacheInvalidateRelcacheByRelid(rel.rd_id)?;
         }
     }
-    pg_constraint::SetConstraintValidated(mcx, con.oid)
+    pg_constraint::SetConstraintValidated(mcx, con.oid)?;
+    objectaccess::InvokeObjectPostAlterHook(types_core::CONSTRAINT_RELATION_ID, con.oid, 0)
 }
 
 // Queue{Check,NN}ConstraintValidation children legs (tablecmds.c): validate
@@ -6302,7 +6334,7 @@ fn RememberAllDependentForRebuilding<'mcx>(
         found.push((classid, objid, objsubid));
     }
     genam::systable_endscan(mcx, scan)?;
-    dep_rel.close(RowExclusiveLock)?;
+    dep_rel.close(NoLock)?;
 
     for (classid, objid, objsubid) in found {
         let obj = pg_depend::ObjectAddress::sub_set(classid, objid, objsubid);
@@ -6531,6 +6563,9 @@ fn ATPostAlterTypeCleanup<'mcx>(
     }
     let tab_relid = wqueue[tabidx].relid;
     let tab_rewrite = wqueue[tabidx].rewrite;
+    // Deliberate divergence: C (tablecmds.c:5352-5353, second cleanup after
+    // AT_PASS_SET_EXPRESSION) never clears these lists and re-walks the
+    // already-dropped objects into XX000 "cache lookup failed".
     let changed_constraints = std::mem::take(&mut wqueue[tabidx].changed_constraints);
     let changed_indexes = std::mem::take(&mut wqueue[tabidx].changed_indexes);
     let changed_statistics = std::mem::take(&mut wqueue[tabidx].changed_statistics);
@@ -7214,14 +7249,10 @@ fn cannot_alter_system_column(col_name: &str) -> Box<PgError> {
     )
 }
 
+// tablecmds.c:8023/14675 `find_inheritance_children(relid, NoLock) != NIL`:
+// a detach-pending partition invisible to the active snapshot is omitted.
 pub(crate) fn find_inheritance_children_exist<'mcx>(mcx: Mcx<'mcx>, relid: Oid) -> PgResult<bool> {
-    let rel = table::table_open(mcx, InheritsRelationId, types_rel::AccessShareLock)?;
-    let key = oid_scankey(Anum_pg_inherits_inhparent, relid);
-    let mut scan = genam::systable_beginscan(mcx, &rel, InheritsParentIndexId, true, None, &[key])?;
-    let found = genam::systable_getnext(mcx, &mut scan)?.is_some();
-    genam::systable_endscan(mcx, scan)?;
-    rel.close(types_rel::AccessShareLock)?;
-    Ok(found)
+    Ok(!pg_inherits::find_inheritance_children(mcx, relid, NoLock)?.is_empty())
 }
 
 const Anum_pg_class_relrowsecurity: usize = 24;
@@ -7338,6 +7369,7 @@ fn relation_mark_replica_identity<'mcx>(
     ri_type: u8,
     index_oid: Oid,
 ) -> PgResult<()> {
+    let pg_class = table::table_open(mcx, RELATION_RELATION_ID, RowExclusiveLock)?;
     let current = pg_class_read_attr(mcx, rel.rd_id, Anum_pg_class_relreplident)?.as_i8() as u8;
     if current != ri_type {
         set_pg_class_datum(
@@ -7347,6 +7379,7 @@ fn relation_mark_replica_identity<'mcx>(
             Datum::from_i8(ri_type as i8),
         )?;
     }
+    pg_class.close(RowExclusiveLock)?;
 
     let pg_index = table::table_open(mcx, types_core::INDEX_RELATION_ID, RowExclusiveLock)?;
     let desc = pg_index.descr();
@@ -7638,7 +7671,8 @@ fn ATExecAddOf<'mcx>(
     let typeobj = pg_depend::ObjectAddress::set(TYPE_RELATION_ID, typeid);
     pg_depend::recordDependencyOn(mcx, &tableobj, &typeobj, pg_depend::DependencyType::Normal)?;
 
-    set_pg_class_datum(mcx, relid, Anum_pg_class_reloftype, Datum::from_oid(typeid))
+    set_pg_class_datum(mcx, relid, Anum_pg_class_reloftype, Datum::from_oid(typeid))?;
+    objectaccess::InvokeObjectPostAlterHook(RELATION_RELATION_ID, relid, 0)
 }
 
 // ATExecDropOf (tablecmds.c:18358).
@@ -7663,7 +7697,8 @@ fn ATExecDropOf<'mcx>(mcx: Mcx<'mcx>, rel: &Relation<'mcx>) -> PgResult<()> {
         relid,
         Anum_pg_class_reloftype,
         Datum::from_oid(InvalidOid),
-    )
+    )?;
+    objectaccess::InvokeObjectPostAlterHook(RELATION_RELATION_ID, relid, 0)
 }
 
 // ATExecAddIndexConstraint (tablecmds.c:9704).
@@ -7701,7 +7736,7 @@ fn ATExecAddIndexConstraint<'mcx>(
                 ),
                 None,
             )?;
-            crate::rename::RenameRelationInternal(mcx, index_oid, cn, true)?;
+            crate::rename::RenameRelationInternal(mcx, index_oid, cn, true, false)?;
             cn.to_string()
         }
         Some(cn) => cn.to_string(),
@@ -7733,7 +7768,7 @@ fn ATExecAddIndexConstraint<'mcx>(
         index_oid,
         InvalidOid,
         &index_info,
-        &constraint_name,
+        constraint_name.as_bytes(),
         constraint_type,
         flags,
         init_small::globals::allowSystemTableMods(),
@@ -8184,9 +8219,10 @@ fn ATExecSetTableSpaceNoStorage<'mcx>(
 ) -> PgResult<()> {
     debug_assert!(!types_rel::RELKIND_HAS_STORAGE(rel.rd_rel.relkind));
     if !CheckRelationTableSpaceMove(rel, new_tablespace)? {
-        return Ok(());
+        return objectaccess::InvokeObjectPostAlterHook(RELATION_RELATION_ID, rel.rd_id, 0);
     }
     SetRelationTableSpace(mcx, rel, new_tablespace, InvalidOid)?;
+    objectaccess::InvokeObjectPostAlterHook(RELATION_RELATION_ID, rel.rd_id, 0)?;
     xact::CommandCounterIncrement()
 }
 
@@ -8634,6 +8670,7 @@ fn ATExecAlterColumnGenericOptions<'mcx>(
             heaptuple::heap_modify_tuple(mcx, tup, desc, &repl_val, &repl_null, &repl_repl)?;
         let otid = tup.t_self;
         catalog_indexing::CatalogTupleUpdate(mcx, &attrel, &otid, &mut newtup)?;
+        objectaccess::InvokeObjectPostAlterHook(RELATION_RELATION_ID, rel.rd_id, attnum as i32)?;
         found = true;
         break;
     }
@@ -8819,6 +8856,60 @@ pub(crate) fn unexpected_identity_type(identity_type: u8) -> Box<PgError> {
     Box::new(PgError::error(format!(
         "unexpected identity type {identity_type}"
     )))
+}
+
+// elog(ERROR, "cache lookup failed for not-null constraint on column \"%s\" of relation %u")
+// (tablecmds.c:12680 ATExecDropConstraint_internal).
+#[cold]
+#[inline(never)]
+pub(crate) fn child_notnull_constraint_lookup_failed(col_name: &str, relid: Oid) -> Box<PgError> {
+    Box::new(PgError::error(format!(
+        "cache lookup failed for not-null constraint on column \"{col_name}\" of relation {relid}"
+    )))
+}
+
+// elog(ERROR, "inherited constraint is not a CHECK or not-null constraint")
+// (tablecmds.c:14318 ATExecDropConstraint_internal).
+#[cold]
+#[inline(never)]
+pub(crate) fn inherited_constraint_not_check_or_notnull() -> Box<PgError> {
+    Box::new(PgError::error(
+        "inherited constraint is not a CHECK or not-null constraint".to_string(),
+    ))
+}
+
+#[cfg(test)]
+mod elog_hygiene_tests_b79 {
+    // ATExecDropConstraint_internal's children-loop consistency arms are
+    // elog(ERROR)s in C (tablecmds.c:12680, 14318, 14322): catchable XX000,
+    // never a panic.
+    #[test]
+    fn drop_constraint_child_arms_are_catchable_xx000() {
+        let r =
+            std::panic::catch_unwind(|| super::child_notnull_constraint_lookup_failed("id", 16384));
+        let e = r.expect("child_notnull_constraint_lookup_failed panicked");
+        assert_eq!(
+            e.message(),
+            "cache lookup failed for not-null constraint on column \"id\" of relation 16384"
+        );
+        assert_eq!(e.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+        let r = std::panic::catch_unwind(super::inherited_constraint_not_check_or_notnull);
+        let e = r.expect("inherited_constraint_not_check_or_notnull panicked");
+        assert_eq!(
+            e.message(),
+            "inherited constraint is not a CHECK or not-null constraint"
+        );
+        assert_eq!(e.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+        let r = std::panic::catch_unwind(|| {
+            crate::inheritance::non_inherited_constraint(16384, "c_chk")
+        });
+        let e = r.expect("non_inherited_constraint panicked");
+        assert_eq!(
+            e.message(),
+            "relation 16384 has non-inherited constraint \"c_chk\""
+        );
+        assert_eq!(e.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+    }
 }
 
 #[cfg(test)]

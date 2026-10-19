@@ -56,7 +56,8 @@ pub use interp::{
     QualOutcome, Resume, RetSlot, RetSlots, SuspendKind, Suspension,
 };
 pub use steps::{
-    agg_count_star_advance, agg_pergroup_null, qual_bitmap_cmp_const, qual_bitmap_contains, AggPerGroup, CmpOp,
+    agg_count_star_advance, agg_pergroup_null, qual_bitmap_cmp_const, qual_bitmap_contains,
+    AggPerGroup, AggPresortedHook, CmpOp,
     ExprState, GroupedColsCell, Kernel, OutRef, ProjArithOp, ProjKeyCall, ScanCmpClauses,
     ScanContainsClause, ScanProjCol, ScanProjCols, ScanProjExprKey, SlotSrc, Step,
     PROJ_KEY_MAX_ARGS, PROJ_KEY_MAX_CALLS, SCAN_CMP_MAX_CLAUSES, SCAN_PROJ_MAX_COLS,
@@ -74,8 +75,12 @@ pub fn evaluate_expr<'mcx>(
 ) -> types_error::PgResult<types_nodes::Node<'mcx>> {
     use types_nodes::primnodes::Const;
 
-    let mut state = exec_init_expr(mcx, Some(expr), ParamBind::NONE)?.expect("expr is Some");
-    state.arm_result_mcx(mcx);
+    // C runs the one-shot ExprState in a temporary context freed after the
+    // result is copied out; intermediates never accumulate in the caller's.
+    let tmp = mcx.context().new_child("evaluate_expr");
+    let tmcx = tmp.mcx();
+    let mut state = exec_init_expr(tmcx, Some(expr), ParamBind::NONE)?.expect("expr is Some");
+    state.arm_result_mcx(tmcx);
     let mut slots = EvalSlots {
         scan: None,
         inner: None,

@@ -994,3 +994,57 @@ fn eoxact_drops_cache_context() {
     MXACT_CACHE.with(|c| assert!(c.borrow().cache.is_some()));
     AtEOXact_MultiXact();
 }
+
+// multixact.c:3688: the truncation-replay DEBUG1 message prints the four
+// segment numbers with PRIx64 (lowercase hex); the pre-fix port used {:X}.
+#[test]
+fn truncation_replay_debug_message_uses_lowercase_hex_segments_like_c() {
+    let _l = test_lock();
+    setup();
+    static MSGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    fn capture(err: &types_error::PgError, _out: &mut bool) {
+        if err.level == types_error::DEBUG1 {
+            MSGS.lock().unwrap().push(err.message().to_string());
+        }
+    }
+    // An empty members range whose segment number needs a hex letter; the
+    // offsets range stays at FirstMultiXactId so nothing is truncated.
+    let memb: MultiXactOffset = 0xa * MULTIXACT_MEMBERS_PER_PAGE * SLRU_PAGES_PER_SEGMENT as u32;
+    assert_eq!(MXOffsetToMemberSegment(memb), 0xa);
+    let mut data = [0u8; SIZE_OF_MULTIXACT_TRUNCATE];
+    data[0..4].copy_from_slice(&1u32.to_ne_bytes());
+    data[4..8].copy_from_slice(&FirstMultiXactId.to_ne_bytes());
+    data[8..12].copy_from_slice(&FirstMultiXactId.to_ne_bytes());
+    data[12..16].copy_from_slice(&memb.to_ne_bytes());
+    data[16..20].copy_from_slice(&memb.to_ne_bytes());
+    let rec = xlogreader_seams::DecodedXLogRecord {
+        xl_info: XLOG_MULTIXACT_TRUNCATE_ID,
+        main_data: data.as_ptr(),
+        main_data_len: data.len() as u32,
+        max_block_id: -1,
+        ..Default::default()
+    };
+    let mut state = XLogReaderState { record: Some(rec), ..Default::default() };
+
+    // Replay happens before TrimMultiXact: finishedStartup is false, so
+    // SetMultiXactIdLimit stops short of SetOffsetVacuumLimit (which would
+    // re-take MultiXactTruncationLock under the replay's exclusive hold).
+    let st = MultiXactState();
+    let saved_finished = st.finishedStartup.swap(false, Relaxed);
+    let prev_min = elog::config::log_min_messages();
+    elog::config::set_log_min_messages(types_error::DEBUG1);
+    let prev_hook = elog::set_emit_log_hook(Some(capture));
+    MSGS.lock().unwrap().clear();
+    let r = multixact_redo(&mut state);
+    elog::set_emit_log_hook(prev_hook);
+    elog::config::set_log_min_messages(prev_min);
+    st.finishedStartup.store(saved_finished, Relaxed);
+    r.unwrap();
+    SetMultiXactIdLimit(FirstMultiXactId, 1, false).unwrap();
+
+    let expected = format!(
+        "replaying multixact truncation: offsets [1, 1), offsets segments [0, 0), members [{memb}, {memb}), members segments [a, a)"
+    );
+    let msgs = MSGS.lock().unwrap();
+    assert!(msgs.iter().any(|m| *m == expected), "expected {expected:?}; got {msgs:?}");
+}

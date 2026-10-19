@@ -93,7 +93,9 @@ fn apply_server_options<'mcx>(
     }
     for (name, value) in opts {
         match name.as_str() {
-            "use_remote_estimate" => fp.use_remote_estimate = parse_bool(&value)?,
+            "use_remote_estimate" => {
+                fp.use_remote_estimate = crate::option::def_get_boolean(&name, Some(&value))?
+            }
             "fdw_startup_cost" => {
                 if let guc::units::ParseNum::Ok(v) = guc::units::parse_real(&value, 0) {
                     fp.fdw_startup_cost = v;
@@ -112,7 +114,9 @@ fn apply_server_options<'mcx>(
                     fp.fetch_size = v;
                 }
             }
-            "async_capable" => fp.async_capable = parse_bool(&value)?,
+            "async_capable" => {
+                fp.async_capable = crate::option::def_get_boolean(&name, Some(&value))?
+            }
             _ => {}
         }
     }
@@ -129,26 +133,21 @@ fn apply_table_options<'mcx>(
     }
     for (name, value) in opts {
         match name.as_str() {
-            "use_remote_estimate" => fp.use_remote_estimate = parse_bool(&value)?,
+            "use_remote_estimate" => {
+                fp.use_remote_estimate = crate::option::def_get_boolean(&name, Some(&value))?
+            }
             "fetch_size" => {
                 if let guc::units::ParseNum::Ok(v) = guc::units::parse_int(&value, 0) {
                     fp.fetch_size = v;
                 }
             }
-            "async_capable" => fp.async_capable = parse_bool(&value)?,
+            "async_capable" => {
+                fp.async_capable = crate::option::def_get_boolean(&name, Some(&value))?
+            }
             _ => {}
         }
     }
     Ok(())
-}
-
-fn parse_bool(value: &str) -> PgResult<bool> {
-    // defGetBoolean's string forms (commands_define); options are already
-    // validator-checked, so this only meets true/false/on/off/1/0/yes/no.
-    Ok(matches!(
-        value.to_ascii_lowercase().as_str(),
-        "true" | "t" | "on" | "1" | "yes" | "y"
-    ))
 }
 
 // ---------- GetForeignRelSize ----------
@@ -2600,6 +2599,9 @@ fn postgres_get_foreign_plan<'mcx>(
             remote_recheck.lappend(mcx, *run.root.expr_node(clause))?;
         }
         for &ri in &local {
+            if run.root.rinfo(ri).pseudoconstant {
+                continue;
+            }
             let clause = run.root.rinfo(ri).clause;
             local_exprs.lappend(mcx, *run.root.expr_node(clause))?;
         }

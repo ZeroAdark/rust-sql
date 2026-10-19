@@ -1,5 +1,5 @@
 -- Abandoned suspended value-per-call scans must restart (C: ShutdownSQLFunction),
--- never resume mid-stream. Probe verdict 2026-07-04 (job pgrust-fast-tests-1d56267f8e-1783148578):
+-- never resume mid-stream. Probe verdict 2026-07-04 (job pgrust-tests-1d56267f8e-1783148578):
 -- every intra-query rescan-abandonment shape is planner-unreachable today —
 -- ProjectSet under a SubPlan loud-panics (subselect.rs finalize_plan T_ProjectSet),
 -- lateral SRF subqueries loud-panic (relids "no relation entry" / execexpr scan slot):

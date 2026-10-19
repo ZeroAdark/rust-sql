@@ -77,6 +77,19 @@ pub fn with_store<R>(h: TuplestoreHandle, f: impl FnOnce(&mut Tuplestore) -> R) 
     })
 }
 
+/// Session teardown: hand the registry slabs back once every portal has
+/// ended its store (Portals phase precedes this). A registry that still
+/// holds a store (an aborted statement's leftover) is left as it was — the
+/// C FATAL-exit leak — rather than dropped through a possibly torn-down fd
+/// table.
+pub(crate) fn release_registry() {
+    let empty = ENTRIES.with(|e| e.borrow().iter().all(Option::is_none));
+    if empty {
+        ENTRIES.with(|e| **e.borrow_mut() = Vec::new());
+        FREE.with(|f| **f.borrow_mut() = Vec::new());
+    }
+}
+
 pub fn end(h: TuplestoreHandle) {
     if h.is_null() {
         return;

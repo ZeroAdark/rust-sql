@@ -226,3 +226,18 @@ fn builtins_table_oid_ascending() {
         assert!(w[0].foid < w[1].foid);
     }
 }
+
+#[test]
+fn in_error_quotes_raw_input_bytes() {
+    let err = macaddr_in(b"\xff".as_slice(), None).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"invalid input syntax for type macaddr: \"\xff\"".as_slice())
+    );
+    let err = macaddr_in(b"1ff:00:00:00:00:00\xff".as_slice(), None).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"invalid input syntax for type macaddr: \"1ff:00:00:00:00:00\xff\"".as_slice())
+    );
+    assert!(macaddr_in("bogus", None).unwrap_err().message_raw.is_none());
+}

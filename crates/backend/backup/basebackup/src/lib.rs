@@ -20,12 +20,12 @@ use compression::{
     parse_compress_algorithm, parse_compress_specification, validate_compress_specification,
     PgCompressAlgorithm, PgCompressSpecification,
 };
-use elog::ereport;
+use elog::{elog, ereport};
 use mcx::Mcx;
 use repl_gram::{BaseBackupCmd, ReplOption, ReplOptionArg};
 use types_core::{Oid, TimeLineID, XLogRecPtr};
 use types_error::{
-    ErrorLocation, PgResult,
+    ErrorLocation, PgResult, DEBUG1, DEBUG2,
     ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE, ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
     ERRCODE_PROGRAM_LIMIT_EXCEEDED, ERRCODE_SYNTAX_ERROR, ERROR, WARNING,
 };
@@ -369,15 +369,6 @@ fn opt_string(o: &ReplOption) -> PgResult<String> {
     }
 }
 
-// parse_bool (bool.c) as the MANIFEST option consumes it.
-fn parse_bool_str(s: &str) -> Option<bool> {
-    match s.to_ascii_lowercase().as_str() {
-        "true" | "yes" | "on" | "1" | "t" | "y" => Some(true),
-        "false" | "no" | "off" | "0" | "f" | "n" => Some(false),
-        _ => None,
-    }
-}
-
 // defGetBoolean (define.c:94): no argument means true; Integer 0/1; any
 // other node through defGetString, accepting only true/false/on/off.
 fn opt_bool(o: &ReplOption) -> PgResult<bool> {
@@ -463,8 +454,8 @@ fn parse_basebackup_options(options: &[ReplOption]) -> PgResult<BasebackupOption
                 o_progress = true;
             }
             "checkpoint" => {
-                if o_checkpoint { dup_err(name)?; }
                 let v = opt_string(o)?;
+                if o_checkpoint { dup_err(name)?; }
                 if strcasecmp(&v, "fast") {
                     opt.fastcheckpoint = true;
                 } else if strcasecmp(&v, "spread") {
@@ -524,9 +515,9 @@ fn parse_basebackup_options(options: &[ReplOption]) -> PgResult<BasebackupOption
                 o_noverify = true;
             }
             "manifest" => {
-                if o_manifest { dup_err(name)?; }
                 let v = opt_string(o)?;
-                opt.manifest = if let Some(b) = parse_bool_str(&v) {
+                if o_manifest { dup_err(name)?; }
+                opt.manifest = if let Some(b) = adt_bool::parse_bool(&v) {
                     if b { BackupManifestOption::Yes } else { BackupManifestOption::No }
                 } else if strcasecmp(&v, "force-encode") {
                     BackupManifestOption::ForceEncode
@@ -539,8 +530,8 @@ fn parse_basebackup_options(options: &[ReplOption]) -> PgResult<BasebackupOption
                 o_manifest = true;
             }
             "manifest_checksums" => {
-                if o_manifest_cksums { dup_err(name)?; }
                 let v = opt_string(o)?;
+                if o_manifest_cksums { dup_err(name)?; }
                 match parse_checksum_type(v.as_bytes()) {
                     Some(t) => opt.manifest_checksum_type = t,
                     None => {
@@ -557,13 +548,14 @@ fn parse_basebackup_options(options: &[ReplOption]) -> PgResult<BasebackupOption
                 o_target = true;
             }
             "target_detail" => {
+                let v = opt_string(o)?;
                 if o_target_detail { dup_err(name)?; }
-                target_detail_str = Some(opt_string(o)?);
+                target_detail_str = Some(v);
                 o_target_detail = true;
             }
             "compression" => {
-                if o_compression { dup_err(name)?; }
                 let v = opt_string(o)?;
+                if o_compression { dup_err(name)?; }
                 // parse_compress_algorithm is case-sensitive, as C's strcmp.
                 match parse_compress_algorithm(&v) {
                     Some(alg) => opt.compression = alg,
@@ -1323,6 +1315,13 @@ fn sendDir(
     sendDir_spc(sink, state, path, basepathlen, sizeonly, sendtblspclinks, manifest, INVALID_OID, incr)
 }
 
+// basebackup.c:1456 compares the "./"-relative PGDATA path against each
+// in-PGDATA tablespace rpath; sendTablespace walks with tablespaces = NIL
+// (basebackup.c:1168), so an absolute tablespace path is never sliced.
+fn tablespace_within_pgdata(pathbuf: &str, spcoid: Oid, tablespaces: &[TablespaceInfo]) -> bool {
+    spcoid == INVALID_OID && tablespaces.iter().any(|ti| ti.rpath.as_deref() == pathbuf.get(2..))
+}
+
 // sendDir (basebackup.c:1244). With `sizeonly` nothing is emitted: the walk
 // only totals the tar bytes it would produce (the PROGRESS size estimate).
 fn sendDir_spc(
@@ -1394,6 +1393,7 @@ fn sendDir_spc(
         for item in EXCLUDE_FILES {
             let cmplen = if item.match_prefix { item.name.len() } else { item.name.len() + 1 };
             if strncmp(&d_name, item.name, cmplen) == 0 {
+                let _ = elog(DEBUG1, format!("file \"{d_name}\" excluded from backup"));
                 excluded = true;
                 break;
             }
@@ -1425,12 +1425,20 @@ fn sendDir_spc(
             // basebackup.c:1332: any lstat failure means "no init fork".
             let init_fork_file = format!("{path}/{relfilenumber}_init");
             if lstat_raw(&init_fork_file).is_ok() {
+                let _ = elog(
+                    DEBUG2,
+                    format!("unlogged relation file \"{d_name}\" excluded from backup"),
+                );
                 continue;
             }
         }
 
         // Exclude temporary relations.
         if dboid != 0 && fd::looks_like_temp_rel_name(&d_name) {
+            let _ = elog(
+                DEBUG2,
+                format!("temporary relation file \"{d_name}\" excluded from backup"),
+            );
             continue;
         }
 
@@ -1448,6 +1456,10 @@ fn sendDir_spc(
         let mut excl_contents = false;
         for excl in EXCLUDE_DIR_CONTENTS {
             if &d_name == excl {
+                let _ = elog(
+                    DEBUG1,
+                    format!("contents of directory \"{d_name}\" excluded from backup"),
+                );
                 convert_link_to_directory(&mut statbuf);
                 size += _tarWriteHeader(
                     sink, state, &pathbuf[basepathlen as usize + 1..], None, &statbuf, sizeonly,
@@ -1484,16 +1496,7 @@ fn sendDir_spc(
             )?;
 
             // Recurse, unless this is a separate tablespace located within PGDATA.
-            let mut skip = false;
-            let cmp = &pathbuf[2..];
-            for ti in state.tablespaces.iter() {
-                if let Some(rpath) = &ti.rpath {
-                    if rpath == cmp {
-                        skip = true;
-                        break;
-                    }
-                }
-            }
+            let mut skip = tablespace_within_pgdata(&pathbuf, spcoid, &state.tablespaces);
             if pathbuf == "./pg_tblspc" && !sendtblspclinks {
                 skip = true;
             }
@@ -2209,7 +2212,9 @@ mod bcs_bridge {
         });
     }
 
-    fn end(tstate: TupOutputState) {
+    // printsimple.c:96 pq_sendcountedtext: an encoding-conversion failure
+    // on a tablespace path is an ordinary ERROR, not a panic.
+    fn end(tstate: TupOutputState) -> PgResult<()> {
         let buf = REGISTRY
             .with(|r| r.borrow_mut().remove(&tstate.dest.0))
             .expect("bcs_bridge dest");
@@ -2218,7 +2223,7 @@ mod bcs_bridge {
         // SAFETY: the pointer is the live command mcx set by SendBaseBackup for
         // the synchronous duration of the backup, cleared on return.
         let ctx = unsafe { &*(p as *const MemoryContext) };
-        materialize(ctx.mcx(), &buf).expect("bcs_bridge: result-set send");
+        materialize(ctx.mcx(), &buf)
     }
 
     fn materialize(mcx: Mcx<'_>, buf: &Buffered) -> PgResult<()> {
@@ -2260,6 +2265,33 @@ mod bcs_bridge {
 fn send_base_backup_entry(cmd: BaseBackupCmd) -> PgResult<()> {
     let ctx = mcx::MemoryContext::new("SendBaseBackup");
     SendBaseBackup(ctx.mcx(), &cmd)
+}
+
+#[cfg(test)]
+mod tablespace_walk_tests {
+    use super::*;
+
+    #[test]
+    fn absolute_tablespace_paths_are_never_sliced() {
+        let ts = vec![
+            TablespaceInfo {
+                oid: 16385,
+                path: Some("/donn\u{e9}es/ts".to_string()),
+                rpath: None,
+                size: 0,
+            },
+            TablespaceInfo {
+                oid: 16386,
+                path: Some("/pgdata/inside".to_string()),
+                rpath: Some("inside".to_string()),
+                size: 0,
+            },
+        ];
+        assert!(tablespace_within_pgdata("./inside", INVALID_OID, &ts));
+        assert!(!tablespace_within_pgdata("./base", INVALID_OID, &ts));
+        assert!(!tablespace_within_pgdata("/donn\u{e9}es/ts/PG_18_202502181", 16385, &ts));
+        assert!(!tablespace_within_pgdata("/pgdata/inside/PG_18_202502181", 16386, &ts));
+    }
 }
 
 #[cfg(test)]
@@ -2801,6 +2833,36 @@ mod remediation_b086_tests {
     // (basebackup.c:734) consumes them: an integer LABEL is accepted as its
     // decimal text; the "requires a ..." messages are C's; defGetBoolean takes
     // only 0/1/true/false/on/off; defGetInt64 rejects strings.
+    // basebackup.c:842: MANIFEST goes through parse_bool (bool.c), which
+    // accepts any unique prefix of true/false/yes/no/on/off.
+    #[test]
+    fn manifest_option_accepts_parse_bool_prefixes() {
+        let _g = setup();
+        let manifest = |v: &str| {
+            parse_basebackup_options(&[opt("manifest", Some(ReplOptionArg::Str(v.into())))])
+                .map(|o| o.manifest)
+        };
+        for (v, want) in [
+            ("tru", BackupManifestOption::Yes),
+            ("T", BackupManifestOption::Yes),
+            ("ye", BackupManifestOption::Yes),
+            ("ON", BackupManifestOption::Yes),
+            ("1", BackupManifestOption::Yes),
+            ("fals", BackupManifestOption::No),
+            ("N", BackupManifestOption::No),
+            ("of", BackupManifestOption::No),
+            ("0", BackupManifestOption::No),
+            ("Force-Encode", BackupManifestOption::ForceEncode),
+        ] {
+            assert_eq!(manifest(v).unwrap(), want, "{v}");
+        }
+        for v in ["o", "truee", "10", "yes!"] {
+            let e = manifest(v).expect_err(v);
+            assert_eq!(e.sqlstate(), ERRCODE_SYNTAX_ERROR);
+            assert_eq!(e.message(), format!("unrecognized manifest option: \"{v}\""));
+        }
+    }
+
     #[test]
     fn option_values_and_messages_are_define_c_exact() {
         let _g = setup();

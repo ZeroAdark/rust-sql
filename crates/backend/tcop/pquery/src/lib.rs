@@ -145,7 +145,7 @@ impl Drop for QueryDescOwner {
 
 fn with_source_text<R>(portal: &Portal<'static>, f: impl FnOnce(&str) -> R) -> R {
     let p = portal.borrow();
-    f(p.sourceText.as_ref().map(|s| s.as_str()).unwrap_or(""))
+    f(p.sourceText.unwrap_or(""))
 }
 
 pub fn CreateQueryDesc<'p, 'a, 's>(
@@ -378,7 +378,7 @@ pub fn PortalStart(
 
                 let query_desc = {
                     let p = portal.borrow();
-                    let source_text = p.sourceText.as_ref().map(|s| s.as_str()).unwrap_or("");
+                    let source_text = p.sourceText.unwrap_or("");
                     let query_env = p.queryEnv;
                     // installed() guard: test fixtures shim only the seams they use.
                     if !p.cplan.is_null() && execmain_seams::note_cplan_for_query_desc::is_installed()
@@ -686,7 +686,7 @@ pub fn PortalRun<'mcx>(
         }
     })?;
 
-    if log_stats && strategy != PORTAL_MULTI_QUERY {
+    if guc_tables::backing::log_executor_stats() && strategy != PORTAL_MULTI_QUERY {
         postgres_seams::show_usage::call("EXECUTOR STATISTICS")?;
     }
 
@@ -983,7 +983,7 @@ fn PortalRunUtility(
     let source_text: &str = unsafe {
         let p = portal.borrow();
         core::mem::transmute::<&str, &str>(
-            p.sourceText.as_ref().map(|s| s.as_str()).unwrap_or(""),
+            p.sourceText.unwrap_or(""),
         )
     };
     let (params, query_env) = {
@@ -1575,6 +1575,9 @@ pub fn cursor_store_persist_into_hold(portal: &Portal<'static>) -> PgResult<()> 
         exectuples::make_tuple_table_slot(mcx, TupleSlotKind::MinimalTuple, Some(tup_desc));
     tuplestore_hold_seams::tuplestore_rescan::call(src)?;
     while tuplestore_hold_seams::tuplestore_gettupleslot::call(src, true, false, &mut slot)? {
+        // C copies through ExecutorRun, whose scan nodes CHECK_FOR_INTERRUPTS
+        // per tuple (execScan.h).
+        postgres_seams::check_for_interrupts::call()?;
         treceiver.receive_slot(&mut slot)?;
         exectuples::exec_clear_tuple(&mut slot, mcx);
     }

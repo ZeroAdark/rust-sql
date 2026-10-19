@@ -10,7 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # canonical pg_qsort shared port (src/port/qsort.c parity, tie-order exact;
-# GL-PGQSORT-PERF consolidation). Needed by regexp.rs (order-exact
+# regression consolidation). Needed by regexp.rs (order-exact
 # penalty-tie eviction, ruling 2026-08-01).
 pg_qsort = { path = "../../_support/pg_qsort" }
 datum = { path = "../../_support/types/datum" }

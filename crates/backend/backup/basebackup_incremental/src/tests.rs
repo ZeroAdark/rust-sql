@@ -301,6 +301,18 @@ fn prepare_rejects_manifest_without_wal_ranges() {
     assert_eq!(msg, "manifest contains no required WAL ranges");
 }
 
+// basebackup_incremental.c:288-313: the empty WAL-range list is rejected
+// before readTimeLineHistory (no timeline seam is installed here).
+#[test]
+fn prepare_rejects_empty_wal_ranges_before_reading_timeline_history() {
+    let cx = MemoryContext::new("prepare-test");
+    let mut ib = ib_with_ranges(&[]);
+    let mut bs = backup_state(2, 0x3000000);
+    let e = ib.PrepareForIncrementalBackup(cx.mcx(), &mut bs).err().expect("expected error");
+    assert_eq!(e.sqlstate(), ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE);
+    assert_eq!(e.message(), "manifest contains no required WAL ranges");
+}
+
 #[test]
 fn prepare_sets_incremental_start_from_single_range() {
     let ib = ib_with_ranges(&[BackupWalRange { tli: 1, start_lsn: 0x2000028, end_lsn: 0x2000120 }]);

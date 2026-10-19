@@ -1425,16 +1425,18 @@ fn heap_xlog_logical_rewrite(record: &mut XLogReaderState) -> PgResult<()> {
     let create_xid = record_xid(record);
 
     let datadir = init_small::globals::DataDir().expect("heap_xlog_logical_rewrite: DataDir unset");
-    let dir = std::path::PathBuf::from(datadir).join("pg_logical/mappings");
-    let path = dir.join(format!(
-        "map-{:x}-{:x}-{:X}_{:X}-{:x}-{:x}",
+    // rewriteheap.c:1081: the messages below name the datadir-relative
+    // pg_logical/mappings/<file>.
+    let relpath = format!(
+        "pg_logical/mappings/map-{:x}-{:x}-{:X}_{:X}-{:x}-{:x}",
         mapped_db,
         mapped_rel,
         (start_lsn >> 32) as u32,
         start_lsn as u32,
         mapped_xid,
         create_xid,
-    ));
+    );
+    let path = std::path::PathBuf::from(datadir).join(&relpath);
 
     // rewriteheap.c:1085-1141: every file failure is errcode_for_file_access()
     // + "%m" (strerror of the failing call's errno); `what` carries the
@@ -1453,7 +1455,7 @@ fn heap_xlog_logical_rewrite(record: &mut XLogReaderState) -> PgResult<()> {
 
     let file = match std::fs::OpenOptions::new().create(true).write(true).open(&path) {
         Ok(f) => f,
-        Err(e) => return file_err(format!("create file \"{}\"", path.display()), e),
+        Err(e) => return file_err(format!("create file \"{relpath}\""), e),
     };
     // Truncate all data that's not guaranteed to have been safely fsynced
     // (by a previous record or by the last checkpoint). rewriteheap.c:1100:
@@ -1462,7 +1464,7 @@ fn heap_xlog_logical_rewrite(record: &mut XLogReaderState) -> PgResult<()> {
     if let Err(e) = file.set_len(offset) {
         // rewriteheap.c:1101-1105: "could not truncate file \"%s\" to %u: %m"
         return file_err(
-            format!("truncate file \"{}\" to {}", path.display(), offset as u32),
+            format!("truncate file \"{relpath}\" to {}", offset as u32),
             e,
         );
     }
@@ -1485,7 +1487,7 @@ fn heap_xlog_logical_rewrite(record: &mut XLogReaderState) -> PgResult<()> {
         f.write_all(data)
     })();
     if let Err(e) = write_res {
-        return file_err(format!("write to file \"{}\"", path.display()), e);
+        return file_err(format!("write to file \"{relpath}\""), e);
     }
     report_wait_end();
     // fsync all previously written data (rewriteheap.c:1131
@@ -1493,11 +1495,23 @@ fn heap_xlog_logical_rewrite(record: &mut XLogReaderState) -> PgResult<()> {
     // data_sync_elevel(ERROR) — PANIC at default data_sync_retry=off; the
     // other file_err sites (create/truncate/write) stay plain ERROR as in C.
     report_wait_start(WAIT_EVENT_LOGICAL_REWRITE_MAPPING_SYNC);
-    let synced = file.sync_all();
-    if let Err(e) = synced {
+    #[cfg(unix)]
+    let rc = {
+        use std::os::unix::io::AsRawFd;
+        fd::pg_fsync(file.as_raw_fd())
+    };
+    #[cfg(not(unix))]
+    let rc = match file.sync_all() {
+        Ok(()) => 0,
+        Err(e) => {
+            fd::set_errno(e.raw_os_error().unwrap_or(0));
+            -1
+        }
+    };
+    if rc != 0 {
         return elog::ereport(fd::data_sync_elevel(types_error::ERROR))
             .errcode_for_file_access()
-            .errmsg(format!("could not fsync file \"{}\": {e}", path.display()))
+            .errmsg(format!("could not fsync file \"{relpath}\": %m"))
             .finish(types_error::ErrorLocation::new(
                 "src/backend/access/heap/rewriteheap.c",
                 1133,
@@ -1511,7 +1525,7 @@ fn heap_xlog_logical_rewrite(record: &mut XLogReaderState) -> PgResult<()> {
         let raw = std::os::unix::io::IntoRawFd::into_raw_fd(file);
         if fd::pg_close(raw) != 0 {
             return file_err(
-                format!("close file \"{}\"", path.display()),
+                format!("close file \"{relpath}\""),
                 std::io::Error::last_os_error(),
             );
         }

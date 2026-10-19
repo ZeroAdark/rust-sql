@@ -77,13 +77,20 @@ impl TupleImage {
     }
 }
 
-// Cold, divergent: a crafted/mismatched on-disk image walked off the tuple.
+// Cold, divergent: a crafted/mismatched on-disk image walked off the tuple;
+// XX001 like bufpage's corrupt line pointer.
 // Mirrors types_tuple's deform bound (getattr.rs idx 38): the backend error
 // boundary turns the unwind into an aborted transaction rather than an OOB read.
 #[cold]
 #[inline(never)]
 fn deform_corrupt() -> ! {
-    panic!("heap tuple data is corrupt: attribute offset exceeds tuple length");
+    std::panic::panic_any(alloc::boxed::Box::new(
+        ::types_error::PgError::new(
+            ::types_error::ERROR,
+            "heap tuple data is corrupt: attribute offset exceeds tuple length",
+        )
+        .with_sqlstate(::types_error::ERRCODE_DATA_CORRUPTED),
+    ))
 }
 
 // Advance past a NUL-terminated cstring at `tp[off..]`, bounded by data_len.
@@ -740,7 +747,7 @@ mod deform_bounds_tests {
     // raise a deterministic corruption error, not advance the walk ~100 bytes
     // past the tuple (the idx 97 out-of-bounds read).
     #[test]
-    #[should_panic(expected = "corrupt")]
+    #[should_panic]
     fn lying_varlena_header_is_bounded() {
         let mut image = Image([0u8; 64]);
         // SAFETY: writing the 4-byte varlena header within the data area.
@@ -757,7 +764,7 @@ mod deform_bounds_tests {
     // A fixed-width (int8) attribute wider than the data area must be rejected
     // rather than reading the 4 bytes past the tuple body.
     #[test]
-    #[should_panic(expected = "corrupt")]
+    #[should_panic]
     fn truncated_fixed_attribute_is_bounded() {
         let image = Image([0u8; 64]);
         walk_one(&image, 4, att(8, true, 8));
@@ -769,5 +776,16 @@ mod deform_bounds_tests {
     fn well_formed_fixed_attribute_deforms() {
         let image = Image([0u8; 64]);
         walk_one(&image, 8, att(8, true, 8));
+    }
+}
+
+#[cfg(test)]
+mod corrupt_tests {
+    #[test]
+    fn deform_corruption_is_data_corrupted() {
+        let payload = std::panic::catch_unwind(|| super::deform_corrupt()).expect_err("must unwind");
+        let err = payload.downcast::<alloc::boxed::Box<::types_error::PgError>>().expect("PgError payload");
+        assert_eq!(err.sqlstate(), ::types_error::ERRCODE_DATA_CORRUPTED);
+        assert!(err.message.contains("heap tuple data is corrupt"));
     }
 }

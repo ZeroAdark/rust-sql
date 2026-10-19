@@ -66,6 +66,21 @@ fn parse_errors() {
     assert_eq!(e, "syntax error at end of input");
 }
 
+// syncrep_scanner.l:113 <xd><<EOF>>: the scanner's yyerror fires only when the
+// parser pulls that token; an earlier syntax error wins (bison stops first).
+#[test]
+fn unterminated_quote_after_a_syntax_error_reports_the_syntax_error() {
+    for (input, expected) in [
+        ("a b \"c", "syntax error at or near \"b\""),
+        ("FIRST 2 (a b) \"c", "syntax error at or near \"b\""),
+        ("a, b, \"c", "unterminated quoted identifier at end of input"),
+        ("\"c", "unterminated quoted identifier at end of input"),
+        ("2 (a \"c", "unterminated quoted identifier at end of input"),
+    ] {
+        assert_eq!(parse_synchronous_standby_names(input).unwrap_err(), expected, "{input:?}");
+    }
+}
+
 #[test]
 fn parse_num_sync_is_c_atoi() {
     // syncrep_gram.y:106 config->num_sync = atoi(num_sync), i.e. (int) strtol:

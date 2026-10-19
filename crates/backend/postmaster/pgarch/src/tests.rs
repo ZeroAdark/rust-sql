@@ -144,10 +144,25 @@ fn archive_done_renames_ready() {
     });
 }
 
+// LAST_PGARCH_START_TIME is one process-wide static (C: the function-static
+// `last_pgarch_start_time`, pgarch.c:200; only the postmaster thread calls
+// PgArchCanRestart). Every test that reads or writes it holds this lock and
+// sets the stamp it starts from, so no other test's launch can land inside
+// its 10 s throttle window.
+fn with_restart_stamp(last_start: i64, f: impl FnOnce()) {
+    static LOCK: Mutex<()> = Mutex::new(());
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    LAST_PGARCH_START_TIME.store(last_start, Relaxed);
+    f();
+}
+
 #[test]
 fn can_restart_throttles() {
-    assert!(PgArchCanRestart());
-    assert!(!PgArchCanRestart());
+    // 0 = never launched (the postmaster's initial value).
+    with_restart_stamp(0, || {
+        assert!(PgArchCanRestart());
+        assert!(!PgArchCanRestart());
+    });
 }
 
 // audit-18.6 b104: the archiver's two elapsed-time tests are C
@@ -166,8 +181,7 @@ fn restart_interval_wraps_a_backwards_clock_step() {
     assert!(restart_interval_elapsed(1000, 1005));
     // The live entry point: a launch stamp from the "future" must not
     // block the relaunch (pgarch.c:207 PgArchCanRestart).
-    LAST_PGARCH_START_TIME.store(time_now() + 3600, Relaxed);
-    assert!(PgArchCanRestart());
+    with_restart_stamp(time_now() + 3600, || assert!(PgArchCanRestart()));
 }
 
 #[test]
@@ -187,4 +201,67 @@ fn shmem_init_is_idempotent() {
     shmem().pgprocno.store(7, Relaxed);
     PgArchShmemInit().unwrap();
     assert_eq!(shmem().pgprocno.load(Relaxed), 7);
+}
+
+static HUP_OBSERVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn observe_hup() {
+    HUP_OBSERVED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+// pgarch.c:419: a SIGHUP pended during the copy loop is handled at the next
+// ProcessPgArchInterrupts, not only at the main loop's WaitLatch.
+// The signal-dispatch harness (set-once seams + ProcSignal shmem): one
+// gate for every test that pends a thread signal.
+fn signal_harness_once() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        shmem::init_seams();
+        g::SetMaxBackends(16);
+        procsignal::ProcSignalShmemInit();
+        procsignal_seams::proc_signal_barrier_pending::set(|| false);
+    });
+}
+
+#[test]
+fn process_pg_arch_interrupts_drains_pended_thread_signals() {
+    signal_harness_once();
+    const PID: i32 = 424_149;
+    procsignal::PreIdentitySignalAdopt(PID);
+    procsignal::pqsignal_thread(
+        procsignal::signums::SIGHUP,
+        procsignal::ThreadSignalHandler::Simple(observe_hup),
+    );
+    HUP_OBSERVED.store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(procsignal::SendThreadSignal(PID, procsignal::signums::SIGHUP), 0);
+    assert!(!HUP_OBSERVED.load(std::sync::atomic::Ordering::SeqCst));
+    ProcessPgArchInterrupts().unwrap();
+    assert!(HUP_OBSERVED.load(std::sync::atomic::Ordering::SeqCst));
+    procsignal::PreIdentitySignalRelease();
+}
+
+// pgarch.c:411: a SIGTERM pended during an archive command stops the copy
+// loop before the next command, not one command later.
+// SignalHandlerForShutdownRequest minus the latch seam the harness lacks.
+fn pend_shutdown_request() {
+    interrupt::SetShutdownRequestPending(true);
+}
+
+#[test]
+fn copy_loop_stops_on_a_pended_sigterm() {
+    signal_harness_once();
+    const PID: i32 = 424_150;
+    procsignal::PreIdentitySignalAdopt(PID);
+    procsignal::pqsignal_thread(
+        procsignal::signums::SIGTERM,
+        procsignal::ThreadSignalHandler::Simple(pend_shutdown_request),
+    );
+    interrupt::SetShutdownRequestPending(false);
+    assert!(!copy_loop_shutdown_requested().unwrap());
+    assert_eq!(procsignal::SendThreadSignal(PID, procsignal::signums::SIGTERM), 0);
+    assert!(!interrupt::ShutdownRequestPending());
+    assert!(copy_loop_shutdown_requested().unwrap());
+    assert!(interrupt::ShutdownRequestPending());
+    interrupt::SetShutdownRequestPending(false);
+    procsignal::PreIdentitySignalRelease();
 }

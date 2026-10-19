@@ -193,6 +193,7 @@ pub(crate) fn recreate_two_phase_file(xid: TransactionId, content: &[u8]) -> PgR
         let mut write_off: i64 = 0;
         // twophase.c:1749-1769: WAIT_EVENT_TWOPHASE_FILE_WRITE around the
         // content + CRC writes.
+        fd::set_errno(0);
         report_wait_start(WAIT_EVENT_TWOPHASE_FILE_WRITE);
         for chunk in [content, &crc.to_ne_bytes()[..]] {
             // Positional write at the tracked append offset (O_TRUNC fd).

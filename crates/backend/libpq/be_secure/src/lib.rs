@@ -115,7 +115,9 @@ pub fn secure_open_server() -> PgResult<i32> {
         .errmsg_internal(format!(
             "SSL connection from DN:\"{}\" CN:\"{}\"",
             open.peer_dn.as_deref().unwrap_or("(anonymous)"),
-            open.peer_cn.as_deref().unwrap_or("(anonymous)"),
+            open.peer_cn
+                .as_deref()
+                .map_or(std::borrow::Cow::Borrowed("(anonymous)"), String::from_utf8_lossy),
         ))
         .finish(loc("secure_open_server"))?;
     Ok(open.r)

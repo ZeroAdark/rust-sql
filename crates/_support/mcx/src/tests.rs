@@ -1311,7 +1311,7 @@ fn slab_child_context_reports_in_parent_subtree() {
     drop(b);
     drop(child);
 }
-// GL-MEMWATCH-1: the process-wide block-bytes counter balances across a
+// regression: the process-wide block-bytes counter balances across a
 // context lifecycle. Other tests allocate concurrently, so the assertions
 // are delta-based with a large dedicated allocation and a noise allowance.
 #[test]
@@ -1335,7 +1335,7 @@ fn global_footprint_tracks_context_block_bytes() {
         // NOISE rides BOTH directions: concurrent tests FREE between the
         // two samples of the process-global counter too (the lower bound
         // without the allowance was a latent flake — adjudicated by the
-        // logdec lane, GL-CONCMEM-1 pays it in passing).
+        // logdec lane, regression pays it in passing).
         let grew = held + NOISE >= base + BIG;
         drop(ctx);
         let after = global_footprint::bytes();
@@ -1876,4 +1876,27 @@ fn allocated_subtree_counts_malloc_children() {
     assert_eq!(root.subtree_allocated(), baseline + 64);
     drop(v);
     assert_eq!(root.subtree_allocated(), baseline);
+}
+
+#[test]
+fn generation_shrink_to_zero_releases_the_chunk() {
+    let ctx = MemoryContext::new_generation("g");
+    let mcx = ctx.mcx();
+    let small = Layout::from_size_align(64, 8).unwrap();
+    let big = Layout::from_size_align(2 * 1024 * 1024, 8).unwrap();
+    let zero = Layout::from_size_align(0, 8).unwrap();
+    let _keeper = Allocator::allocate(&mcx, small).unwrap();
+    let p1 = Allocator::allocate(&mcx, big).unwrap().cast::<u8>();
+    let p2 = Allocator::allocate(&mcx, big).unwrap().cast::<u8>();
+    assert_eq!(ctx.stats().nblocks, 3, "keeper + two dedicated blocks");
+    // SAFETY: p1/p2 are live from allocate with `big`; the zero-size results
+    // are dangling and their deallocate is a no-op by contract.
+    unsafe {
+        let z1 = Allocator::shrink(&mcx, p1, big, zero).unwrap();
+        assert_eq!(z1.len(), 0);
+        let z2 = Allocator::shrink(&mcx, p2, big, zero).unwrap();
+        Allocator::deallocate(&mcx, z1.cast(), zero);
+        Allocator::deallocate(&mcx, z2.cast(), zero);
+    }
+    assert_eq!(ctx.stats().nblocks, 2, "one emptied block parks as the freeblock, the other is released");
 }

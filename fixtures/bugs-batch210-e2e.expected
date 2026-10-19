@@ -1,0 +1,55 @@
+-- Differential fixture for the 2026-09-13 audit bug batch 210
+-- (backend/nodes: expression_tree_mutator visits Aggref.aggdirectargs before
+-- args; a panic_any(PgError) raised inside a PL/pgSQL block body reaches the
+-- block's EXCEPTION handlers like C's ereport longjmp). Run via
+-- scripts/bugs-batch210-e2e.sh against the frozen expected captured from C
+-- PostgreSQL 18.6.
+\pset pager off
+-- regression / regression: constant folding reaches
+-- the direct arguments first (nodeFuncs.c:3025-3026), so the direct
+-- argument's 22012 wins over the aggregated argument's 2201F.
+SELECT percentile_cont(1/0::float8) WITHIN GROUP (ORDER BY sqrt(-1.0)) FROM generate_series(1, 2);
+ERROR:  division by zero
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY sqrt(-1.0)) FROM generate_series(1, 2);
+ERROR:  cannot take square root of a negative number
+SELECT percentile_cont(1/0::float8) WITHIN GROUP (ORDER BY 1.0) FROM generate_series(1, 2);
+ERROR:  division by zero
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY g) FROM generate_series(1, 3) g;
+ percentile_cont 
+-----------------
+               2
+(1 row)
+
+-- regression: exprType's 42704 for an ARRAY sublink over
+-- pg_node_tree (nodeFuncs.c:116-119) is catchable by EXCEPTION.
+DO $$
+BEGIN
+  PERFORM ARRAY(SELECT adbin FROM pg_attrdef) = ARRAY(SELECT adbin FROM pg_attrdef);
+  RAISE NOTICE 'no error';
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'caught: % %', SQLSTATE, SQLERRM;
+END $$;
+NOTICE:  caught: 42704 could not find array type for data type pg_node_tree
+CREATE FUNCTION b210_catch() RETURNS text LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM ARRAY(SELECT adbin FROM pg_attrdef);
+  RETURN 'not caught';
+EXCEPTION WHEN undefined_object THEN
+  RETURN 'caught';
+END $$;
+SELECT b210_catch();
+ b210_catch 
+------------
+ caught
+(1 row)
+
+SELECT b210_catch() FROM generate_series(1, 2);
+ b210_catch 
+------------
+ caught
+ caught
+(2 rows)
+
+DROP FUNCTION b210_catch();
+SELECT ARRAY(SELECT adbin FROM pg_attrdef) = ARRAY(SELECT adbin FROM pg_attrdef);
+ERROR:  could not find array type for data type pg_node_tree

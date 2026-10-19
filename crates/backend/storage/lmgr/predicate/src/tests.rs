@@ -829,4 +829,6 @@ fn shmem_init_registers_predicate_hashes_with_c_shared_size() {
     let (_, found) =
         shmem::ShmemInitStruct("SERIALIZABLEXID hash", shared_size(max_table_size * 2)).unwrap();
     assert!(found, "\"SERIALIZABLEXID hash\" is not registered in the ShmemIndex");
+    let (_, found) = shmem::ShmemInitStruct("SerialControlData", 16).unwrap();
+    assert!(found, "\"SerialControlData\" is not registered in the ShmemIndex");
 }

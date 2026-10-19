@@ -531,8 +531,8 @@ mod serial_sequence {
             });
             syscache_seams::lookup_pg_class_relid_by_name::set(|relname, nsp| {
                 Ok(match (relname, nsp) {
-                    ("t_ser", NS_PUBLIC) => REL_T_SER,
-                    ("T_Ser", NS_PUBLIC) => REL_T_SER_MIXED,
+                    (b"t_ser", NS_PUBLIC) => REL_T_SER,
+                    (b"T_Ser", NS_PUBLIC) => REL_T_SER_MIXED,
                     _ => InvalidOid,
                 })
             });
@@ -722,4 +722,16 @@ fn viewdef_opens_view_with_access_share_lock() {
     let q = node.as_list().unwrap().nth(0).as_query().unwrap();
     let err = viewdef::make_viewdef(mcx, REL_OID, q, PRETTYFLAG_INDENT, 0).unwrap_err();
     assert_eq!(err.message(), format!("open {REL_OID} lockmode {}", types_rel::AccessShareLock));
+}
+
+// ruleutils.c:13171 get_relation_name: a vanished pg_class row (REPEATABLE
+// READ snapshot older than a concurrent DROP TABLE) is a catchable error.
+#[test]
+fn deparse_with_vanished_relation_is_catchable() {
+    install();
+    let ctx = MemoryContext::new("ruleutils test");
+    let node = readfuncs::stringToNode(ctx.mcx(), BOOL_NULLTEST).unwrap();
+    let err = deparse_expression_pretty(ctx.mcx(), node, REL_OID + 1, false, 0).unwrap_err();
+    assert_eq!(err.message(), format!("cache lookup failed for relation {}", REL_OID + 1));
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
 }

@@ -131,6 +131,38 @@ mod e2e {
 
     thread_local! {
         static SENT: RefCell<Vec<(u8, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+        // A row send mid-PortalRun flips log_executor_stats on (the
+        // set_config('log_executor_stats', 'on') shape).
+        static FLIP_EXECUTOR_STATS_ON_SEND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        static SHOW_USAGE_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        static CANCEL_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    fn install_usage_stubs() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            postgres_seams::reset_usage::set(|| {});
+            postgres_seams::show_usage::set(|_| {
+                SHOW_USAGE_CALLS.with(|c| c.set(c.get() + 1));
+                Ok(())
+            });
+        });
+    }
+
+    // pquery.c:837: log_executor_stats is reread after execution.
+    #[test]
+    fn portal_run_rereads_log_executor_stats_after_execution() {
+        install_fixtures();
+        install_usage_stubs();
+        guc_tables::backing::set_log_executor_stats(false);
+        SHOW_USAGE_CALLS.with(|c| c.set(0));
+        FLIP_EXECUTOR_STATS_ON_SEND.with(|c| c.set(true));
+        let mcx = leaked_mcx();
+        let show = Node::mk(mcx, VariableShowStmt { name: Some("work_mem") }).unwrap();
+        let (_qc, sent) = run_utility_portal("stats-reread", "SHOW work_mem", utility_pstmt(show));
+        guc_tables::backing::set_log_executor_stats(false);
+        assert_eq!(data_rows(&sent), ["4MB"]);
+        assert_eq!(SHOW_USAGE_CALLS.with(|c| c.get()), 1);
     }
 
     // C textout detoasts: handle the packed 1B short form the minimal-tuple
@@ -283,6 +315,9 @@ mod e2e {
             });
             pqcomm_seams::pq_putmessage::set(|msgtype, body| {
                 SENT.with(|s| s.borrow_mut().push((msgtype, body.to_vec())));
+                if FLIP_EXECUTOR_STATS_ON_SEND.with(|c| c.replace(false)) {
+                    guc_tables::backing::set_log_executor_stats(true);
+                }
                 Ok(0)
             });
             mbutils_seams::server_to_client_conversion_needed::set(|| false);
@@ -426,6 +461,48 @@ mod e2e {
         assert_eq!(rows[0][..], [0, 1, 0, 0, 0, 3, b'4', b'M', b'B']);
         assert_eq!(cmdtag::GetCommandTagName(qc.commandTag), "SHOW");
         assert_eq!(qc.nprocessed, 1);
+    }
+
+    fn install_cancel_seam() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            postgres_seams::check_for_interrupts::set(|| {
+                if CANCEL_PENDING.with(|c| c.get()) {
+                    return Err(Box::new(
+                        ::types_error::PgError::error("canceling statement due to user request")
+                            .with_sqlstate(::types_error::ERRCODE_QUERY_CANCELED),
+                    ));
+                }
+                Ok(())
+            });
+        });
+    }
+
+    // portalcmds.c:430 PersistHoldablePortal copies through ExecutorRun, whose
+    // scan nodes CHECK_FOR_INTERRUPTS per tuple: a pending cancel surfaces as
+    // 57014 from the auto-held cursor's store copy, not after it.
+    #[test]
+    fn persist_into_hold_checks_interrupts_per_tuple() {
+        install_fixtures();
+        install_cancel_seam();
+        let mcx = leaked_mcx();
+        let show = Node::mk(mcx, VariableShowStmt { name: Some("work_mem") }).unwrap();
+        let stmts = utility_pstmt(show);
+        let _ = run_utility_portal("persist-cancel", "SHOW work_mem", stmts);
+        let portal = portalmem::GetPortalByName(Some("persist-cancel")).unwrap();
+        let filled = portal.borrow().holdStore;
+        assert!(!filled.is_null());
+        let fresh = tuplestore_hold_seams::tuplestore_begin_heap_hold::call(true).unwrap();
+        {
+            let mut p = portal.borrow_mut();
+            p.cursorStore = filled;
+            p.holdStore = fresh;
+        }
+        CANCEL_PENDING.with(|c| c.set(true));
+        let err = crate::cursor_store_persist_into_hold(&portal).unwrap_err();
+        CANCEL_PENDING.with(|c| c.set(false));
+        assert_eq!(err.sqlstate(), ::types_error::ERRCODE_QUERY_CANCELED);
+        assert!(!portal.borrow().cursorStore.is_null());
     }
 
     fn start_scroll_show_portal(name: &'static str) -> types_portal::Portal<'static> {

@@ -30,3 +30,27 @@ fn pending_interrupt_routes_through_process_interrupts_seam() {
     assert!(!init_small::globals::InterruptPending());
     assert!(crate::check_for_interrupts().is_ok());
 }
+
+// regression: the per-page delay points in gistvacuumscan and
+// gistvacuum_delete_empty_pages reach vacuum_delay_point even while
+// VacuumCostActive is false, so a pending autovacuum config reload is
+// processed mid-scan (gistvacuum.c:248, :492).
+static DELAY_POINT_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn counting_delay_point(_is_analyze: bool) -> ::types_error::PgResult<()> {
+    DELAY_POINT_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
+#[test]
+fn vacuum_delay_point_reaches_the_seam_without_cost_active() {
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    INSTALL.call_once(|| vacuum_seams::vacuum_delay_point::set(counting_delay_point));
+    assert!(!init_small::globals::VacuumCostActive());
+    let before = DELAY_POINT_CALLS.load(std::sync::atomic::Ordering::SeqCst);
+    crate::vacuum::vacuum_delay_point().unwrap();
+    assert_eq!(
+        DELAY_POINT_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+        before + 1
+    );
+}

@@ -572,3 +572,19 @@ fn grow_guard_at_max_size_is_an_error_not_a_panic() {
     assert_eq!(e.message(), "hash table size exceeded");
     assert_eq!(e.sqlstate(), ::types_error::ERRCODE_INTERNAL_ERROR);
 }
+
+// release() drops the heap-side key metadata too: SetOp/RecursiveUnion
+// states are forgotten (not dropped) at ExecutorEnd, so anything release
+// leaves behind is retained for the session.
+#[test]
+fn release_frees_key_metadata() {
+    install();
+    let ctx = MemoryContext::new("execgrouping-test");
+    let mcx = ctx.mcx();
+    let desc = one_int4_desc(mcx);
+    let mut table =
+        build_tuple_hash_table(mcx, &desc, &[1], &[65], &[450], &[0], 16, 0, false).unwrap();
+    assert_eq!(table.key_cols().len(), 1);
+    table.release();
+    assert!(table.key_cols().is_empty());
+}

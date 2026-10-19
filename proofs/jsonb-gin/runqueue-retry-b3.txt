@@ -1,4 +1,4 @@
-# proofs/jsonb-gin RETRY runqueue b3 — w2-fmgr lane 2026-07-30. FLEET-BOUND.
+# proofs/jsonb-gin RETRY runqueue b3 — w2-fmgr lane 2026-07-30. CI-BOUND.
 # Canonical 4-col pipe rows: <harness> | <expected> | <tier> | <command>
 #
 # Why b3 exists (banked in ledger rows 3484/3487/3488/3489 notes):

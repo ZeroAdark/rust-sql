@@ -223,19 +223,29 @@ pub(crate) fn drop_entry(key: PgStat_HashKey) {
 // before any flush (pg_stat_get_function_calls = 0 mid-transaction,
 // pg_stat_have_stats after an index scan, pgstat_copy_relation_stats source
 // lookup after REINDEX CONCURRENTLY).
-pub(crate) fn ensure_entry_for_pending(key: PgStat_HashKey) {
+// Returns C's `created_entry`: whether the shared entry was inserted here.
+pub(crate) fn ensure_entry_for_pending(key: PgStat_HashKey) -> bool {
     use crate::pending::{
         PGSTAT_KIND_DATABASE as KD, PGSTAT_KIND_FUNCTION as KF, PGSTAT_KIND_RELATION as KR,
         PGSTAT_KIND_SUBSCRIPTION as KS,
     };
     let mut store = pgsync::lock(&SHARED_STATS);
-    store.entry(key).or_insert_with(|| match key.kind {
-        KR => SharedEntry::Relation(PgStat_StatTabEntry::default()),
-        KD => SharedEntry::Database(PgStat_StatDBEntry::default()),
-        KF => SharedEntry::Function(Default::default()),
-        KS => SharedEntry::Subscription(Default::default()),
-        other => panic!("pending entry for unported stats kind {other:?}"),
+    let mut created = false;
+    store.entry(key).or_insert_with(|| {
+        created = true;
+        match key.kind {
+            KR => SharedEntry::Relation(PgStat_StatTabEntry::default()),
+            KD => SharedEntry::Database(PgStat_StatDBEntry::default()),
+            KF => SharedEntry::Function(Default::default()),
+            KS => SharedEntry::Subscription(Default::default()),
+            other => panic!("pending entry for unported stats kind {other:?}"),
+        }
     });
+    created
+}
+
+pub(crate) fn entry_exists(key: PgStat_HashKey) -> bool {
+    pgsync::lock(&SHARED_STATS).contains_key(&key)
 }
 
 pub(crate) fn copy_entry(src: PgStat_HashKey, dst: PgStat_HashKey) {
@@ -321,7 +331,7 @@ pub(crate) fn force_snapshot_clear_on_next_access() {
 
 pub(crate) fn consume_forced_snapshot_clear() {
     if FORCE_SNAPSHOT_CLEAR.with(|c| c.replace(false)) {
-        clear_snapshot();
+        crate::pending::pgstat_clear_snapshot();
     }
 }
 

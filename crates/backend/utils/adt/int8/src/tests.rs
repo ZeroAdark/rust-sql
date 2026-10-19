@@ -85,6 +85,20 @@ fn division_semantics() {
     assert!(int48div(1, 0).is_err());
     assert!(int82div(1, 0).is_err());
     assert!(int28div(1, 0).is_err());
+    // int8.c (18.6) ereport sites, as the wire R/L fields report them.
+    for (err, line, func) in [
+        (int8div(1, 0).unwrap_err(), 514, "int8div"),
+        (int8mod(1, 0).unwrap_err(), 572, "int8mod"),
+        (int84div(1, 0).unwrap_err(), 972, "int84div"),
+        (int48div(1, 0).unwrap_err(), 1052, "int48div"),
+        (int82div(1, 0).unwrap_err(), 1114, "int82div"),
+        (int28div(1, 0).unwrap_err(), 1194, "int28div"),
+    ] {
+        let loc = err.location().expect("C location");
+        assert_eq!(loc.filename.as_deref(), Some("int8.c"));
+        assert_eq!(loc.lineno, line);
+        assert_eq!(loc.funcname.as_deref(), Some(func));
+    }
 
     assert_eq!(int8div(i64::MIN, -1).unwrap_err().message(), "bigint out of range");
     assert_eq!(int84div(i64::MIN, -1).unwrap_err().message(), "bigint out of range");
@@ -211,6 +225,13 @@ fn fmgr_wrappers_and_table() {
     fci.set_arg(0, Datum::from_i64(7));
     fci.set_arg(1, Datum::from_usize(0));
     assert_eq!(fc_int8inc_any(None, &mut fci).unwrap().as_i64(), 8);
+    // int8.c:806-820 forward to int8inc/int8dec: a one-arg internal alias
+    // frame is read the same way, never an arity panic.
+    let mut fci = LocalFcinfo::<1>::new(0);
+    fci.set_arg(0, Datum::from_i64(41));
+    assert_eq!(fc_int8inc_any(None, &mut fci).unwrap().as_i64(), 42);
+    assert_eq!(fc_int8dec_any(None, &mut fci).unwrap().as_i64(), 40);
+    assert_eq!(fc_int8inc_float8_float8(None, &mut fci).unwrap().as_i64(), 42);
 
     let mut oids: Vec<u32> = INT8_BUILTINS.iter().map(|b| b.foid).collect();
     oids.sort_unstable();

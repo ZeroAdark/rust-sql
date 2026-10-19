@@ -101,12 +101,22 @@ pub(crate) fn token_is_keyword(t: &AuthToken, k: &str) -> bool {
     !t.quoted && t.string == k
 }
 
+// The token's file bytes (hba.c next_token copies them verbatim): the raw
+// bytes when they were not UTF-8, else `string` is exactly those bytes.
+pub(crate) fn token_bytes(t: &AuthToken) -> &[u8] {
+    t.raw.as_deref().unwrap_or(t.string.as_bytes())
+}
+
+// token_matches / token_matches_insensitive (hba.c:180-190): strcmp /
+// pg_strcasecmp of the file bytes against the name bytes, so a non-UTF-8
+// token equals exactly the identity carrying the same bytes (a peer CN, an
+// Ident reply, a getpwuid name) and never its U+FFFD rendering.
 pub(crate) fn token_matches(t: &AuthToken, k: &[u8]) -> bool {
-    !t.lossy && t.string.as_bytes() == k
+    token_bytes(t) == k
 }
 
 pub(crate) fn token_matches_insensitive(t: &AuthToken, k: &[u8]) -> bool {
-    !t.lossy && pg_strcasecmp(t.string.as_bytes(), k) == 0
+    pg_strcasecmp(token_bytes(t), k) == 0
 }
 
 pub(crate) fn token_has_regexp(t: &AuthToken) -> bool {
@@ -249,10 +259,16 @@ pub fn hba_authname(auth_method: UserAuth) -> &'static str {
     USER_AUTH_NAME[auth_method as usize]
 }
 
+// check_usermap (hba.c:2966). `system_user` is the authenticated identity
+// exactly as the authenticator received it (C: const char *): the raw peer
+// CN bytes, the Ident reply bytes, the getpwuid name — the comparisons are
+// strcmp / pg_strcasecmp / regex over those bytes, so a non-UTF-8 identity
+// matches the pg_ident.conf token carrying the same bytes, as in C. Only the
+// LOG lines render it (lossily) as text.
 pub fn check_usermap(
     usermap_name: Option<&str>,
     pg_user: &str,
-    system_user: &str,
+    system_user: &[u8],
     case_insensitive: bool,
 ) -> PgResult<i32> {
     let mut found_entry = false;
@@ -260,12 +276,13 @@ pub fn check_usermap(
 
     if usermap_name.is_none_or(str::is_empty) {
         if case_insensitive {
-            if pg_strcasecmp(pg_user.as_bytes(), system_user.as_bytes()) == 0 {
+            if pg_strcasecmp(pg_user.as_bytes(), system_user) == 0 {
                 return Ok(STATUS_OK);
             }
-        } else if pg_user == system_user {
+        } else if pg_user.as_bytes() == system_user {
             return Ok(STATUS_OK);
         }
+        let system_user = String::from_utf8_lossy(system_user);
         report_log(
             LOG,
             2984,
@@ -297,6 +314,7 @@ pub fn check_usermap(
     })?;
 
     if !found_entry && !error {
+        let system_user = String::from_utf8_lossy(system_user);
         report_log(
             LOG,
             3009,

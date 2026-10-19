@@ -5,7 +5,6 @@ mod tests;
 extern crate alloc;
 
 use alloc::boxed::Box;
-use alloc::format;
 
 use ::datum::{Bytea, Varlena};
 use ::mcx::Mcx;
@@ -59,13 +58,13 @@ pub fn parse_bool_with_len(value: &[u8]) -> Option<bool> {
 
 #[cold]
 #[inline(never)]
-fn invalid_syntax_err(input: &str) -> PgError {
-    PgError::error(format!("invalid input syntax for type boolean: \"{input}\""))
+fn invalid_syntax_err(input: &[u8]) -> PgError {
+    PgError::error_bytes("invalid input syntax for type boolean: \"", input, "\"")
         .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
 }
 
-pub fn boolin(in_str: &str, escontext: Option<&mut SoftErrorContext>) -> PgResult<bool> {
-    let bytes = in_str.as_bytes();
+pub fn boolin(in_str: impl AsRef<[u8]>, escontext: Option<&mut SoftErrorContext>) -> PgResult<bool> {
+    let bytes = in_str.as_ref();
     let start = bytes
         .iter()
         .position(|&b| !is_space(b))
@@ -77,7 +76,7 @@ pub fn boolin(in_str: &str, escontext: Option<&mut SoftErrorContext>) -> PgResul
     if let Some(result) = parse_bool_with_len(&bytes[start..end]) {
         return Ok(result);
     }
-    ereturn(escontext, false, invalid_syntax_err(in_str))
+    ereturn(escontext, false, invalid_syntax_err(bytes))
 }
 
 pub const fn boolout(b: bool) -> u8 {

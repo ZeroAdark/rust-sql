@@ -32,6 +32,10 @@ pub fn seam_pg_regcomp(
     cflags: i32,
     collation: ::types_core::Oid,
 ) -> PgResult<RegcompResult> {
+    // regcomp.c:396: the cflags sanity checks precede pg_set_regex_collation.
+    if let Err(e) = crate::regex_compile::check_cflags(cflags) {
+        return Ok(RegcompResult::Failed(RegexFailure { message: pg_regerror(e.code()) }));
+    }
     let cx = MemoryContext::new("RegexpCompileContext");
     crate::regex_locale::pg_set_regex_collation(cx.mcx(), collation)?;
     match crate::regex_compile::pg_regcomp(cx.mcx(), pattern, cflags, collation) {
@@ -210,8 +214,7 @@ fn traverse_lacons(
     arcs_count: &mut i32,
     arcs: &mut [RegexArc],
 ) {
-    stack_depth::check_stack_depth()
-        .expect("traverse_lacons: stack too deep");
+    stack_depth::check_stack_depth_or_panic();
 
     let range = cnfa.states[st as usize].clone();
     for idx in range {

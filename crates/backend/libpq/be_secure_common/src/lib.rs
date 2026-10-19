@@ -139,7 +139,8 @@ fn wait_result_to_str(exitstatus: i32) -> String {
     }
 }
 
-fn pg_strip_crlf(buf: &mut [u8], mut len: usize) -> usize {
+fn pg_strip_crlf(buf: &mut [u8]) -> usize {
+    let mut len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
     while len > 0 && (buf[len - 1] == b'\n' || buf[len - 1] == b'\r') {
         len -= 1;
         buf[len] = 0;
@@ -172,8 +173,8 @@ pub fn run_ssl_passphrase_command(
         return Ok(0);
     }
 
-    let len = match fd::PipeStreamGets(fh, buf) {
-        Ok(n) => n,
+    match fd::PipeStreamGets(fh, buf) {
+        Ok(_) => {}
         Err(e) => {
             buf.fill(0);
             let _ = fd::ClosePipeStream(fh);
@@ -206,7 +207,7 @@ pub fn run_ssl_passphrase_command(
         return Ok(0);
     }
 
-    Ok(pg_strip_crlf(buf, len))
+    Ok(pg_strip_crlf(buf))
 }
 
 pub fn check_ssl_key_file_permissions(ssl_key_file: &str, is_server_start: bool) -> PgResult<bool> {

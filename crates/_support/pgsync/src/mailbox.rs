@@ -48,6 +48,12 @@ struct MailboxState<T> {
     senders: usize,
     /// Live `MailboxReceiver` clones; 0 = receive side closed.
     receivers: usize,
+    /// A sender parked OUTSIDE the not_full lot (`send_interruptible`): the
+    /// (fn, arg) the receive side calls after every pop and on disconnect,
+    /// in addition to the lot wake. Plain fn + word: no allocation, no
+    /// dependency on what the sender parks on (a backend latch, in
+    /// practice).
+    sender_wake: Option<(fn(usize), usize)>,
 }
 
 struct MailboxCore<T> {
@@ -99,6 +105,7 @@ pub fn mailbox<T>(cap: Option<usize>) -> (MailboxSender<T>, MailboxReceiver<T>) 
             queue: VecDeque::new(),
             senders: 1,
             receivers: 1,
+            sender_wake: None,
         }),
         cap,
         not_empty: ParkLot::new(),
@@ -139,6 +146,55 @@ impl<T> MailboxSender<T> {
         }
     }
 
+    /// Blocking send whose park is the CALLER's: while the bounded queue is
+    /// full, `wait` runs (lock RELEASED) instead of the not_full lot park,
+    /// and the receive side calls `wake` (fn, arg) after each pop and on
+    /// disconnect so the caller's own primitive is woken. This is the
+    /// interrupt-aware send: a caller parking on its backend latch is also
+    /// woken by any interrupt delivery, and `wait` is where it runs its
+    /// CHECK_FOR_INTERRUPTS — `Err(e)` from `wait` abandons the send
+    /// (value dropped) and is returned as the outer `Err`. `Ok(Err(value))`
+    /// = every receiver gone, as for `send`.
+    ///
+    /// No lost wake: `wake` is registered under the state lock BEFORE the
+    /// full check's lock is released, and the receive side reads it under
+    /// that same lock after its pop/disconnect, so a pop that frees space
+    /// either happened before the check (space seen, no wait) or fires the
+    /// caller's wake after registration.
+    pub fn send_interruptible<E>(
+        &self,
+        value: T,
+        wake: (fn(usize), usize),
+        mut wait: impl FnMut() -> Result<(), E>,
+    ) -> Result<Result<(), T>, E> {
+        let core = &*self.core;
+        let mut registered = false;
+        let outcome = loop {
+            {
+                let mut g = lock(&core.state);
+                if g.receivers == 0 {
+                    break Ok(Err(value));
+                }
+                if core.cap.map_or(true, |c| g.queue.len() < c) {
+                    g.queue.push_back(value);
+                    drop(g);
+                    core.not_empty.wake_all();
+                    break Ok(Ok(()));
+                }
+                g.sender_wake = Some(wake);
+                registered = true;
+            }
+            // The mailbox law: the state lock is released; the caller parks.
+            if let Err(e) = wait() {
+                break Err(e);
+            }
+        };
+        if registered {
+            lock(&core.state).sender_wake = None;
+        }
+        outcome
+    }
+
     /// Non-blocking send (the row-8 feeder shape: one feeder round-robins
     /// several runs' channels and must not park on one full channel while
     /// the others starve). Never parks; a `Full` return leaves the queue
@@ -169,8 +225,10 @@ impl<T> MailboxReceiver<T> {
             let seen = {
                 let mut g = lock(&core.state);
                 if let Some(v) = g.queue.pop_front() {
+                    let wake = g.sender_wake;
                     drop(g);
                     core.not_full.wake_all();
+                    call_sender_wake(wake);
                     return Some(v);
                 }
                 if g.senders == 0 {
@@ -188,8 +246,10 @@ impl<T> MailboxReceiver<T> {
         let core = &*self.core;
         let mut g = lock(&core.state);
         if let Some(v) = g.queue.pop_front() {
+            let wake = g.sender_wake;
             drop(g);
             core.not_full.wake_all();
+            call_sender_wake(wake);
             return TryRecv::Msg(v);
         }
         if g.senders == 0 {
@@ -230,16 +290,24 @@ impl<T> Drop for MailboxSender<T> {
 
 impl<T> Drop for MailboxReceiver<T> {
     fn drop(&mut self) {
-        let last = {
+        let (last, wake) = {
             let mut g = lock(&self.core.state);
             g.receivers -= 1;
-            g.receivers == 0
+            (g.receivers == 0, g.sender_wake)
         };
         if last {
             // Receive side closed: wake every parked sender so its send can
             // return Err(value).
             self.core.not_full.wake_all();
+            call_sender_wake(wake);
         }
+    }
+}
+
+#[inline]
+fn call_sender_wake(wake: Option<(fn(usize), usize)>) {
+    if let Some((f, arg)) = wake {
+        f(arg);
     }
 }
 
@@ -318,6 +386,88 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         drop(rx); // last receiver: parked send must return Err(2)
         assert_eq!(t.join().unwrap(), Err(2));
+    }
+
+    // send_interruptible: the caller's park (a flag + condvar here, the
+    // backend latch in production) is woken by pop and by disconnect, and
+    // an Err from `wait` (the caller's CHECK_FOR_INTERRUPTS) abandons the
+    // send promptly instead of waiting for the receiver.
+    #[cfg(not(pgrust_sim))]
+    mod interruptible {
+        use super::*;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+
+        static WAKES: AtomicUsize = AtomicUsize::new(0);
+        static WOKEN: AtomicBool = AtomicBool::new(false);
+        static CANCEL: AtomicBool = AtomicBool::new(false);
+        fn wake(_arg: usize) {
+            WAKES.fetch_add(1, Ordering::SeqCst);
+            WOKEN.store(true, Ordering::SeqCst);
+        }
+        fn wait() -> Result<(), &'static str> {
+            let start = Instant::now();
+            while !WOKEN.swap(false, Ordering::SeqCst) {
+                if CANCEL.load(Ordering::SeqCst) {
+                    return Err("canceled");
+                }
+                assert!(start.elapsed() < Duration::from_secs(5), "park never woken");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            if CANCEL.load(Ordering::SeqCst) {
+                return Err("canceled");
+            }
+            Ok(())
+        }
+        static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        fn reset() -> std::sync::MutexGuard<'static, ()> {
+            let g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+            WAKES.store(0, Ordering::SeqCst);
+            WOKEN.store(false, Ordering::SeqCst);
+            CANCEL.store(false, Ordering::SeqCst);
+            g
+        }
+
+        #[test]
+        fn pop_wakes_the_parked_sender() {
+            let _g = reset();
+            let (tx, rx) = mailbox::<u32>(Some(1));
+            tx.send(1).unwrap();
+            let t = std::thread::spawn(move || tx.send_interruptible(2, (wake, 7), wait));
+            std::thread::sleep(Duration::from_millis(20));
+            assert_eq!(rx.recv(), Some(1));
+            assert_eq!(t.join().unwrap(), Ok(Ok(())));
+            assert_eq!(WAKES.load(Ordering::SeqCst), 1);
+            assert_eq!(rx.recv(), Some(2));
+            assert_eq!(WAKES.load(Ordering::SeqCst), 1, "wake called after deregistration");
+        }
+
+        #[test]
+        fn interrupt_abandons_the_send() {
+            let _g = reset();
+            let (tx, rx) = mailbox::<u32>(Some(1));
+            tx.send(1).unwrap();
+            let t = std::thread::spawn(move || tx.send_interruptible(2, (wake, 7), wait));
+            std::thread::sleep(Duration::from_millis(20));
+            let start = Instant::now();
+            CANCEL.store(true, Ordering::SeqCst);
+            assert_eq!(t.join().unwrap(), Err("canceled"));
+            assert!(start.elapsed() < Duration::from_secs(1));
+            assert_eq!(rx.recv(), Some(1)); // the abandoned value was never queued
+            assert!(matches!(rx.try_recv(), TryRecv::Disconnected)); // never queued; tx closed
+        }
+
+        #[test]
+        fn receiver_drop_wakes_the_parked_sender() {
+            let _g = reset();
+            let (tx, rx) = mailbox::<u32>(Some(1));
+            tx.send(1).unwrap();
+            let t = std::thread::spawn(move || tx.send_interruptible(2, (wake, 7), wait));
+            std::thread::sleep(Duration::from_millis(20));
+            drop(rx);
+            assert_eq!(t.join().unwrap(), Ok(Err(2)));
+            assert_eq!(WAKES.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[test]

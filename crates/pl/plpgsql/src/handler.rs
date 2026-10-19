@@ -63,71 +63,20 @@ fn is_polymorphic(t: Oid) -> bool {
 // use_count lives behind an Rc shared with each in-flight invocation, so a
 // mid-call cache eviction can neither free storage under the invocation nor
 // have the decrement land on a different entry (funccache.c use_count).
+//
+// The entry carries nothing beyond what funccache.c's CachedFunction does: the
+// key (below) and the pg_proc xmin/tid stamp inside `func` decide reuse.
+// In particular there is NO search_path fingerprint: C resolves %TYPE,
+// %ROWTYPE and unqualified type names once, at compile time
+// (pl_comp.c plpgsql_compile_callback), and a later SET search_path keeps
+// serving the compiled body until the pg_proc row itself changes
+// (funccache.c:538 cached_function_compile). Session isolation on a reused
+// pool thread comes from the on_proc_exit drain (release_func_cache_at_exit),
+// the port's equivalent of the backend dying with its TopMemoryContext.
 #[derive(Clone)]
 struct FuncCacheEntry {
     func: Rc<PlFunction>,
     use_count: Rc<core::cell::Cell<u32>>,
-    // The search_path/role resolution environment that shaped this
-    // compilation's name resolution, captured as C plancache.c tracks a
-    // cached plan (GetSearchPathMatcher / SearchPathMatchesCurrentEnvironment).
-    //
-    // funccache.c keeps a compiled function "for the life of the backend" and
-    // revalidates only on the pg_proc tuple's xmin/tid: in C one backend serves
-    // exactly one session, so a stale resolution context can never be inherited
-    // by a different session/user. This port's FUNC_CACHE is a thread_local on
-    // parallel-worker pool threads that are reused across sessions and users,
-    // so xmin/tid alone would let a PlFunction compiled under an attacker's
-    // search_path be reused for a victim (search_path poisoning / wrong-object
-    // resolution). Revalidating the matcher on every lookup restores C's
-    // per-backend isolation: a differing resolution environment forces recompile
-    // exactly as it would after a fresh backend start. The Rc<..Cell..> lets the
-    // fast-path generation re-stamp be shared with every clone of the entry.
-    search_path: Rc<PathFingerprint>,
-}
-
-// Owned copy of a namespace::SearchPathMatcher (its PgVec is mcx-bound and
-// cannot outlive a call, but the cache entry does): the schema list plus the
-// implicit pg_catalog/pg_temp flags, and the last generation known to match.
-struct PathFingerprint {
-    schemas: Vec<Oid>,
-    add_catalog: bool,
-    add_temp: bool,
-    generation: core::cell::Cell<u64>,
-}
-
-// Capture the current search_path/role resolution environment for a
-// freshly-compiled function (plancache.c GetSearchPathMatcher). The matcher's
-// schemas live in `cx`, so copy them into the owned fingerprint before `cx`
-// drops.
-fn capture_search_path() -> PgResult<Rc<PathFingerprint>> {
-    let cx = mcx::MemoryContext::new("plpgsql search_path fingerprint");
-    let matcher = catalog_namespace::GetSearchPathMatcher(cx.mcx())?;
-    Ok(Rc::new(PathFingerprint {
-        schemas: matcher.schemas.iter().copied().collect(),
-        add_catalog: matcher.addCatalog,
-        add_temp: matcher.addTemp,
-        generation: core::cell::Cell::new(matcher.generation),
-    }))
-}
-
-// plancache.c SearchPathMatchesCurrentEnvironment against a cached entry's
-// fingerprint. Rebuilds an mcx-bound matcher from the owned copy, compares, and
-// re-stamps the generation on a match so the next lookup takes the fast path.
-fn search_path_still_matches(fp: &PathFingerprint) -> PgResult<bool> {
-    let cx = mcx::MemoryContext::new("plpgsql search_path recheck");
-    let mut schemas = mcx::vec_with_capacity_in(cx.mcx(), fp.schemas.len())?;
-    schemas.extend_from_slice(&fp.schemas);
-    let mut matcher = catalog_namespace::SearchPathMatcher {
-        schemas,
-        addCatalog: fp.add_catalog,
-        addTemp: fp.add_temp,
-        generation: fp.generation.get(),
-    };
-    let matches = catalog_namespace::SearchPathMatchesCurrentEnvironment(&mut matcher)?;
-    if matches {
-        fp.generation.set(matcher.generation);
-    }
-    Ok(matches)
 }
 
 std::thread_local! {
@@ -238,14 +187,12 @@ fn plpgsql_compile(
     crate::exec::register_exit_release();
     let cached = FUNC_CACHE.with(|c| c.borrow().get(&key).cloned());
     if let Some(entry) = cached {
-        // xmin/tid (funccache.c) covers a redefined pg_proc row; the
-        // search_path recheck additionally covers a resolution-environment
-        // change — a new session/user bound onto this reused pool thread, or a
-        // SET search_path — that C never sees because its cache is per-backend.
-        if entry.func.fn_xmin == cur_xmin
-            && entry.func.fn_tid == cur_tid
-            && search_path_still_matches(&entry.search_path)?
-        {
+        // funccache.c:538-540: the entry is valid iff the pg_proc tuple's raw
+        // xmin and t_self still match the ones it was compiled from. Nothing
+        // else — not search_path, not the referenced relations or types —
+        // invalidates a compiled function (no syscache callback exists for
+        // this cache in C).
+        if entry.func.fn_xmin == cur_xmin && entry.func.fn_tid == cur_tid {
             return Ok(entry);
         }
         FUNC_CACHE.with(|c| {
@@ -272,7 +219,6 @@ fn plpgsql_compile(
     let entry = FuncCacheEntry {
         func,
         use_count: Rc::new(core::cell::Cell::new(0)),
-        search_path: capture_search_path()?,
     };
     // Validator compiles are cached too (funccache.c cached_function_compile
     // has no validator carve-out): the CREATE-time compile is the one the
@@ -292,8 +238,9 @@ fn proc_call_stamp(
     for_validator: bool,
 ) -> PgResult<(u32, (u32, u16), Vec<Oid>)> {
     let Some(tup) = SearchSysCache1(PROCOID, SysCacheKey::Value(Datum::from_oid(fn_oid)))? else {
+        // funccache.c:515 elog(ERROR): XX000, not 42883.
         return Err(crate::exec::exec_err(
-            types_error::ERRCODE_UNDEFINED_FUNCTION,
+            types_error::ERRCODE_INTERNAL_ERROR,
             format!("cache lookup failed for function {fn_oid}"),
         ));
     };
@@ -383,8 +330,9 @@ fn read_proc_row(fn_oid: Oid) -> PgResult<ProcInfo> {
     let cx = mcx::MemoryContext::new("plpgsql compile proc row");
     let mcx = cx.mcx();
     let Some(tup) = SearchSysCache1(PROCOID, SysCacheKey::Value(Datum::from_oid(fn_oid)))? else {
+        // funccache.c:515 elog(ERROR): XX000, not 42883.
         return Err(crate::exec::exec_err(
-            types_error::ERRCODE_UNDEFINED_FUNCTION,
+            types_error::ERRCODE_INTERNAL_ERROR,
             format!("cache lookup failed for function {fn_oid}"),
         ));
     };
@@ -544,16 +492,6 @@ fn do_compile(
         attach_compile_context(e, &proc.proname, 1, for_validator, &proc.prosrc)
     };
 
-    // C rejects these in the plain branch's pseudotype check (pl_comp.c:388);
-    // hoisted here with the same message and errcode.
-    if (!is_dml_trigger && proc.rettype == TRIGGEROID)
-        || (!is_event_trigger && proc.rettype == EVENT_TRIGGEROID)
-    {
-        return Err(hdr_ctx(crate::exec::exec_err(
-            types_error::ERRCODE_FEATURE_NOT_SUPPORTED,
-            "trigger functions can only be called as triggers".to_string(),
-        )));
-    }
     let mut comp = CompState::new();
     // pl_comp.c:246-248: the GUCs seed the compile options; #variable_conflict
     // and #print_strict_params in the body override them.
@@ -757,12 +695,19 @@ fn do_compile(
         }
         let rettyptype = lsyscache::typ::get_typtype(rettypeid)?;
         if rettyptype == TYPTYPE_PSEUDO && rettypeid != VOIDOID && rettypeid != RECORDOID {
-            return Err(hdr_ctx(crate::exec::exec_err(
-                types_error::ERRCODE_FEATURE_NOT_SUPPORTED,
+            // pl_comp.c:448: after the parameter loop, so an argument-level
+            // error is reported first.
+            let msg = if rettypeid == TRIGGEROID || rettypeid == EVENT_TRIGGEROID {
+                "trigger functions can only be called as triggers".to_string()
+            } else {
                 format!(
                     "PL/pgSQL functions cannot return type {}",
                     format_type::format_type_be(rettypeid)?
-                ),
+                )
+            };
+            return Err(hdr_ctx(crate::exec::exec_err(
+                types_error::ERRCODE_FEATURE_NOT_SUPPORTED,
+                msg,
             )));
         }
         fn_retistuple = lsyscache::typ::type_is_rowtype(rettypeid)? || rettypeid == RECORDOID;
@@ -1596,7 +1541,8 @@ fn coerce_function_result_tuple(
         Some(rv) => rv,
         None => {
             let retval = estate.retval;
-            let (desc, src, values, nulls, _) = estate.deconstruct_composite(retval)?;
+            let (desc, src, values, nulls, _) =
+                estate.deconstruct_composite(retval, estate.datum_mcx())?;
             crate::exec::RecValue {
                 owned: vec![false; values.len()],
                 desc,
@@ -1729,105 +1675,108 @@ fn text_datum(mcx: Mcx<'_>, s: &[u8]) -> PgResult<Datum> {
     Ok(fmgr::varlena_result(varlena::cstring_to_text(mcx, s)?))
 }
 
-// plpgsql_fulfill_promise, fulfilled eagerly at trigger entry (each TG_* is
-// computed at most once per call in C too; eager cost is the only divergence).
-fn fulfill_trigger_promises(
+// plpgsql_estate_setup's trigger arm: snapshot the trigger facts and leave
+// every TG_* promise unfulfilled. C computes a promise on the variable's
+// first read (exec_eval_datum -> plpgsql_fulfill_promise), so a body that
+// renames its own schema and then reads TG_TABLE_SCHEMA sees the new name;
+// an eager fulfilment at entry read the old one (regression).
+fn arm_trigger_promises(
     estate: &mut Estate<'_>,
-    func: &PlFunction,
     trigdata: &types_trigger_call::TriggerData<'_, '_>,
-) -> PgResult<()> {
-    use types_trigger::*;
-    let mcx = estate.datum_mcx();
-    let ev = trigdata.tg_event;
+) {
     let rel = trigdata.tg_relation;
     let trig = trigdata.tg_trigger;
-    for d in &func.datums {
-        let PlDatum::Var(v) = d else { continue };
-        if v.promise == PROMISE_NONE {
-            continue;
+    estate.arm_trigger_promises(crate::exec::TriggerPromiseSource {
+        tgname: trig.tgname.as_str().to_string(),
+        event: trigdata.tg_event,
+        relid: rel.rd_id,
+        relnamespace: rel.rd_rel.relnamespace,
+        relname: String::from_utf8_lossy(rel.rd_rel.relname.name_str()).into_owned(),
+        tgnargs: trig.tgnargs,
+        tgargs: trig.tgargs.iter().map(|a| a.as_str().to_string()).collect(),
+    });
+}
+
+// plpgsql_fulfill_promise (pl_exec.c:1384-1512): the value of one TG_*
+// promise, computed at read time from the entry snapshot; TG_TABLE_SCHEMA
+// is the catalog lookup C also runs at read time.
+pub(crate) fn compute_trigger_promise(
+    mcx: Mcx<'_>,
+    src: &crate::exec::TriggerPromiseSource,
+    promise: i32,
+) -> PgResult<(Datum, bool)> {
+    use types_trigger::*;
+    let ev = src.event;
+    Ok(match promise {
+        PROMISE_TG_NAME => (name_datum(mcx, &src.tgname)?, false),
+        PROMISE_TG_WHEN => {
+            let s = if ev & TRIGGER_EVENT_TIMINGMASK == TRIGGER_EVENT_BEFORE {
+                "BEFORE"
+            } else if ev & TRIGGER_EVENT_TIMINGMASK == TRIGGER_EVENT_AFTER {
+                "AFTER"
+            } else if ev & TRIGGER_EVENT_TIMINGMASK == TRIGGER_EVENT_INSTEAD {
+                "INSTEAD OF"
+            } else {
+                panic!("unrecognized trigger execution time: not BEFORE, AFTER, or INSTEAD OF")
+            };
+            (text_datum(mcx, s.as_bytes())?, false)
         }
-        let (value, isnull) = match v.promise {
-            PROMISE_TG_NAME => (name_datum(mcx, trig.tgname.as_str())?, false),
-            PROMISE_TG_WHEN => {
-                let s = if ev & TRIGGER_EVENT_TIMINGMASK == TRIGGER_EVENT_BEFORE {
-                    "BEFORE"
-                } else if ev & TRIGGER_EVENT_TIMINGMASK == TRIGGER_EVENT_AFTER {
-                    "AFTER"
-                } else if ev & TRIGGER_EVENT_TIMINGMASK == TRIGGER_EVENT_INSTEAD {
-                    "INSTEAD OF"
-                } else {
-                    panic!("unrecognized trigger execution time: not BEFORE, AFTER, or INSTEAD OF")
-                };
-                (text_datum(mcx, s.as_bytes())?, false)
-            }
-            PROMISE_TG_LEVEL => {
-                let s = if TRIGGER_FIRED_FOR_ROW(ev) { "ROW" } else { "STATEMENT" };
-                (text_datum(mcx, s.as_bytes())?, false)
-            }
-            PROMISE_TG_OP => {
-                let s = if TRIGGER_FIRED_BY_INSERT(ev) {
-                    "INSERT"
-                } else if TRIGGER_FIRED_BY_UPDATE(ev) {
-                    "UPDATE"
-                } else if TRIGGER_FIRED_BY_DELETE(ev) {
-                    "DELETE"
-                } else if ev & TRIGGER_EVENT_OPMASK == TRIGGER_EVENT_TRUNCATE {
-                    "TRUNCATE"
-                } else {
-                    panic!("unrecognized trigger action: not INSERT, DELETE, UPDATE, or TRUNCATE")
-                };
-                (text_datum(mcx, s.as_bytes())?, false)
-            }
-            PROMISE_TG_RELID => (Datum::from_oid(rel.rd_id), false),
-            PROMISE_TG_TABLE_NAME => {
-                let name = String::from_utf8_lossy(rel.rd_rel.relname.name_str()).into_owned();
-                (name_datum(mcx, &name)?, false)
-            }
-            PROMISE_TG_TABLE_SCHEMA => {
-                let nsp = lsyscache::misc::get_namespace_name(mcx, rel.rd_rel.relnamespace)?
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "cache lookup failed for namespace {}",
-                            rel.rd_rel.relnamespace
-                        )
-                    });
-                (name_datum(mcx, nsp.as_str())?, false)
-            }
-            PROMISE_TG_NARGS => (Datum::from_i16(trig.tgnargs), false),
-            PROMISE_TG_ARGV => {
-                if trig.tgnargs > 0 {
-                    let mut elems = Vec::with_capacity(trig.tgargs.len());
-                    for a in trig.tgargs.iter() {
-                        elems.push(text_datum(mcx, a.as_str().as_bytes())?);
-                    }
-                    // tg_argv[] subscripts start at zero, so lbs = [0].
-                    let img = arrayfuncs::construct_md_array(
-                        mcx,
-                        &elems,
-                        None,
-                        1,
-                        &[elems.len() as i32],
-                        &[0],
-                        25, // TEXTOID
-                        -1,
-                        false,
-                        TYPALIGN_INT,
-                    )?;
-                    let d = Datum::from_usize(img.as_ptr() as usize);
-                    core::mem::forget(img);
-                    (d, false)
-                } else {
-                    (Datum::null(), true)
+        PROMISE_TG_LEVEL => {
+            let s = if TRIGGER_FIRED_FOR_ROW(ev) { "ROW" } else { "STATEMENT" };
+            (text_datum(mcx, s.as_bytes())?, false)
+        }
+        PROMISE_TG_OP => {
+            let s = if TRIGGER_FIRED_BY_INSERT(ev) {
+                "INSERT"
+            } else if TRIGGER_FIRED_BY_UPDATE(ev) {
+                "UPDATE"
+            } else if TRIGGER_FIRED_BY_DELETE(ev) {
+                "DELETE"
+            } else if ev & TRIGGER_EVENT_OPMASK == TRIGGER_EVENT_TRUNCATE {
+                "TRUNCATE"
+            } else {
+                panic!("unrecognized trigger action: not INSERT, DELETE, UPDATE, or TRUNCATE")
+            };
+            (text_datum(mcx, s.as_bytes())?, false)
+        }
+        PROMISE_TG_RELID => (Datum::from_oid(src.relid), false),
+        PROMISE_TG_TABLE_NAME => (name_datum(mcx, &src.relname)?, false),
+        PROMISE_TG_TABLE_SCHEMA => {
+            let nsp = lsyscache::misc::get_namespace_name(mcx, src.relnamespace)?
+                .unwrap_or_else(|| {
+                    panic!("cache lookup failed for namespace {}", src.relnamespace)
+                });
+            (name_datum(mcx, nsp.as_str())?, false)
+        }
+        PROMISE_TG_NARGS => (Datum::from_i16(src.tgnargs), false),
+        PROMISE_TG_ARGV => {
+            if src.tgnargs > 0 {
+                let mut elems = Vec::with_capacity(src.tgargs.len());
+                for a in src.tgargs.iter() {
+                    elems.push(text_datum(mcx, a.as_bytes())?);
                 }
+                // tg_argv[] subscripts start at zero, so lbs = [0].
+                let img = arrayfuncs::construct_md_array(
+                    mcx,
+                    &elems,
+                    None,
+                    1,
+                    &[elems.len() as i32],
+                    &[0],
+                    25, // TEXTOID
+                    -1,
+                    false,
+                    TYPALIGN_INT,
+                )?;
+                let d = Datum::from_usize(img.as_ptr() as usize);
+                core::mem::forget(img);
+                (d, false)
+            } else {
+                (Datum::null(), true)
             }
-            other => panic!("unrecognized promise type: {other}"),
-        };
-        // Promise images are built once per invocation in the datum context
-        // by their own constructors (not the datumCopy layout the per-value
-        // free expects) and are released with it at exit.
-        estate.set_var(v.dno, value, isnull, false);
-    }
-    Ok(())
+        }
+        other => panic!("unrecognized promise type: {other}"),
+    })
 }
 
 fn bind_trigger_tuple(
@@ -1993,7 +1942,7 @@ fn plpgsql_exec_trigger(
         assert_eq!(rc, spi::SPI_OK_TD_REGISTER, "SPI_register_trigger_data failed");
     }
 
-    fulfill_trigger_promises(&mut estate, func, trigdata)?;
+    arm_trigger_promises(&mut estate, trigdata);
 
     estate.frame.text.set(Some("during function entry"));
     estate.set_var(func.found_varno, Datum::from_bool(false), false, false);
@@ -2033,7 +1982,8 @@ fn plpgsql_exec_trigger(
         None => {
             // Composite Datum returned by expression: deconstruct it.
             let retval = estate.retval;
-            let (d, s, values, nulls, _) = match estate.deconstruct_composite(retval) {
+            let (d, s, values, nulls, _) =
+                match estate.deconstruct_composite(retval, estate.datum_mcx()) {
                 Ok(x) => x,
                 Err(e) => return Err(attach_exec_context(e, &estate)),
             };

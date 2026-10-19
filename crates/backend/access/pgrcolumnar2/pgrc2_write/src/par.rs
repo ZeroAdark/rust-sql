@@ -59,7 +59,7 @@
 //! All shared coordination state lives in ONE `pgsync::Mutex` ([`Coord`])
 //! with a single Condvar on which ONLY THE LEADER ever waits (backpressure +
 //! drain). Worker tasks never block on other TASKS — run-to-completion, so
-//! the pool cannot wedge (the GL-GANGWEDGE class is structurally excluded).
+//! the pool cannot wedge (the regression class is structurally excluded).
 //! The one sanctioned worker wait is the WAKE FACE (FIX-B, the
 //! ingest-contention charter): a claim-STARVED worker parks on an
 //! eventcount keyed to publish progress ([`ParEngine::park_wake`]) instead
@@ -629,7 +629,7 @@ pub struct ParEngine {
     /// and the driver's own faces via [`ParEngine::poke_wake`]. Workers
     /// still never wait on other WORKERS — every poke source is
     /// leader/pump progress or cancellation (the run-to-completion law;
-    /// GL-GANGWEDGE stays structurally excluded).
+    /// regression stays structurally excluded).
     wake_seq: AtomicU64,
     wake_mu: Mutex<()>,
     wake_cv: Condvar,

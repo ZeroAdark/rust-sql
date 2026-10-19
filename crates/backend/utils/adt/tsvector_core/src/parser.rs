@@ -1,11 +1,26 @@
 use ::mcx::{Mcx, PgVec};
 use ::types_error::{
-    ereturn, PgError, PgResult, SoftErrorContext, ERRCODE_SYNTAX_ERROR,
+    ereturn, ErrorLevel, PgError, PgResult, SoftErrorContext, ERRCODE_SYNTAX_ERROR,
 };
 
 use crate::layout::{
     wep_getpos, wep_getweight, wep_setpos, wep_setweight, WordEntryPos, MAXENTRYPOS,
 };
+
+// C `"%s"` of the parser's input: the bytes verbatim (SQL_ASCII high bytes
+// reach the wire as C sends them).
+pub fn input_message(level: ErrorLevel, prefix: &str, input: &[u8]) -> PgError {
+    let mut msg = Vec::with_capacity(prefix.len() + input.len() + 2);
+    msg.extend_from_slice(prefix.as_bytes());
+    msg.push(b'"');
+    msg.extend_from_slice(input);
+    msg.push(b'"');
+    let mut e = PgError::new(level, String::from_utf8_lossy(&msg).into_owned());
+    if core::str::from_utf8(input).is_err() {
+        e.message_raw = Some(msg);
+    }
+    e
+}
 
 pub const P_TSV_OPR_IS_DELIM: i32 = 1 << 0;
 pub const P_TSV_IS_TSQUERY: i32 = 1 << 1;
@@ -106,11 +121,8 @@ impl<'s, 'e, 'mcx> TsvParser<'s, 'e, 'mcx> {
         ereturn(
             self.esc.as_deref_mut(),
             Next::Err,
-            PgError::error(format!(
-                "syntax error in {kind}: \"{}\"",
-                String::from_utf8_lossy(self.input)
-            ))
-            .with_sqlstate(ERRCODE_SYNTAX_ERROR),
+            input_message(::types_error::ERROR, &format!("syntax error in {kind}: "), self.input)
+                .with_sqlstate(ERRCODE_SYNTAX_ERROR),
         )
     }
 
@@ -144,10 +156,11 @@ impl<'s, 'e, 'mcx> TsvParser<'s, 'e, 'mcx> {
                         return ereturn(
                             self.esc.as_deref_mut(),
                             Next::Err,
-                            PgError::error(format!(
-                                "there is no escaped character: \"{}\"",
-                                String::from_utf8_lossy(self.input)
-                            ))
+                            input_message(
+                                ::types_error::ERROR,
+                                "there is no escaped character: ",
+                                self.input,
+                            )
                             .with_sqlstate(ERRCODE_SYNTAX_ERROR),
                         );
                     }
@@ -240,10 +253,11 @@ impl<'s, 'e, 'mcx> TsvParser<'s, 'e, 'mcx> {
                             return ereturn(
                                 self.esc.as_deref_mut(),
                                 Next::Err,
-                                PgError::error(format!(
-                                    "wrong position info in tsvector: \"{}\"",
-                                    String::from_utf8_lossy(self.input)
-                                ))
+                                input_message(
+                                    ::types_error::ERROR,
+                                    "wrong position info in tsvector: ",
+                                    self.input,
+                                )
                                 .with_sqlstate(ERRCODE_SYNTAX_ERROR),
                             );
                         }

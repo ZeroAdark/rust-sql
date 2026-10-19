@@ -413,6 +413,26 @@ pub fn detoast_attr_slice_checked<'mcx>(
     detoast_attr_slice(mcx, attr, sliceoffset, slicelength)
 }
 
+// A compressed image whose VARSIZE is under VARHDRSZ_COMPRESSED: C reads the
+// tcinfo word regardless (detoast.c:481) and the decompressor fails on the
+// negative source length (pg_lzcompress.c:832 / LZ4_decompress_safe < 0).
+fn check_compressed_header(attr: &[u8]) -> PgResult<()> {
+    if attr.len() >= VARHDRSZ_COMPRESSED && varsize_4b(attr) >= VARHDRSZ_COMPRESSED {
+        return Ok(());
+    }
+    let method = if attr.len() >= VARHDRSZ_COMPRESSED {
+        toast_compress_method(attr)
+    } else {
+        TOAST_PGLZ_COMPRESSION_ID
+    };
+    Err(match method {
+        TOAST_PGLZ_COMPRESSION_ID => corrupt_pglz(),
+        TOAST_LZ4_COMPRESSION_ID => corrupt_lz4(),
+        cmid => invalid_compression_id(cmid),
+    }
+    .into())
+}
+
 #[cold]
 #[inline(never)]
 fn corrupt_pglz() -> PgError {
@@ -435,6 +455,7 @@ fn invalid_compression_id(cmid: u32) -> PgError {
 /// `pglz_decompress_datum`.
 pub fn toast_decompress_datum<'mcx>(mcx: Mcx<'mcx>, attr: &[u8]) -> PgResult<PgVec<'mcx, u8>> {
     debug_assert!(is_compressed(attr));
+    check_compressed_header(attr)?;
     match toast_compress_method(attr) {
         TOAST_PGLZ_COMPRESSION_ID => pglz_decompress_datum(mcx, attr),
         TOAST_LZ4_COMPRESSION_ID => lz4_decompress_datum(mcx, attr),
@@ -450,6 +471,7 @@ pub fn toast_decompress_datum_slice<'mcx>(
     slicelength: i32,
 ) -> PgResult<PgVec<'mcx, u8>> {
     debug_assert!(is_compressed(attr));
+    check_compressed_header(attr)?;
     if slicelength as u32 >= toast_compress_extsize(attr) {
         return toast_decompress_datum(mcx, attr);
     }
@@ -507,21 +529,73 @@ fn lz4_decompress_datum<'mcx>(mcx: Mcx<'mcx>, value: &[u8]) -> PgResult<PgVec<'m
     Ok(result)
 }
 
-/// C `lz4_decompress_datum_slice` uses LZ4_decompress_safe_partial; lz4_flex
-/// has no partial decode, so decompress fully and truncate — identical output
-/// for well-formed data.
+/// C `lz4_decompress_datum_slice`: LZ4_decompress_safe_partial decodes only
+/// up to `slicelength` output bytes.
 fn lz4_decompress_datum_slice<'mcx>(
     mcx: Mcx<'mcx>,
     value: &[u8],
     slicelength: usize,
 ) -> PgResult<PgVec<'mcx, u8>> {
-    let mut result = lz4_decompress_datum(mcx, value)?;
-    if result.len() > VARHDRSZ + slicelength {
-        result.truncate(VARHDRSZ + slicelength);
-        let header = varatt::set_varsize_4b_word(result.len() as u32).to_ne_bytes();
-        result[..VARHDRSZ].copy_from_slice(&header);
-    }
+    let mut result = mcx::vec_with_capacity_in(mcx, VARHDRSZ + slicelength)?;
+    result.resize(VARHDRSZ + slicelength, 0);
+    let src = &value[VARHDRSZ_COMPRESSED..varsize_4b(value)];
+    let n = lz4_decode_prefix(src, &mut result[VARHDRSZ..]).ok_or_else(corrupt_lz4)?;
+    result.truncate(VARHDRSZ + n);
+    let header = varatt::set_varsize_4b_word((VARHDRSZ + n) as u32).to_ne_bytes();
+    result[..VARHDRSZ].copy_from_slice(&header);
     Ok(result)
+}
+
+// LZ4 block-format sequences decoded into `dst` until it is full or the input
+// ends; the decoded length, or None on a malformed stream.
+fn lz4_decode_prefix(src: &[u8], dst: &mut [u8]) -> Option<usize> {
+    let ext_len = |i: &mut usize, mut len: usize| -> Option<usize> {
+        loop {
+            let b = *src.get(*i)?;
+            *i += 1;
+            len = len.checked_add(b as usize)?;
+            if b != 255 {
+                return Some(len);
+            }
+        }
+    };
+    let (mut i, mut n) = (0usize, 0usize);
+    while n < dst.len() {
+        let token = *src.get(i)?;
+        i += 1;
+        let mut lit = (token >> 4) as usize;
+        if lit == 15 {
+            lit = ext_len(&mut i, lit)?;
+        }
+        let lits = src.get(i..i.checked_add(lit)?)?;
+        i += lit;
+        let take = lits.len().min(dst.len() - n);
+        dst[n..n + take].copy_from_slice(&lits[..take]);
+        n += take;
+        if n == dst.len() || i == src.len() {
+            break;
+        }
+        let off = u16::from_le_bytes([*src.get(i)?, *src.get(i + 1)?]) as usize;
+        i += 2;
+        if off == 0 || off > n {
+            return None;
+        }
+        let mut mlen = (token & 15) as usize + 4;
+        if token & 15 == 15 {
+            mlen = ext_len(&mut i, mlen)?;
+        }
+        let mlen = mlen.min(dst.len() - n);
+        let start = n - off;
+        if off >= mlen {
+            dst.copy_within(start..start + mlen, n);
+        } else {
+            for k in 0..mlen {
+                dst[n + k] = dst[start + k];
+            }
+        }
+        n += mlen;
+    }
+    Some(n)
 }
 
 /// C `toast_raw_datum_size`: raw (detoasted) size including `VARHDRSZ`.

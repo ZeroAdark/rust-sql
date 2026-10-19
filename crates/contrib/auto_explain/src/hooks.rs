@@ -66,11 +66,7 @@ pub(crate) fn explain_executor_start(h: QueryDescHandle) {
 
     execmain::with_qd(h, |qd| {
         // Enable per-node instrumentation iff log_analyze is required.
-        // C skips this under EXEC_FLAG_EXPLAIN_ONLY; eflags are not visible
-        // pre-start here, so an EXPLAIN(-only) statement allocates unused
-        // node instrumentation — output parity is restored at log time by the
-        // es_top_eflags check in explain_executor_end.
-        if gucs::log_analyze() {
+        if gucs::log_analyze() && qd.start_eflags & EXEC_FLAG_EXPLAIN_ONLY == 0 {
             if gucs::log_timing() {
                 qd.instrument_options |= INSTRUMENT_TIMER;
             } else {
@@ -97,37 +93,47 @@ pub(crate) fn explain_executor_start(h: QueryDescHandle) {
     });
 }
 
-// The run/finish enter+leave pairs bump nesting_level unconditionally: C
-// keeps the pair balanced inside one hook frame (PG_TRY/PG_FINALLY), so a
-// LOAD 'auto_explain' issued mid-query (from a PL function) must never see a
-// gated enter and an ungated leave — the level would drift negative and
-// silence the session for good.
+// C's run/finish hooks exist only once the library is loaded, and each
+// enter+leave pair is balanced inside one hook frame (PG_TRY/PG_FINALLY). A
+// LOAD 'auto_explain' issued mid-query (from a PL function) therefore leaves
+// the outer statement's frame unbumped: its enter ran before the load and its
+// leave finds the level already at zero.
+fn nesting_enter() {
+    if crate::session_loaded() {
+        nesting_add(1);
+    }
+}
+
+fn nesting_leave() {
+    if nesting_level() > 0 {
+        nesting_add(-1);
+    }
+}
 
 /// `explain_ExecutorRun` (enter half).
 pub(crate) fn explain_executor_run(_h: QueryDescHandle) {
-    nesting_add(1);
+    nesting_enter();
 }
 
 /// `explain_ExecutorRun` (PG_FINALLY half).
 pub(crate) fn explain_executor_run_leave(_h: QueryDescHandle) {
-    nesting_add(-1);
+    nesting_leave();
 }
 
 /// `explain_ExecutorFinish` (enter half).
 pub(crate) fn explain_executor_finish(_h: QueryDescHandle) {
-    nesting_add(1);
+    nesting_enter();
 }
 
 /// `explain_ExecutorFinish` (PG_FINALLY half).
 pub(crate) fn explain_executor_finish_leave(_h: QueryDescHandle) {
-    nesting_add(-1);
+    nesting_leave();
 }
 
 struct LogJob {
     msec: f64,
     source_text: &'static str,
     instrument_options: i32,
-    explain_only: bool,
     params: ParamListHandle,
 }
 
@@ -156,16 +162,10 @@ pub(crate) fn explain_executor_end(h: QueryDescHandle) -> PgResult<()> {
             return None;
         }
 
-        let explain_only = match qd.exec.as_ref() {
-            Some(exec) => exec.with(|d| d.estate.es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY != 0),
-            None => false,
-        };
-
         Some(LogJob {
             msec,
             source_text: qd.source_text(),
             instrument_options: qd.instrument_options,
-            explain_only,
             params: qd.params,
         })
     });
@@ -186,9 +186,7 @@ fn log_plan(h: QueryDescHandle, job: &LogJob) -> PgResult<()> {
 
     let mut es = explain::NewExplainState(mcx)?;
     // C: es->analyze = (queryDesc->instrument_options && auto_explain_log_analyze).
-    // The explain_only leg reproduces C's EXEC_FLAG_EXPLAIN_ONLY guard at
-    // ExecutorStart (see explain_executor_start).
-    es.analyze = job.instrument_options != 0 && gucs::log_analyze() && !job.explain_only;
+    es.analyze = job.instrument_options != 0 && gucs::log_analyze();
     es.verbose = gucs::log_verbose();
     es.buffers = es.analyze && gucs::log_buffers();
     es.wal = es.analyze && gucs::log_wal();

@@ -195,6 +195,7 @@ pub fn bitmap_scan_batch_fetch<'mcx>(
     estate: &mut EStateData<'mcx>,
     i: u32,
 ) -> PgResult<bool> {
+    check_for_interrupts()?;
     let mcx = estate.es_query_cxt;
     let slot_id = node.ss.ss_ScanTupleSlot;
     let scandesc = node

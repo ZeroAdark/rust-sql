@@ -24,6 +24,7 @@ fmgr_core = { path = "../../utils/fmgr/fmgr_core" }
 cache_syscache = { path = "../../utils/cache/cache_syscache" }
 lsyscache = { path = "../../utils/cache/lsyscache" }
 plancache = { path = "../../utils/cache/plancache" }
+ipc_seams = { path = "../../storage/ipc/ipc_seams" }
 detoast = { path = "../../access/common/detoast" }
 parser_seams = { path = "../../parser/parser_seams" }
 analyze_seams = { path = "../../parser/analyze_seams" }
@@ -53,7 +54,9 @@ catalog_seams = { path = "../../catalog/catalog_seams" }
 rewrite_manip = { path = "../../rewrite/rewrite_manip" }
 planner = { path = "../../optimizer/plan/planner" }
 nodes_core = { path = "../../nodes/nodes_core" }
+outfuncs = { path = "../../nodes/outfuncs" }
 readfuncs = { path = "../../nodes/readfuncs" }
+copyfuncs = { path = "../../nodes/copyfuncs" }
 sql_functions_seams = { path = "../sql_functions_seams" }
 funcapi = { path = "../../utils/fmgr/funcapi" }
 pg_proc = { path = "../../catalog/pg_proc" }

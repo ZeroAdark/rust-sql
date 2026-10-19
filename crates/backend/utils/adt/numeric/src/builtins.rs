@@ -103,12 +103,11 @@ fn img_result(fcinfo: &Fcinfo, img: &NumericImage) -> PgResult<Datum> {
 pub fn fc_numeric_in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 of numeric_in is a non-null cstring (strict fn).
     let s = unsafe { fcinfo.arg_cstring(0) };
-    let s = String::from_utf8_lossy(s.to_bytes());
     let typmod = fcinfo.arg_i32(2);
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
     let had_esc = esc.is_some();
-    match crate::io::numeric_in(&s, typmod, esc)? {
+    match crate::io::numeric_in_bytes(s.to_bytes(), typmod, esc)? {
         Some(img) => img_result(fcinfo, &img),
         // Soft error already saved; the value is C's garbage datum.
         None if had_esc => Ok(Datum::null()),
@@ -266,21 +265,36 @@ pub fn fc_width_bucket_numeric(
 pub fn fc_numeric_larger(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog args are non-null numeric varlenas (strict fn).
     let (a, b) = unsafe { (num_arg(fcinfo, 0)?, num_arg(fcinfo, 1)?) };
-    Ok(if crate::cmp_numerics(a, b) > 0 {
-        fcinfo.arg(0)
-    } else {
-        fcinfo.arg(1)
-    })
+    let i = if crate::cmp_numerics(a, b) > 0 { 0 } else { 1 };
+    // SAFETY: as above.
+    unsafe { num_arg_detoasted(fcinfo, i) }
 }
 
 pub fn fc_numeric_smaller(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog args are non-null numeric varlenas (strict fn).
     let (a, b) = unsafe { (num_arg(fcinfo, 0)?, num_arg(fcinfo, 1)?) };
-    Ok(if crate::cmp_numerics(a, b) < 0 {
-        fcinfo.arg(0)
-    } else {
-        fcinfo.arg(1)
-    })
+    let i = if crate::cmp_numerics(a, b) < 0 { 0 } else { 1 };
+    // SAFETY: as above.
+    unsafe { num_arg_detoasted(fcinfo, i) }
+}
+
+// PG_GETARG_NUMERIC (pg_detoast_datum): a short-header argument is returned
+// as a fresh 4B-header image, an uncompressed 4B image as itself.
+//
+// # Safety
+// As num_arg.
+unsafe fn num_arg_detoasted(fcinfo: &Fcinfo, i: usize) -> PgResult<Datum> {
+    // SAFETY: forwarded caller contract.
+    let v = unsafe { fcinfo.arg_varlena_packed(i)? };
+    if !v.is_short() {
+        return Ok(fcinfo.arg(i));
+    }
+    let payload = v.data();
+    let mut img = ::mcx::vec_with_capacity_in::<u8>(fcinfo.result_mcx(), payload.len() + 4)?;
+    let hdr = ::types_tuple::varatt::set_varsize_4b_word((payload.len() + 4) as u32);
+    img.extend_from_slice(&hdr.to_ne_bytes());
+    img.extend_from_slice(payload);
+    Ok(Datum::from_usize(img.leak().as_ptr() as usize))
 }
 
 pub fn fc_int2_numeric(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -998,11 +1012,36 @@ pub fn fc_int4_avg_combine(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) 
 
 // int2int4_sum (numeric.c): moving-aggregate final for sum(int2)/sum(int4);
 // SQL defines SUM of no values to be NULL.
+// The {count,sum} pair at ARR_DATA_PTR (numeric.c int8_avg/int2int4_sum):
+// its offset follows ndim, so a multi-dimensional 40-byte array (which passes
+// the size check) reads its count from the element area like C; the slots C
+// would read past the image are 0 here.
+//
+// # Safety
+// As int8_transarray.
+unsafe fn int8_transdata(fcinfo: &Fcinfo) -> PgResult<(i64, i64)> {
+    // SAFETY: forwarded caller contract.
+    let td = unsafe { int8_transarray(fcinfo, false)? };
+    // SAFETY: validated INT8_TRANSARRAY_SIZE image starting
+    // ARR_OVERHEAD_NONULLS_1 bytes before td.
+    unsafe {
+        let arr = td.cast::<u8>().sub(ARR_OVERHEAD_NONULLS_1);
+        let ndim = arr.add(4).cast::<i32>().read();
+        let off = 16 + 8 * ndim.clamp(0, 4) as usize;
+        let slot = |k: usize| {
+            if off + 8 * (k + 1) <= INT8_TRANSARRAY_SIZE {
+                arr.add(off + 8 * k).cast::<i64>().read_unaligned()
+            } else {
+                0
+            }
+        };
+        Ok((slot(0), slot(1)))
+    }
+}
+
 pub fn fc_int2int4_sum(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: strict fn — arg 0 is a non-null _int8 array transvalue.
-    let td = unsafe { int8_transarray(fcinfo, false)? };
-    // SAFETY: validated 2-slot int8 payload.
-    let (count, sum) = unsafe { (*td, *td.add(1)) };
+    let (count, sum) = unsafe { int8_transdata(fcinfo)? };
     if count == 0 {
         fcinfo.isnull = true;
         return Ok(Datum::null());
@@ -1012,9 +1051,7 @@ pub fn fc_int2int4_sum(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> P
 
 pub fn fc_int8_avg(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: strict fn — arg 0 is a non-null _int8 array transvalue.
-    let td = unsafe { int8_transarray(fcinfo, false)? };
-    // SAFETY: validated 2-slot int8 payload.
-    let (count, sum) = unsafe { (*td, *td.add(1)) };
+    let (count, sum) = unsafe { int8_transdata(fcinfo)? };
     if count == 0 {
         fcinfo.isnull = true;
         return Ok(Datum::null());

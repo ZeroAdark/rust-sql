@@ -121,7 +121,7 @@ impl<'mcx> LexizeData<'mcx> {
     fn move_to_waste(&mut self, stop: usize) {
         // C moveToWaste pops towork until it meets `stop`; a stale stop
         // (already retired) drains the whole list and never rewinds head.
-        let new_head = if stop + 1 < self.head { self.queue.len() } else { stop + 1 };
+        let new_head = if stop < self.head { self.queue.len() } else { stop + 1 };
         self.head = new_head;
         self.pos_dict = 0;
         self.cur_sub = new_head;

@@ -367,7 +367,7 @@ pub fn session_cleanup_count() -> usize {
 }
 
 // ---------------------------------------------------------------------------
-// GL-MEMWATCH-1: C parity for aset.c's MemoryContextStats(TopMemoryContext)
+// regression: C parity for aset.c's MemoryContextStats(TopMemoryContext)
 // on allocation failure — dump the FAILING thread's context forest before the
 // "out of memory" error propagates. Raw stderr (C's fprintf choice: the
 // ereport path may itself allocate mid-OOM); the log collector captures it.

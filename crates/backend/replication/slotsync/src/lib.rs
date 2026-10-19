@@ -666,6 +666,13 @@ fn synchronize_one_slot(remote_slot: &RemoteSlot, remote_dbid: Oid) -> PgResult<
 // ---------------------------------------------------------------------------
 // synchronize_slots (slotsync.c:807).
 // ---------------------------------------------------------------------------
+const SLOT_QUERY_NFIELDS: usize = 10;
+
+// libpqwalreceiver.c:1133: "Expected %d fields, got %d fields."
+fn nfields_text(nfields: usize) -> String {
+    format!("{nfields} fields")
+}
+
 fn synchronize_slots(conn: &mut PgConn) -> PgResult<bool> {
     const QUERY: &str = "SELECT slot_name, plugin, confirmed_flush_lsn, \
          restart_lsn, catalog_xmin, two_phase, two_phase_at, failover, \
@@ -692,7 +699,6 @@ fn synchronize_slots(conn: &mut PgConn) -> PgResult<bool> {
 
     // libpqrcv_processTuples: a result whose shape differs from the query's
     // declared 10 columns is "invalid query response", never a panic.
-    const SLOT_QUERY_NFIELDS: usize = 10;
     let invalid_response = |what: &str| -> PgResult<bool> {
         ereport(ERROR)
             .errcode(ERRCODE_PROTOCOL_VIOLATION)
@@ -702,7 +708,7 @@ fn synchronize_slots(conn: &mut PgConn) -> PgResult<bool> {
             .map(|()| false)
     };
     if res.nfields != SLOT_QUERY_NFIELDS {
-        return invalid_response(&res.nfields.to_string());
+        return invalid_response(&nfields_text(res.nfields));
     }
     let mut remote_slot_list: Vec<RemoteSlot> = Vec::new();
     for row in &res.rows {
@@ -1190,6 +1196,23 @@ pub fn ReplSlotSyncWorkerMain(startup_data: &types_startup::StartupData) -> ! {
     }
 }
 
+// slotsync.c:1518-1521: SIGHUP config reload, SIGINT statement cancel,
+// SIGTERM die (SIGUSR1 procsignal is the thread model's default).
+fn install_signal_handlers() {
+    // procsignal::signums, not libc::SIG*: the wasi libc crate exposes
+    // no SIG* names (thread-signal emulation numbering, signums law).
+    use procsignal::ThreadSignalHandler::{Fallible, Simple};
+    procsignal::pqsignal_thread(
+        procsignal::signums::SIGHUP,
+        Simple(interrupt::SignalHandlerForConfigReload),
+    );
+    procsignal::pqsignal_thread(
+        procsignal::signums::SIGINT,
+        Simple(postgres_tcop::StatementCancelHandler),
+    );
+    procsignal::pqsignal_thread(procsignal::signums::SIGTERM, Fallible(postgres_tcop::die));
+}
+
 fn repl_slot_sync_worker_inner() -> PgResult<()> {
     lmgr_proc::InitProcess(types_core::BackendType::SlotsyncWorker)?;
     postinit::BaseInit()?;
@@ -1207,18 +1230,7 @@ fn repl_slot_sync_worker_inner() -> PgResult<()> {
     // becomes this worker's baseline, exactly like C's fork inheritance.
     record_started_with();
 
-    // Signal handling (C: SIGHUP config reload, SIGINT cancel, SIGTERM die,
-    // SIGUSR1 procsignal).
-    {
-        // procsignal::signums, not libc::SIG*: the wasi libc crate exposes
-        // no SIG* names (thread-signal emulation numbering, signums law).
-        use procsignal::ThreadSignalHandler::{Fallible, Simple};
-        procsignal::pqsignal_thread(
-            procsignal::signums::SIGHUP,
-            Simple(interrupt::SignalHandlerForConfigReload),
-        );
-        procsignal::pqsignal_thread(procsignal::signums::SIGTERM, Fallible(postgres_tcop::die));
-    }
+    install_signal_handlers();
 
     check_and_set_sync_info(init_small::globals::MyProcPid())?;
 

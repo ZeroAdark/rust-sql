@@ -342,7 +342,7 @@ pub fn topn_merge<T: Ord + Copy>(sealed: &[Vec<T>], bound: usize) -> Vec<T> {
 mod tests {
     use super::*;
 
-    /// GL-ASSERTMASK-1 R1 — the row-ref ENVELOPE, locked.
+    /// regression R1 — the row-ref ENVELOPE, locked.
     ///
     /// `TopnEntry` packs `(tier << 112) | (word << 48) | rowref`, so the
     /// row ref gets exactly [`ROWREF_BITS`] bits and the only thing standing

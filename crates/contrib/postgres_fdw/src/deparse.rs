@@ -1373,7 +1373,27 @@ fn output_function_call<'mcx>(
     // SAFETY: output functions return a NUL-terminated cstring datum; copied
     // out before finfo (and its scratch) dies.
     let s = unsafe { core::ffi::CStr::from_ptr(d.as_usize() as *const core::ffi::c_char) };
-    PgString::from_str_in(s.to_str().expect("output fn result is UTF-8"), mcx)
+    match s.to_str() {
+        Ok(s) => PgString::from_str_in(s, mcx),
+        Err(_) => Err(non_utf8_remote_value()),
+    }
+}
+
+// The remote SQL text and its parameters are UTF-8 strings here, so a
+// SQL_ASCII value carrying non-UTF-8 bytes is the UTF-8-only carve's typed
+// refusal (docs/design/carve-ratifications.md), never a U+FFFD substitute
+// C would not send.
+#[track_caller]
+#[cold]
+pub(crate) fn non_utf8_remote_value() -> Box<PgError> {
+    Box::new(
+        PgError::error(format!(
+            "non-UTF-8 values cannot be sent to a remote server from a database with encoding \"{}\"",
+            mbutils::GetDatabaseEncodingName()
+        ))
+        .with_sqlstate(types_error::ERRCODE_FEATURE_NOT_SUPPORTED)
+        .with_hint("Use a database with encoding \"UTF8\"."),
+    )
 }
 
 // ---------- column / relation / target-list ----------

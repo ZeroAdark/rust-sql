@@ -48,6 +48,18 @@ fn parse_strtol_edges() {
     assert_eq!(parse_scram_secret(&neg).unwrap().iterations, -1);
     let ws = format!("SCRAM-SHA-256$ 42:c2FsdA==${stored}:{server}");
     assert_eq!(parse_scram_secret(&ws).unwrap().iterations, 42);
+    // LP64 strtol: LONG_MIN converts without ERANGE and narrows to 0; one
+    // past either end is ERANGE (auth-scram.c:643).
+    let long_min = format!("SCRAM-SHA-256$-9223372036854775808:c2FsdA==${stored}:{server}");
+    assert_eq!(parse_scram_secret(&long_min).unwrap().iterations, 0);
+    let long_max = format!("SCRAM-SHA-256$9223372036854775807:c2FsdA==${stored}:{server}");
+    assert_eq!(parse_scram_secret(&long_max).unwrap().iterations, -1);
+    let wide = format!("SCRAM-SHA-256$4294967296:c2FsdA==${stored}:{server}");
+    assert_eq!(parse_scram_secret(&wide).unwrap().iterations, 0);
+    for over in ["-9223372036854775809", "9223372036854775808", "99999999999999999999"] {
+        let bad = format!("SCRAM-SHA-256${over}:c2FsdA==${stored}:{server}");
+        assert!(parse_scram_secret(&bad).is_none(), "{over}");
+    }
 }
 
 #[test]

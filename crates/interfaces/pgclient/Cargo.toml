@@ -9,11 +9,14 @@ name = "pgclient"
 path = "src/lib.rs"
 
 [dependencies]
+file_seams = { path = "../../backend/storage/file/file_seams" }
 init_small = { path = "../../backend/utils/init/init_small" }
+ip = { path = "../../common/ip" }
 latch = { path = "../../backend/storage/ipc/latch" }
 libc = "0.2"
 mcx = { path = "../../_support/mcx" }
 pg_clock = { path = "../../port/pg_clock" }
+pg_prng = { path = "../../common/pg_prng" }
 vfs = { path = "../../backend/storage/file/vfs" }
 pg_b64 = { path = "../../common/base64" }
 pg_string = { path = "../../common/string" }
@@ -27,3 +30,4 @@ timingsafe_bcmp = { path = "../../port/timingsafe_bcmp" }
 types_core = { path = "../../_support/types/types_core" }
 types_error = { path = "../../_support/types/types_error" }
 types_storage = { path = "../../_support/types/types_storage" }
+wchar = { path = "../../common/wchar" }

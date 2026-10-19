@@ -282,13 +282,10 @@ pub fn finish_heap_swap<'mcx>(
                 assert!(idxs.len() == 1, "toast table with {} indexes", idxs.len());
                 idxs[0]
             };
+            // cluster.c:1603-1612: is_internal=true; is_index only for the
+            // valid index (the table takes AccessExclusiveLock).
             tablecmds_rename_seam(mcx, cur_toast, &format!("pg_toast_{old_heap_oid}"), false)?;
-            tablecmds_rename_seam(
-                mcx,
-                toastidx,
-                &format!("pg_toast_{old_heap_oid}_index"),
-                true,
-            )?;
+            tablecmds_rename_seam(mcx, toastidx, &format!("pg_toast_{old_heap_oid}_index"), true)?;
             xact::CommandCounterIncrement()?;
             set_relrewrite(mcx, cur_toast, InvalidOid)?;
         }
@@ -308,7 +305,7 @@ fn tablecmds_rename_seam<'mcx>(
     newname: &str,
     is_index: bool,
 ) -> PgResult<()> {
-    tablecmds_seams::rename_relation_internal::call(mcx, relid, newname, is_index)
+    tablecmds_seams::rename_relation_internal::call(mcx, relid, newname, is_index, true)
 }
 
 // swap_relation_files; returns both reltoastrelid values as seen before the

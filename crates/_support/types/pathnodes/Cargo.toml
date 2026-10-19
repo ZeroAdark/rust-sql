@@ -7,7 +7,7 @@ publish.workspace = true
 [features]
 # Bisection control: reinstate the boxed Option<PgBox<Bitmapset>> Relids
 # representation (the pre-swap incumbent). No runtime knob is possible for a
-# type swap; this feature is the kill switch of record for GL-REPLAN-B-1.
+# type swap; this feature is the kill switch of record for regression.
 boxed_relids = []
 
 [dependencies]

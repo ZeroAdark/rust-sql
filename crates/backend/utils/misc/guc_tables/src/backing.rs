@@ -23,7 +23,7 @@ crate::session_guc_cluster!(BackingSessionGucs, BACKING_SESSION_GUCS:
     (log_duration_cell, bool, log_duration, set_log_duration, false),
     // C: bool Log_disconnections (postgres.c). PGC_SU_BACKEND: fixed at
     // backend start; the tcop main loop registers the on_proc_exit logger
-    // when this is set (GL-GUCBATCH-1 wire).
+    // when this is set (regression wire).
     (Log_disconnections_cell, bool, Log_disconnections, set_Log_disconnections, false),
     (Debug_print_plan_cell, bool, Debug_print_plan, set_Debug_print_plan, false),
     (Debug_print_parse_cell, bool, Debug_print_parse, set_Debug_print_parse, false),
@@ -101,7 +101,7 @@ crate::session_guc_cluster!(BackingSessionGucs, BACKING_SESSION_GUCS:
     (pgrust_runtime_bitmap_pool_cell, i32, pgrust_runtime_bitmap_pool, set_pgrust_runtime_bitmap_pool, 0),
     (pgrust_lane_parallel_pool_cell, i32, pgrust_lane_parallel_pool, set_pgrust_lane_parallel_pool, 0),
     (pgrust_gather_fair_stride_cell, i32, pgrust_gather_fair_stride, set_pgrust_gather_fair_stride, 0),
-    // pgrust.memory_watchdog_test_hog (pgrust-only, GL-MEMWATCH-1, developer):
+    // pgrust.memory_watchdog_test_hog (pgrust-only, regression, developer):
     // per-query deliberate leak in MB into a named session-lifetime context
     // ("WatchdogTestHog") — the watchdog e2e's context hog. Session-scoped so
     // one test session cannot hog another. 0 = off (the only production value).
@@ -200,10 +200,10 @@ bool_var!(B_pgrust_runtime, pgrust_runtime, set_pgrust_runtime, true);
 // unless the operator opts in. Seeded by the PGRUST_MEM_AUTOTUNE boot env var.
 bool_var!(B_pgrust_mem_autotune, pgrust_mem_autotune, set_pgrust_mem_autotune, false);
 
-// pgrust.runtime_vacuum_pool (pgrust-only, GL-M41-3 flip): parallel VACUUM's
+// pgrust.runtime_vacuum_pool (pgrust-only, regression flip): parallel VACUUM's
 // driver rides the morsel-pool workers (M4.1 ⊕ Q2, PGPROC-leasing bound gate
 // at QoS Utility) instead of a launched bgworker gang. DEFAULT ON since the
-// train-40 flip (GL-M41-3: wall 1.009 parity 2-idx / 0.906 WIN 4-idx, OLTP
+// train-40 flip (regression: wall 1.009 parity 2-idx / 0.906 WIN 4-idx, OLTP
 // flat 1.020 under the Q1 cap, reclaim 15ms) — off restores the launched
 // gang exactly (flipped-kill). Layering unchanged: the pool channel also
 // requires the pooldb identity glue (PGRUST_RUNTIME_POOLDB, the M2 lane's
@@ -215,13 +215,13 @@ bool_var!(
     set_pgrust_runtime_vacuum_pool,
     true
 );
-// pgrust.memory_watchdog family (pgrust-only, GL-MEMWATCH-1): the process
+// pgrust.memory_watchdog family (pgrust-only, regression): the process
 // memory watchdog — a postmaster-lifetime sampler thread comparing process
 // RSS (and cgroup v2 memory.current/memory.max when present) against a
 // limit, and logging the accounted-vs-real ledger plus per-backend context
 // dumps at escalating thresholds BEFORE the container OOM killer arrives
-// (which arrives with no diagnostics at all — the GL-HASHAGG-SPILL-1 /
-// GL-TSACCT-1 incident class). Process-global cells: the watchdog thread
+// (which arrives with no diagnostics at all — the regression /
+// regression incident class). Process-global cells: the watchdog thread
 // reads them each tick, so PGC_SIGHUP edits apply without a restart.
 bool_var!(
     B_pgrust_memory_watchdog,

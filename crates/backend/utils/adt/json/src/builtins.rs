@@ -248,7 +248,7 @@ fn get_path_all(fcinfo: &mut Fcinfo, as_text: bool) -> PgResult<Datum> {
         // SAFETY: catalog arg 0 is a non-null json varlena (strict fn).
         let json = unsafe { fcinfo.arg_varlena_packed(0)? };
         let path = arg_flat_array(fcinfo, 1, mcx)?;
-        if arrayfuncs::array_contains_nulls(path) {
+        if arrayfuncs::array_contains_nulls(path)? {
             None
         } else {
             let (elems, _nulls) = arrayfuncs::deconstruct_array_builtin(mcx, path, TEXTOID, true)?;

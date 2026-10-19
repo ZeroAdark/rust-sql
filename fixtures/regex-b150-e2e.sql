@@ -8,7 +8,7 @@ CREATE DATABASE b150e2e TEMPLATE template0 ENCODING 'UTF8';
 -- pgrust's RE2 tier (regex_engine=auto) keeps its own dispatch cache; the
 -- ported regexp.c cache is the Spencer path, so pin it (no-op on C)
 SELECT count(*) >= 0 AS spencer FROM (SELECT set_config('regex_engine', 'spencer', false) WHERE current_setting('pgrust.regex_re2_linked', true) IS NOT NULL) s;
--- fp-regex-regc_nfa-p2#1: every cached regexp owns a RegexpMemoryContext under
+-- regression: every cached regexp owns a RegexpMemoryContext under
 -- RegexpCacheMemoryContext, identified by its pattern (regexp.c:204,231)
 SELECT 'abc' ~ 'b150_a(b)c' AS m1, 'xyz' ~* '^b150_x.*z$' AS m2, 'abc' ~ 'b150_a(b)c' AS m3;
 SELECT name, ident, level FROM pg_backend_memory_contexts WHERE name IN ('RegexpCacheMemoryContext', 'RegexpMemoryContext') ORDER BY name, ident;

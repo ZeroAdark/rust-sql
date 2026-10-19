@@ -649,7 +649,7 @@ fn fc_gtsvector_picksplit(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
         let size_beta = cache.hemdist(seed_2, j);
         costvector.push(SplitCost { pos: j as u16, cost: (size_alpha - size_beta).abs() });
     }
-    costvector.sort_unstable_by_key(|s| s.cost);
+    ::pg_qsort::pg_qsort(&mut costvector, |a, b| a.cost.cmp(&b.cost) as i32);
 
     for k in 0..maxoff {
         let j = costvector[k].pos as usize;
@@ -834,6 +834,15 @@ fn fc_gtsquery_picksplit(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
     let v = unsafe { &mut *(fcinfo.arg(1).as_usize() as *mut GistSplitVec) };
     // SAFETY: the armed result mcx outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
+    gtsquery_picksplit_core(mcx, entryvec, v)?;
+    Ok(fcinfo.arg(1))
+}
+
+pub(crate) fn gtsquery_picksplit_core(
+    mcx: Mcx<'_>,
+    entryvec: &GistEntryVector,
+    v: &mut GistSplitVec,
+) -> PgResult<()> {
     let key_at = |pos: usize| entryvec.vector[pos].key.as_u64();
 
     let mut maxoff = (entryvec.n - 2) as usize;
@@ -875,7 +884,7 @@ fn fc_gtsquery_picksplit(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
         let size_beta = tsqs_hemdist(key_at(seed_2), key_at(j));
         costvector.push(SplitCost { pos: j as u16, cost: (size_alpha - size_beta).abs() });
     }
-    costvector.sort_unstable_by_key(|s| s.cost);
+    ::pg_qsort::pg_qsort(&mut costvector, |a, b| a.cost.cmp(&b.cost) as i32);
 
     for k in 0..maxoff {
         let j = costvector[k].pos as usize;
@@ -903,7 +912,7 @@ fn fc_gtsquery_picksplit(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
     v.spl_ldatum = Datum::from_u64(datum_l);
     v.spl_rdatum = Datum::from_u64(datum_r);
 
-    Ok(fcinfo.arg(1))
+    Ok(())
 }
 
 const fn b(foid: Oid, name: &'static str, nargs: i16, func: PGFunction) -> FmgrBuiltin {

@@ -94,8 +94,9 @@ pub fn ExecAlterExtensionContentsStmt<'mcx>(
         ObjectAddress { classId: object.classId, objectId: object.objectId, objectSubId: 0 };
     alter_contents_recurse(mcx, stmt, extname, &extension, &object)?;
 
-    // C: InvokeObjectPostAlterHook (no object_access hooks in this port),
-    // then relation_close(NoLock) — the Relation guard drop is that close.
+    objectaccess::InvokeObjectPostAlterHook(EXTENSION_RELATION_ID, extension.objectId, 0)?;
+
+    // C: relation_close(NoLock) — the Relation guard drop is that close.
     drop(relation);
 
     Ok(extension)

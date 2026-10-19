@@ -311,18 +311,20 @@ unsafe extern "C" fn info_cb(ssl: *const openssl_sys::SSL, type_: libc::c_int, a
     }
 }
 
+// be-secure-openssl.c:1184: pg_clean_ascii escapes the retained bytes
+// themselves, so a truncation that lands inside a multibyte character keeps
+// its trailing bytes as \xNN rather than a replacement character.
 fn prepare_cert_name(bytes: &[u8]) -> String {
     const MAXLEN: usize = 71;
-    let truncated = if bytes.len() > MAXLEN {
+    if bytes.len() > MAXLEN {
         let mut t = bytes[bytes.len() - MAXLEN..].to_vec();
         t[0] = b'.';
         t[1] = b'.';
         t[2] = b'.';
-        String::from_utf8_lossy(&t).into_owned()
+        pg_string::pg_clean_ascii_bytes(&t)
     } else {
-        String::from_utf8_lossy(bytes).into_owned()
-    };
-    pg_string::pg_clean_ascii(&truncated, 0).unwrap_or_default()
+        pg_string::pg_clean_ascii_bytes(bytes)
+    }
 }
 
 fn verify_cb(ok: bool, ctx: &mut openssl::x509::X509StoreContextRef) -> bool {
@@ -851,7 +853,7 @@ pub struct TlsOpen {
     pub r: i32,
     pub raw_remaining: usize,
     pub alpn_used: bool,
-    pub peer_cn: Option<String>,
+    pub peer_cn: Option<Vec<u8>>,
     pub peer_dn: Option<String>,
     pub peer_cert_valid: bool,
 }
@@ -1129,8 +1131,12 @@ pub fn be_tls_open_server(sock: i32, raw_buf: Vec<u8>) -> PgResult<TlsOpen> {
 
 // X509_NAME_get_text_by_NID(NID_commonName) with the CVE-2009-4034
 // embedded-null check. Ok(Err(())) is the C `return -1` connection abort.
+// The CN is kept as the raw bytes OpenSSL copied out (be-secure-openssl.c:652
+// stores them verbatim; CheckCertAuth's check_usermap strcmp's them), never a
+// lossy String: a T61String CN with a 0xFF byte must map through pg_ident
+// exactly as in C.
 #[allow(clippy::result_unit_err)]
-fn extract_peer_cn(peer: &X509Ref) -> PgResult<Result<Option<String>, ()>> {
+fn extract_peer_cn(peer: &X509Ref) -> PgResult<Result<Option<Vec<u8>>, ()>> {
     const NID_COMMON_NAME: libc::c_int = 13;
     let name = peer.subject_name().as_ptr();
     // SAFETY: name is the live subject X509_NAME; NULL buf probes the length.
@@ -1155,7 +1161,7 @@ fn extract_peer_cn(peer: &X509Ref) -> PgResult<Result<Option<String>, ()>> {
             .finish(loc("be_tls_open_server"))?;
         return Ok(Err(()));
     }
-    Ok(Ok(Some(String::from_utf8_lossy(&buf).into_owned())))
+    Ok(Ok(Some(buf)))
 }
 
 pub fn be_tls_close() {
@@ -1456,6 +1462,91 @@ pub fn be_tls_get_certificate_hash() -> PgResult<Option<Vec<u8>>> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering as O};
+
+    // be-secure-openssl.c:649-675 stores whatever bytes
+    // X509_NAME_get_text_by_NID copied out of the CN, whatever the entry's
+    // string type, and CheckCertAuth strcmp's them through check_usermap. A
+    // T61String CN carrying 0xFF is not UTF-8 and must reach the usermap as
+    // that byte, never as U+FFFD (regression).
+    #[test]
+    fn extract_peer_cn_keeps_the_raw_cn_bytes() {
+        use foreign_types::ForeignType;
+        use openssl::asn1::Asn1Time;
+        use openssl::ec::{EcGroup, EcKey};
+        use openssl::hash::MessageDigest;
+        use openssl::nid::Nid;
+        use openssl::pkey::PKey;
+        use openssl::x509::{X509NameBuilder, X509};
+
+        let cn = b"us\xffer";
+        let name = X509NameBuilder::new().unwrap().build();
+        // SAFETY: name is a live X509_NAME we own; the entry is added as a raw
+        // T61String of exactly cn.len() bytes (no MBSTRING conversion).
+        let added = unsafe {
+            openssl_sys::X509_NAME_add_entry_by_NID(
+                name.as_ptr(),
+                openssl_sys::NID_commonName,
+                openssl_sys::V_ASN1_T61STRING,
+                cn.as_ptr(),
+                cn.len() as libc::c_int,
+                -1,
+                0,
+            )
+        };
+        assert_eq!(added, 1);
+
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+        let key = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
+        let mut b = X509::builder().unwrap();
+        b.set_version(2).unwrap();
+        b.set_subject_name(&name).unwrap();
+        b.set_issuer_name(&name).unwrap();
+        b.set_pubkey(&key).unwrap();
+        b.set_not_before(&Asn1Time::days_from_now(0).unwrap()).unwrap();
+        b.set_not_after(&Asn1Time::days_from_now(1).unwrap()).unwrap();
+        b.sign(&key, MessageDigest::sha256()).unwrap();
+        let cert = b.build();
+
+        let got = extract_peer_cn(&cert).unwrap().expect("no embedded NUL");
+        assert_eq!(got.as_deref(), Some(&cn[..]));
+        assert!(std::str::from_utf8(&cn[..]).is_err(), "the fixture must not be UTF-8");
+    }
+
+    // be-secure-openssl.c:1177-1190: names over 71 bytes keep their last 71
+    // bytes behind "...", and every retained non-printable byte is escaped
+    // as C's pg_clean_ascii does — including the tail of a multibyte
+    // character the cut split (batch-232 regression).
+    #[test]
+    fn prepare_cert_name_escapes_the_bytes_c_keeps() {
+        assert_eq!(prepare_cert_name(b"CN=caf\xc3\xa9"), "CN=caf\\xc3\\xa9");
+        let mut name = b"CN=".to_vec();
+        name.extend(std::iter::repeat_n(b'a', 68));
+        name.extend_from_slice("é".as_bytes());
+        name.extend_from_slice(b"xyz");
+        assert_eq!(name.len(), 76);
+        let mut expected = String::from("...");
+        expected.push_str(&"a".repeat(63));
+        expected.push_str("\\xc3\\xa9xyz");
+        assert_eq!(prepare_cert_name(&name), expected);
+        let mut split = b"CN=".to_vec();
+        split.extend(std::iter::repeat_n(b'a', 69));
+        split.extend_from_slice("é".as_bytes());
+        split.extend_from_slice(b"xy");
+        assert_eq!(split.len(), 76);
+        let mut expected = String::from("...");
+        expected.push_str(&"a".repeat(64));
+        expected.push_str("\\xc3\\xa9xy");
+        assert_eq!(prepare_cert_name(&split), expected);
+        let mut cut = b"CN=".to_vec();
+        cut.extend(std::iter::repeat_n(b'a', 3));
+        cut.extend_from_slice("é".as_bytes());
+        cut.extend(std::iter::repeat_n(b'b', 67));
+        assert_eq!(cut.len(), 75);
+        let mut expected = String::from("...");
+        expected.push_str("\\xa9");
+        expected.push_str(&"b".repeat(67));
+        assert_eq!(prepare_cert_name(&cut), expected);
+    }
 
     static READ_DRAINS: AtomicUsize = AtomicUsize::new(0);
 

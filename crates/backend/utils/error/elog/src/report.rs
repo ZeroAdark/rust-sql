@@ -26,6 +26,7 @@ struct LogState {
     formatted_log_time: Option<String>,
     formatted_start_time: Option<String>,
     log_line_number: i64,
+    log_my_pid: u32,
     save_format_errnumber: i32,
     save_format_domain: Option<String>,
 }
@@ -75,8 +76,10 @@ fn format_in_log_timezone(secs: i64, fmt: &[u8]) -> Option<String> {
     let tz = ::localtime::globals::log_timezone()?;
     let tm = ::localtime::pg_localtime(secs, tz)?;
     let mut buf = [0u8; 128];
-    let n = ::strftime::pg_strftime(&mut buf, fmt, &tm)?;
-    Some(String::from_utf8_lossy(&buf[..n]).into_owned())
+    Some(match ::strftime::pg_strftime(&mut buf, fmt, &tm) {
+        Some(n) => String::from_utf8_lossy(&buf[..n]).into_owned(),
+        None => String::new(),
+    })
 }
 
 fn format_gmt(secs: i64, sod_extra: &str) -> String {
@@ -105,11 +108,13 @@ fn format_timestamp_millis(secs: i64, micros: u32) -> String {
     // the ".mmm" spliced in at offset 19.
     let millis = format!(".{:03}", micros / 1_000);
     match format_in_log_timezone(secs, b"%Y-%m-%d %H:%M:%S     %Z") {
-        Some(mut s) if s.len() >= 23 && s.is_char_boundary(23) => {
-            s.replace_range(19..23, &millis);
+        Some(mut s) => {
+            if s.len() >= 23 && s.is_char_boundary(23) {
+                s.replace_range(19..23, &millis);
+            }
             s
         }
-        _ => format_gmt(secs, &millis),
+        None => format_gmt(secs, &millis),
     }
 }
 
@@ -232,11 +237,11 @@ pub fn format_elog_string(fmt: &str) -> String {
     errno::replace_percent_m(fmt, errnumber)
 }
 
-fn process_log_prefix_padding(chars: &[char], mut p: usize, padding: &mut i32) -> Option<usize> {
+fn process_log_prefix_padding(chars: &[u8], mut p: usize, padding: &mut i32) -> Option<usize> {
     let mut paddingsign = 1;
     let mut pad = 0i32;
 
-    if chars.get(p) == Some(&'-') {
+    if chars.get(p) == Some(&b'-') {
         p += 1;
         if p >= chars.len() {
             return None;
@@ -248,7 +253,7 @@ fn process_log_prefix_padding(chars: &[char], mut p: usize, padding: &mut i32) -
         if !c.is_ascii_digit() {
             break;
         }
-        pad = pad.wrapping_mul(10).wrapping_add(c as i32 - '0' as i32);
+        pad = pad.wrapping_mul(10).wrapping_add(i32::from(c - b'0'));
         p += 1;
     }
 
@@ -260,50 +265,60 @@ fn process_log_prefix_padding(chars: &[char], mut p: usize, padding: &mut i32) -
     Some(p)
 }
 
-fn append_padded(buf: &mut String, value: &str, padding: i32) {
+fn append_padded(buf: &mut Vec<u8>, value: &str, padding: i32) {
     if padding == 0 {
-        buf.push_str(value);
+        buf.extend_from_slice(value.as_bytes());
         return;
     }
     let width = padding.unsigned_abs() as usize;
     let len = value.len();
     if len >= width {
-        buf.push_str(value);
+        buf.extend_from_slice(value.as_bytes());
         return;
     }
     let spaces = width - len;
     if padding > 0 {
-        buf.extend(std::iter::repeat_n(' ', spaces));
-        buf.push_str(value);
+        buf.extend(std::iter::repeat_n(b' ', spaces));
+        buf.extend_from_slice(value.as_bytes());
     } else {
-        buf.push_str(value);
-        buf.extend(std::iter::repeat_n(' ', spaces));
+        buf.extend_from_slice(value.as_bytes());
+        buf.extend(std::iter::repeat_n(b' ', spaces));
     }
 }
 
-fn append_spaces(buf: &mut String, padding: i32) {
-    buf.extend(std::iter::repeat_n(' ', padding.unsigned_abs() as usize));
+fn append_spaces(buf: &mut Vec<u8>, padding: i32) {
+    buf.extend(std::iter::repeat_n(b' ', padding.unsigned_abs() as usize));
 }
 
-pub fn log_line_prefix(buf: &mut String, edata: &PgError) {
+pub fn log_line_prefix(buf: &mut Vec<u8>, edata: &PgError) {
     log_status_format(buf, config::log_line_prefix_format().as_deref(), edata);
 }
 
-pub fn log_status_format(buf: &mut String, format: Option<&str>, edata: &PgError) {
+// elog.c:2852-2864: the format is walked byte by byte, so an unknown
+// conversion drops exactly one byte after '%' (the tail of a multibyte
+// character is copied literally) — the line is bytes, not a String.
+pub fn log_status_format(buf: &mut Vec<u8>, format: Option<&str>, edata: &PgError) {
     let context = sink::backend_log_context();
     let my_pid = context.map_or_else(sink::current_pid, |c| c.process_id());
     let has_port = context.is_some_and(|c| c.has_client_port());
 
-    with_log_state(|state| state.log_line_number += 1);
+    with_log_state(|state| {
+        if state.log_my_pid != my_pid {
+            state.log_line_number = 0;
+            state.log_my_pid = my_pid;
+            state.formatted_start_time = None;
+        }
+        state.log_line_number += 1;
+    });
 
     let Some(format) = format else {
         return; // in case guc hasn't run yet
     };
 
-    let chars: Vec<char> = format.chars().collect();
+    let chars = format.as_bytes();
     let mut p = 0;
     while p < chars.len() {
-        if chars[p] != '%' {
+        if chars[p] != b'%' {
             buf.push(chars[p]);
             p += 1;
             continue;
@@ -313,22 +328,22 @@ pub fn log_status_format(buf: &mut String, format: Option<&str>, edata: &PgError
         if p >= chars.len() {
             break; // format error - ignore it
         }
-        if chars[p] == '%' {
-            buf.push('%');
+        if chars[p] == b'%' {
+            buf.push(b'%');
             p += 1;
             continue;
         }
 
         let mut padding = 0;
-        if chars[p] <= '9' {
-            match process_log_prefix_padding(&chars, p, &mut padding) {
+        if chars[p] <= b'9' {
+            match process_log_prefix_padding(chars, p, &mut padding) {
                 Some(next) => p = next,
                 None => break,
             }
         }
 
         match chars[p] {
-            'a' => {
+            b'a' => {
                 if has_port {
                     let appname = context.and_then(|c| c.application_name());
                     let appname = appname.as_deref().filter(|s| !s.is_empty()).unwrap_or("[unknown]");
@@ -337,11 +352,11 @@ pub fn log_status_format(buf: &mut String, format: Option<&str>, edata: &PgError
                     append_spaces(buf, padding);
                 }
             }
-            'b' => {
+            b'b' => {
                 let backend_type = get_backend_type_for_log();
                 append_padded(buf, &backend_type, padding);
             }
-            'u' => {
+            b'u' => {
                 if has_port {
                     let username = context.and_then(|c| c.user_name());
                     let username = username.as_deref().filter(|s| !s.is_empty()).unwrap_or("[unknown]");
@@ -350,7 +365,7 @@ pub fn log_status_format(buf: &mut String, format: Option<&str>, edata: &PgError
                     append_spaces(buf, padding);
                 }
             }
-            'd' => {
+            b'd' => {
                 if has_port {
                     let dbname = context.and_then(|c| c.database_name());
                     let dbname = dbname.as_deref().filter(|s| !s.is_empty()).unwrap_or("[unknown]");
@@ -359,36 +374,36 @@ pub fn log_status_format(buf: &mut String, format: Option<&str>, edata: &PgError
                     append_spaces(buf, padding);
                 }
             }
-            'c' => {
+            b'c' => {
                 let start =
                     context.map_or_else(init_small::globals::MyStartTime, |c| c.session_start_time());
                 let value = format!("{:x}.{:x}", start, my_pid);
                 append_padded(buf, &value, padding);
             }
-            'p' => {
+            b'p' => {
                 append_padded(buf, &my_pid.to_string(), padding);
             }
-            'P' => match context.and_then(|c| c.lock_group_leader_pid()) {
+            b'P' => match context.and_then(|c| c.lock_group_leader_pid()) {
                 Some(leader_pid) if leader_pid != my_pid => {
                     append_padded(buf, &leader_pid.to_string(), padding);
                 }
                 _ => append_spaces(buf, padding),
             },
-            'l' => {
+            b'l' => {
                 let n = with_log_state(|state| state.log_line_number);
                 append_padded(buf, &n.to_string(), padding);
             }
-            'm' => {
+            b'm' => {
                 with_log_state(|state| state.formatted_log_time = None);
                 let ts = get_formatted_log_time();
                 append_padded(buf, &ts, padding);
             }
-            't' => {
+            b't' => {
                 let (secs, _) = now_timeval();
                 let ts = format_timestamp_seconds(secs);
                 append_padded(buf, &ts, padding);
             }
-            'n' => {
+            b'n' => {
                 let (secs, micros) = with_log_state(|state| match state.saved_timeval {
                     Some(tv) => tv,
                     None => {
@@ -400,11 +415,11 @@ pub fn log_status_format(buf: &mut String, format: Option<&str>, edata: &PgError
                 let value = format!("{}.{:03}", secs, micros / 1_000);
                 append_padded(buf, &value, padding);
             }
-            's' => {
+            b's' => {
                 let start_time = get_formatted_start_time();
                 append_padded(buf, &start_time, padding);
             }
-            'i' => {
+            b'i' => {
                 if has_port {
                     let psdisp = context.and_then(|c| c.ps_display());
                     append_padded(buf, psdisp.as_deref().unwrap_or(""), padding);
@@ -412,13 +427,13 @@ pub fn log_status_format(buf: &mut String, format: Option<&str>, edata: &PgError
                     append_spaces(buf, padding);
                 }
             }
-            'L' => {
+            b'L' => {
                 let local_host = context
                     .filter(|c| c.has_client_port())
                     .and_then(|c| c.local_host());
                 append_padded(buf, local_host.as_deref().unwrap_or("[none]"), padding);
             }
-            'r' => {
+            b'r' => {
                 match context
                     .filter(|c| c.has_client_port())
                     .and_then(|c| c.remote_host())
@@ -440,7 +455,7 @@ pub fn log_status_format(buf: &mut String, format: Option<&str>, edata: &PgError
                     }
                 }
             }
-            'h' => {
+            b'h' => {
                 match context
                     .filter(|c| c.has_client_port())
                     .and_then(|c| c.remote_host())
@@ -453,12 +468,12 @@ pub fn log_status_format(buf: &mut String, format: Option<&str>, edata: &PgError
                     }
                 }
             }
-            'q' => {
+            b'q' => {
                 if !has_port {
                     return;
                 }
             }
-            'v' => {
+            b'v' => {
                 // keep VXID format in sync with lockfuncs.c
                 match context.and_then(|c| c.virtual_transaction_id()) {
                     Some((proc_number, lxid)) => {
@@ -472,15 +487,15 @@ pub fn log_status_format(buf: &mut String, format: Option<&str>, edata: &PgError
                     }
                 }
             }
-            'x' => {
+            b'x' => {
                 let xid = context.map_or(0, |c| c.top_transaction_id());
                 append_padded(buf, &xid.to_string(), padding);
             }
-            'e' => {
+            b'e' => {
                 let state = unpack_sql_state(edata.sqlstate);
                 append_padded(buf, &state, padding);
             }
-            'Q' => {
+            b'Q' => {
                 let query_id = context.map_or(0, |c| c.query_id());
                 append_padded(buf, &query_id.to_string(), padding);
             }
@@ -492,68 +507,88 @@ pub fn log_status_format(buf: &mut String, format: Option<&str>, edata: &PgError
     }
 }
 
-#[cold]
-#[inline(never)]
-pub fn send_message_to_server_log(edata: &PgError) {
-    let mut buf = String::new();
-    let mut fallback_to_stderr = false;
+fn primary_message(edata: &PgError) -> &str {
+    if edata.message.is_empty() && edata.message_id.is_none() && edata.message_raw.is_none() {
+        "missing error text"
+    } else {
+        &edata.message
+    }
+}
 
-    log_line_prefix(&mut buf, edata);
-    buf.push_str(error_severity(edata.level));
-    buf.push_str(":  ");
+fn log_line_prefix_bytes(buf: &mut Vec<u8>, edata: &PgError) {
+    log_line_prefix(buf, edata);
+}
+
+// elog.c:3767 append_with_tabs copies a C string: it stops at the first NUL.
+fn append_with_tabs_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
+    for &b in bytes.iter().take_while(|&&b| b != 0) {
+        buf.push(b);
+        if b == b'\n' {
+            buf.push(b'\t');
+        }
+    }
+}
+
+pub(crate) fn format_server_log_line(edata: &PgError) -> Vec<u8> {
+    let mut buf: Vec<u8> = Vec::new();
+
+    log_line_prefix_bytes(&mut buf, edata);
+    buf.extend_from_slice(error_severity(edata.level).as_bytes());
+    buf.extend_from_slice(b":  ");
 
     if config::log_error_verbosity() >= PGErrorVerbosity::Verbose {
-        buf.push_str(&unpack_sql_state(edata.sqlstate));
-        buf.push_str(": ");
+        buf.extend_from_slice(unpack_sql_state(edata.sqlstate).as_bytes());
+        buf.extend_from_slice(b": ");
     }
 
-    if !edata.message.is_empty() {
-        append_with_tabs(&mut buf, &edata.message);
-    } else {
-        append_with_tabs(&mut buf, "missing error text");
+    match &edata.message_raw {
+        Some(raw) => append_with_tabs_bytes(&mut buf, raw),
+        None => append_with_tabs_bytes(&mut buf, primary_message(edata).as_bytes()),
     }
 
     if edata.cursor_position.unwrap_or(0) > 0 {
-        buf.push_str(&format!(" at character {}", edata.cursor_position.unwrap()));
+        buf.extend_from_slice(format!(" at character {}", edata.cursor_position.unwrap()).as_bytes());
     } else if edata.internal_position.unwrap_or(0) > 0 {
-        buf.push_str(&format!(
-            " at character {}",
-            edata.internal_position.unwrap()
-        ));
+        buf.extend_from_slice(
+            format!(" at character {}", edata.internal_position.unwrap()).as_bytes(),
+        );
     }
 
-    buf.push('\n');
+    buf.push(b'\n');
 
     if config::log_error_verbosity() >= PGErrorVerbosity::Default {
         if let Some(detail_log) = &edata.detail_log {
-            log_line_prefix(&mut buf, edata);
-            buf.push_str("DETAIL:  ");
-            append_with_tabs(&mut buf, detail_log);
-            buf.push('\n');
+            log_line_prefix_bytes(&mut buf, edata);
+            buf.extend_from_slice(b"DETAIL:  ");
+            append_with_tabs_bytes(&mut buf, detail_log.as_bytes());
+            buf.push(b'\n');
         } else if let Some(detail) = &edata.detail {
-            log_line_prefix(&mut buf, edata);
-            buf.push_str("DETAIL:  ");
-            append_with_tabs(&mut buf, detail);
-            buf.push('\n');
+            log_line_prefix_bytes(&mut buf, edata);
+            buf.extend_from_slice(b"DETAIL:  ");
+            match &edata.detail_raw {
+                Some(raw) => append_with_tabs_bytes(&mut buf, raw),
+                None => append_with_tabs_bytes(&mut buf, detail.as_bytes()),
+            }
+            buf.push(b'\n');
         }
         if let Some(hint) = &edata.hint {
-            log_line_prefix(&mut buf, edata);
-            buf.push_str("HINT:  ");
-            append_with_tabs(&mut buf, hint);
-            buf.push('\n');
+            log_line_prefix_bytes(&mut buf, edata);
+            buf.extend_from_slice(b"HINT:  ");
+            append_with_tabs_bytes(&mut buf, hint.as_bytes());
+            buf.push(b'\n');
         }
         if let Some(internalquery) = &edata.internal_query {
-            log_line_prefix(&mut buf, edata);
-            buf.push_str("QUERY:  ");
-            append_with_tabs(&mut buf, internalquery);
-            buf.push('\n');
+            log_line_prefix_bytes(&mut buf, edata);
+            buf.extend_from_slice(b"QUERY:  ");
+            append_with_tabs_bytes(&mut buf, internalquery.as_bytes());
+            buf.push(b'\n');
         }
-        if let Some(context) = &edata.context {
+        if let Some(context) = edata.context_wire_bytes() {
             if !edata.hide_context {
-                log_line_prefix(&mut buf, edata);
-                buf.push_str("CONTEXT:  ");
-                append_with_tabs(&mut buf, context);
-                buf.push('\n');
+                log_line_prefix_bytes(&mut buf, edata);
+                buf.extend_from_slice(b"CONTEXT:  ");
+                append_with_tabs_bytes(&mut buf, &context);
+                buf.push(b'\n');
             }
         }
         if config::log_error_verbosity() >= PGErrorVerbosity::Verbose {
@@ -562,32 +597,40 @@ pub fn send_message_to_server_log(edata: &PgError) {
             let filename = location.and_then(|l| l.filename.as_deref());
             let lineno = location.map_or(0, |l| l.lineno);
             if let (Some(funcname), Some(filename)) = (funcname, filename) {
-                log_line_prefix(&mut buf, edata);
-                buf.push_str(&format!(
-                    "LOCATION:  {}, {}:{}\n",
-                    funcname, filename, lineno
-                ));
+                log_line_prefix_bytes(&mut buf, edata);
+                buf.extend_from_slice(
+                    format!("LOCATION:  {}, {}:{}\n", funcname, filename, lineno).as_bytes(),
+                );
             } else if let Some(filename) = filename {
-                log_line_prefix(&mut buf, edata);
-                buf.push_str(&format!("LOCATION:  {}:{}\n", filename, lineno));
+                log_line_prefix_bytes(&mut buf, edata);
+                buf.extend_from_slice(format!("LOCATION:  {}:{}\n", filename, lineno).as_bytes());
             }
         }
         if let Some(backtrace) = &edata.backtrace {
-            log_line_prefix(&mut buf, edata);
-            buf.push_str("BACKTRACE:  ");
-            append_with_tabs(&mut buf, backtrace);
-            buf.push('\n');
+            log_line_prefix_bytes(&mut buf, edata);
+            buf.extend_from_slice(b"BACKTRACE:  ");
+            append_with_tabs_bytes(&mut buf, backtrace.as_bytes());
+            buf.push(b'\n');
         }
     }
 
     if check_log_of_query(edata) {
         if let Some(query) = current_query_string() {
-            log_line_prefix(&mut buf, edata);
-            buf.push_str("STATEMENT:  ");
-            append_with_tabs(&mut buf, &query);
-            buf.push('\n');
+            log_line_prefix_bytes(&mut buf, edata);
+            buf.extend_from_slice(b"STATEMENT:  ");
+            append_with_tabs_bytes(&mut buf, query.as_bytes());
+            buf.push(b'\n');
         }
     }
+
+    buf
+}
+
+#[cold]
+#[inline(never)]
+pub fn send_message_to_server_log(edata: &PgError) {
+    let buf = format_server_log_line(edata);
+    let mut fallback_to_stderr = false;
 
     // wasm32: !HAVE_SYSLOG shape — the destination doesn't exist (no
     // syslogd, no LOG_* levels in the wasi libc crate); stderr remains.
@@ -632,14 +675,14 @@ pub fn send_message_to_server_log(edata: &PgError) {
         || fallback_to_stderr
     {
         if config::redirection_done() && !config::am_syslogger() {
-            write_pipe_chunks(buf.as_bytes(), LOG_DESTINATION_STDERR);
+            write_pipe_chunks(&buf, LOG_DESTINATION_STDERR);
         } else {
-            write_console(buf.as_bytes());
+            write_console(&buf);
         }
     }
 
     if config::am_syslogger() {
-        syslogger_seams::write_syslogger_file::call(buf.as_bytes(), LOG_DESTINATION_STDERR);
+        syslogger_seams::write_syslogger_file::call(&buf, LOG_DESTINATION_STDERR);
     }
 }
 
@@ -845,21 +888,21 @@ pub fn send_message_to_frontend(edata: &PgError) -> PgResult<()> {
             // C messages are byte strings; this carries C's exact bytes when
             // they are not valid UTF-8 (e.g. elog %c of a high "char" byte).
             send_field_bytes(&mut body, PG_DIAG_MESSAGE_PRIMARY, raw)?;
-        } else if !edata.message.is_empty() {
-            send_field(&mut body, PG_DIAG_MESSAGE_PRIMARY, &edata.message)?;
         } else {
-            send_field(&mut body, PG_DIAG_MESSAGE_PRIMARY, "missing error text")?;
+            send_field(&mut body, PG_DIAG_MESSAGE_PRIMARY, primary_message(edata))?;
         }
 
-        if let Some(detail) = &edata.detail {
+        if let Some(raw) = &edata.detail_raw {
+            send_field_bytes(&mut body, PG_DIAG_MESSAGE_DETAIL, raw)?;
+        } else if let Some(detail) = &edata.detail {
             send_field(&mut body, PG_DIAG_MESSAGE_DETAIL, detail)?;
         }
         // detail_log is intentionally not used here
         if let Some(hint) = &edata.hint {
             send_field(&mut body, PG_DIAG_MESSAGE_HINT, hint)?;
         }
-        if let Some(context) = &edata.context {
-            send_field(&mut body, PG_DIAG_CONTEXT, context)?;
+        if let Some(context) = edata.context_wire_bytes() {
+            send_field_bytes(&mut body, PG_DIAG_CONTEXT, &context)?;
         }
         if let Some(schema_name) = &edata.schema_name {
             send_field(&mut body, PG_DIAG_SCHEMA_NAME, schema_name)?;
@@ -915,24 +958,20 @@ pub fn send_message_to_frontend(edata: &PgError) -> PgResult<()> {
 
         body.push(0); // terminator
 
-        let _ = pqcomm_seams::pq_putmessage::call(msgtype, &body);
+        pqcomm_seams::pq_putmessage::call(msgtype, &body)?;
     } else {
         let mut buf = String::new();
         buf.push_str(error_severity(edata.level));
         buf.push_str(":  ");
-        if !edata.message.is_empty() {
-            buf.push_str(&edata.message);
-        } else {
-            buf.push_str("missing error text");
-        }
+        buf.push_str(primary_message(edata));
         buf.push('\n');
 
         let mut body = buf.into_bytes();
         body.push(0);
-        let _ = pqcomm_seams::pq_putmessage_v2::call(msgtype, &body);
+        pqcomm_seams::pq_putmessage_v2::call(msgtype, &body)?;
     }
 
-    let _ = pqcomm_seams::pq_flush::call();
+    pqcomm_seams::pq_flush::call()?;
     Ok(())
 }
 

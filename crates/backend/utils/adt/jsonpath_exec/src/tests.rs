@@ -706,3 +706,20 @@ mod passing_text_detoast {
         assert_eq!(passing_string(VARCHAROID, &short), "\"hello\"");
     }
 }
+
+#[test]
+fn missing_variable_message_keeps_raw_name_bytes() {
+    setup();
+    let cx = MemoryContext::new("jsonpath exec test");
+    let mcx = cx.mcx();
+    let jb = jb_payload(mcx, "{}");
+    let jp = adt_jsonpath::path::jsonpath_in(mcx, b"$\"c\xC3\"", None)
+        .unwrap_or_else(|e| panic!("jsonpath_in: {}", e.message()))
+        .expect("hard path returns Some");
+    let err = jsonb_path_exists_core(mcx, &jb[4..], &jp, JsonPathVars::Jsonb(&jb[4..]), false, false)
+        .unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"could not find jsonpath variable \"c\xC3\"".as_slice())
+    );
+}

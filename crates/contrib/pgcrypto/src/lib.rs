@@ -281,7 +281,7 @@ fn pgp_notice(msg: &str) {
 // arm — mis-states the code on every px-throwing path (dearmor,
 // pgp_armor_headers, and the four pgp sym/pub wrappers).
 fn px_msg(msg: &str) -> Box<PgError> {
-    let sqlstate = if msg == pgp::consts::NO_RANDOM {
+    let sqlstate = if msg == pgp::consts::NO_RANDOM || msg.starts_with(pgp::decrypt::ALLOC_SIZE_ERROR) {
         ERRCODE_INTERNAL_ERROR
     } else {
         ERRCODE_EXTERNAL_ROUTINE_INVOCATION_EXCEPTION
@@ -319,6 +319,35 @@ fn encrypt_input(data: Vec<u8>, args: Option<&[u8]>, is_text: bool) -> PgResult<
     }
 }
 
+// pgp-pgsql.c:388 encrypt_internal: init_work parses the args before the
+// output MBuf is sized from the input.
+fn encrypt_setup(data: Vec<u8>, args: Option<&[u8]>, is_text: bool) -> PgResult<(Vec<u8>, usize)> {
+    pgp::validate_args(args).map_err(|e| px_msg(&e))?;
+    let data = encrypt_input(data, args, is_text)?;
+    let cap = mbuf_create(data.len(), 128)?;
+    Ok((data, cap))
+}
+
+// mbuf.c:37 STEP / :79 prepare_room. pgp-pgsql.c:400 encrypt_internal and
+// :479 decrypt_internal palloc the output MBuf at VARSIZE_ANY(data) + slack
+// before the first packet is read (mcxt.c:1180 refuses > MaxAllocSize), and
+// the writer's <= ENCBUF blocks grow it by 2*STEP at a time.
+const MBUF_STEP: usize = 16 * 1024;
+
+fn mbuf_create(input_len: usize, slack: usize) -> PgResult<usize> {
+    let len = input_len + datum::VARHDRSZ + slack;
+    mcx::check_alloc_size(len)?;
+    Ok(len)
+}
+
+fn mbuf_room(mut cap: usize, need: usize) -> PgResult<()> {
+    while cap < need {
+        cap += 2 * MBUF_STEP;
+        mcx::check_alloc_size(cap)?;
+    }
+    Ok(())
+}
+
 // pgp-pgsql.c:537 decrypt_internal: a 'u' literal comes back from UTF-8
 // before the text wrapper's pg_verifymbstr (pgp-pgsql.c:627).
 fn decrypt_output(fcinfo: &mut Fcinfo, out: pgp::DecryptOutput, need_text: bool) -> PgResult<Datum> {
@@ -340,8 +369,9 @@ fn pgp_sym_encrypt(fcinfo: &mut Fcinfo, is_text: bool) -> PgResult<Datum> {
     let (data, key) = unsafe { (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?) };
     let (data, key) = (data.data().to_vec(), key.data().to_vec());
     let args = opt_arg_bytes(fcinfo, 2)?;
-    let data = encrypt_input(data, args.as_deref(), is_text)?;
+    let (data, cap) = encrypt_setup(data, args.as_deref(), is_text)?;
     let out = pgp::sym_encrypt(&data, &key, args.as_deref(), is_text).map_err(|e| px_msg(&e))?;
+    mbuf_room(cap, out.len() + datum::VARHDRSZ)?;
     bytea_result(fcinfo, &out)
 }
 
@@ -350,6 +380,8 @@ fn pgp_sym_decrypt(fcinfo: &mut Fcinfo, need_text: bool) -> PgResult<Datum> {
     let (data, key) = unsafe { (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?) };
     let (data, key) = (data.data().to_vec(), key.data().to_vec());
     let args = opt_arg_bytes(fcinfo, 2)?;
+    pgp::validate_args(args.as_deref()).map_err(|e| px_msg(&e))?;
+    mbuf_create(data.len(), 2048)?;
     match pgp::sym_decrypt(&data, &key, args.as_deref(), need_text) {
         Ok(out) => decrypt_output(fcinfo, out, need_text),
         Err(e) => {
@@ -366,8 +398,14 @@ fn pgp_pub_encrypt(fcinfo: &mut Fcinfo, is_text: bool) -> PgResult<Datum> {
     let (data, key) = unsafe { (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?) };
     let (data, key) = (data.data().to_vec(), key.data().to_vec());
     let args = opt_arg_bytes(fcinfo, 2)?;
-    let data = encrypt_input(data, args.as_deref(), is_text)?;
-    let out = pgp::pub_encrypt(&data, &key, args.as_deref(), is_text).map_err(|e| px_msg(&e))?;
+    let (data, cap) = encrypt_setup(data, args.as_deref(), is_text)?;
+    let out = pgp::pub_encrypt(&data, &key, args.as_deref(), is_text).map_err(|e| {
+        for n in &e.notices {
+            pgp_notice(n);
+        }
+        px_msg(&e.message)
+    })?;
+    mbuf_room(cap, out.len() + datum::VARHDRSZ)?;
     bytea_result(fcinfo, &out)
 }
 
@@ -377,6 +415,8 @@ fn pgp_pub_decrypt(fcinfo: &mut Fcinfo, need_text: bool) -> PgResult<Datum> {
     let (data, key) = (data.data().to_vec(), key.data().to_vec());
     let psw = opt_arg_bytes(fcinfo, 2)?;
     let args = opt_arg_bytes(fcinfo, 3)?;
+    pgp::validate_args(args.as_deref()).map_err(|e| px_msg(&e))?;
+    mbuf_create(data.len(), 2048)?;
     match pgp::pub_decrypt(&data, &key, psw.as_deref(), args.as_deref(), need_text) {
         Ok(out) => decrypt_output(fcinfo, out, need_text),
         Err(e) => {
@@ -433,6 +473,10 @@ fn fc_pg_armor(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum
     } else {
         (Vec::new(), Vec::new())
     };
+    // pgp-armor.c:222: the base64 estimate is enlargeStringInfo'd after the
+    // header lines, so past MaxAllocSize the error is stringinfo.c's 54000.
+    let hdr_len = pgp::armor::armor_header_len(&keys, &values);
+    stringinfo::enlarge_target(hdr_len, hdr_len, pgp::armor::base64_enc_len(data.len()))?;
     let out = pgp::armor::armor_encode(&data, &keys, &values);
     bytea_result(fcinfo, &out)
 }
@@ -966,6 +1010,53 @@ mod armor_header_tests {
             ))
             .sqlstate,
             ERRCODE_INVALID_PARAMETER_VALUE
+        );
+    }
+}
+
+// pgp-pgsql.c:400/:479 size the output MBuf from the input; mbuf.c:79
+// prepare_room grows it by 2*STEP for the writer's <= ENCBUF blocks.
+#[cfg(test)]
+mod mbuf_tests {
+    use super::*;
+
+    #[test]
+    fn input_sized_mbuf_is_refused_above_max_alloc_size() {
+        assert_eq!(mbuf_create(1073739771, 2048).unwrap(), 1073741823);
+        assert_eq!(
+            mbuf_create(1073739772, 2048).unwrap_err().message,
+            "invalid memory alloc request size 1073741824"
+        );
+        assert_eq!(mbuf_create(1073741691, 128).unwrap(), 1073741823);
+        assert_eq!(
+            mbuf_create(1073741692, 128).unwrap_err().message,
+            "invalid memory alloc request size 1073741824"
+        );
+    }
+
+    #[test]
+    fn encrypt_args_are_parsed_before_the_output_mbuf_is_sized() {
+        assert_eq!(
+            encrypt_setup(vec![0u8; 1073741692], Some(b"foo=1"), false).unwrap_err().message,
+            "Illegal argument to function"
+        );
+        assert_eq!(
+            encrypt_setup(vec![0u8; 1073741692], None, false).unwrap_err().message,
+            "invalid memory alloc request size 1073741824"
+        );
+    }
+
+    #[test]
+    fn mbuf_growth_fails_at_the_first_step_past_max_alloc_size() {
+        mbuf_room(1073741823, 1073741823).unwrap();
+        mbuf_room(1000, 100_000).unwrap();
+        assert_eq!(
+            mbuf_room(1073741823, 1073741824).unwrap_err().message,
+            "invalid memory alloc request size 1073774591"
+        );
+        assert_eq!(
+            mbuf_room(1073741823 - 32768, 1073741823 + 1).unwrap_err().message,
+            "invalid memory alloc request size 1073774591"
         );
     }
 }

@@ -163,6 +163,8 @@ const WIN_DENSE_RANK: Oid = 3102;
 const I2TOD_PROC: Oid = 235;
 const I4TOD_PROC: Oid = 316;
 const I8TOD_PROC: Oid = 482;
+const FLOAT8LT_PROC: Oid = 295;
+const FLOAT8GT_PROC: Oid = 297;
 const FLOAT8OID: Oid = 701;
 /// [json-rung3] timestamp(tz) + interval, interval * float8 (pg_proc).
 const TSTZ_PL_INTERVAL_PROC: Oid = 1189;
@@ -950,6 +952,7 @@ enum ArrayElem {
     Ts,
     Tstz,
     Text,
+    Varchar,
 }
 
 impl ArrayElem {
@@ -963,6 +966,7 @@ impl ArrayElem {
             ArrayElem::Ts => (TSOID, 8, true, b'd'),
             ArrayElem::Tstz => (TSTZOID, 8, true, b'd'),
             ArrayElem::Text => (TEXTOID, -1, false, b'i'),
+            ArrayElem::Varchar => (VARCHAROID, -1, false, b'i'),
         }
     }
 }
@@ -2637,9 +2641,12 @@ fn engage<'mcx, 'd>(
     let (skip, take) = slice_window(&lowered.slice)?;
     // A lowered C-identity runtime error raises here, after the slice
     // cadence (C orders nodeLimit ahead of agg finalize) and before any
-    // engine work.
+    // engine work — except the percentile range, a finalfn error that C
+    // raises only over a formed group (checked after the fold, below).
     if let Some(e) = &lowered.exec_error {
-        return Err(e.raise());
+        if !matches!(e, ExecError::PercentileRange(_)) {
+            return Err(e.raise());
+        }
     }
     // Engagement: from here every error is the statement's error (no
     // fallback; finalize errors are the same errors C's finalfns raise).
@@ -3102,6 +3109,13 @@ fn engage<'mcx, 'd>(
     // the index space; the top-level sort stable-sorts on top of it
     // (idempotent for the Unique-over-sorted form, the real output
     // order for Sort-above-SetOp/hashed-dedup forms).
+    // orderedsetaggs.c:443 percentile_disc_final validates the fraction when
+    // called: a grouped fold that formed no group returns zero rows instead.
+    if let Some(e @ ExecError::PercentileRange(_)) = &lowered.exec_error {
+        if answers.nrows > 0 {
+            return Err(e.raise());
+        }
+    }
     let mut unique_rows: Option<usize> = None;
     let perm: Option<Vec<u32>> = if lowered.having.is_some()
         || !lowered.win_filter.is_empty()
@@ -4627,9 +4641,11 @@ fn answer_to_rows(a: &AnswerSet) -> PgResult<Vec<super::fixpoint::RecRow>> {
             } else {
                 match &c.data {
                     ColData::I64(v) => RecCell::I(v[i]),
+                    ColData::I128(v) => {
+                        RecCell::I(i64::try_from(v[i]).map_err(|_| bigint_out_of_range())?)
+                    }
                     ColData::Bytes { .. } => RecCell::B(c.data.bytes_at(i).to_vec()),
                     ColData::F64(_)
-                    | ColData::I128(_)
                     | ColData::Moments { .. }
                     | ColData::Ratio { .. }
                     | ColData::List { .. } => return Err(bug()),
@@ -6594,6 +6610,11 @@ fn run_scalar_goal(goal: &LoweredStmt, fp: u64) -> Result<(i64, bool, f64), Disp
             }
             match &col.data {
                 ColData::I64(v) => Ok((v[row], false, 1.0)),
+                ColData::I128(v) if goal.out[0].render == Render::SumI64 => {
+                    let w = i64::try_from(v[row])
+                        .map_err(|_| DispatchErr::Error(bigint_out_of_range()))?;
+                    Ok((w, false, 1.0))
+                }
                 _ => Err(DispatchErr::Error(Box::new(PgError::error(
                     "sqe: scalar initplan answer is not a word lane (lowering bug)"
                         .to_string(),
@@ -7241,7 +7262,8 @@ fn lower_setop<'mcx>(
         }
         keys.push((
             i,
-            ::lsyscache::get_opcode(so.cmpOperators[j]).is_ok_and(|pr| pr == BPCHAREQ_PROC),
+            ::lsyscache::get_opcode(so.cmpOperators[j])
+                .is_ok_and(|pr| matches!(pr, BPCHAREQ_PROC | BPCHARLT_PROC | BPCHARGT_PROC)),
         ));
     }
     keys.sort_unstable();
@@ -9018,8 +9040,8 @@ fn lower_agg<'mcx>(
         _ => Some(APred::And { legs: preds }),
     };
     // [P6-2] Ordered-set fractions outside C's [0, 1] domain (or NaN)
-    // still SERVE: the artifact carries the C-identity 22003 (engage
-    // raises it; the fold never runs) over a valid placeholder fraction.
+    // still SERVE: the artifact carries the C-identity 22003 (raised once
+    // the fold formed a group) over a valid placeholder fraction.
     // First bad leg wins — C finalizes in targetlist order.
     let mut exec_error: Option<ExecError> =
         span_same_sign_raise.then_some(ExecError::IntervalOutOfRange);
@@ -9648,49 +9670,6 @@ fn lower_grouping_sets<'mcx>(
     if legs.is_empty() {
         legs.push(RecLeg::new(AAgg::CountStar, Render::CountI64, None));
     }
-    let n_legs = legs.len();
-    let slots: Vec<(OutSlot, bool)> = rawslots
-        .iter()
-        .map(|(rs, junk)| {
-            let s = match rs {
-                RawSlot::Key(i) => OutSlot { src: OutSrc::Col(*i), render: gkeys[*i].render },
-                RawSlot::Leg(i) => {
-                    OutSlot { src: OutSrc::Col(n_union + i), render: legs[*i].render }
-                }
-                RawSlot::GFunc(i) => OutSlot {
-                    src: OutSrc::Col(n_union + n_legs + i),
-                    render: Render::MinMaxI32,
-                },
-            };
-            (s, *junk)
-        })
-        .collect();
-
-    // --- upper projections + delivered output + top Sort --------------------
-    let sort_slots: Vec<(OutSlot, bool)> = match &sort_proj {
-        Some(p) => apply_upper_proj(&slots, p, NodeTag::T_Sort, fp)?,
-        None => slots.clone(),
-    };
-    let top_slots: Vec<(OutSlot, bool)> = match &limit_proj {
-        Some(p) => apply_upper_proj(&sort_slots, p, NodeTag::T_Limit, fp)?,
-        None => sort_slots.clone(),
-    };
-    let out: Vec<OutSlot> = top_slots.iter().filter(|(_, j)| !j).map(|(s, _)| *s).collect();
-    let sort: Option<SortSpec> = match &top_sort {
-        Some(rs) => {
-            let keys = resolve_sort_keys(
-                rs,
-                &|p: usize| match sort_slots.get(p.checked_sub(1)?) {
-                    Some((OutSlot { src: OutSrc::Col(c), render }, _)) => Some((*c, *render)),
-                    _ => None,
-                },
-                fp,
-            )?;
-            Some(SortSpec { node_id: rs.node_id, keys })
-        }
-        None => None,
-    };
-
     // --- filter conjuncts (rung-B vocabulary, shared law) -------------------
     let mut preds: Vec<APred> = Vec::new();
     let mut pred_cols: Vec<u32> = Vec::new();
@@ -9739,6 +9718,54 @@ fn lower_grouping_sets<'mcx>(
         DispatchErr::Refused(r, scope)
     };
     let bank = &engine.bank;
+    for leg in legs.iter_mut() {
+        if let Some(c) = leg.col {
+            leg.render = resolve_packed_render_leg(bank, &leg.agg, c, leg.render)
+                .map_err(|r| engine_refused(super::refusal::from_engine(&r).refuse(fp)))?;
+        }
+    }
+    let n_legs = legs.len();
+    let slots: Vec<(OutSlot, bool)> = rawslots
+        .iter()
+        .map(|(rs, junk)| {
+            let s = match rs {
+                RawSlot::Key(i) => OutSlot { src: OutSrc::Col(*i), render: gkeys[*i].render },
+                RawSlot::Leg(i) => {
+                    OutSlot { src: OutSrc::Col(n_union + i), render: legs[*i].render }
+                }
+                RawSlot::GFunc(i) => OutSlot {
+                    src: OutSrc::Col(n_union + n_legs + i),
+                    render: Render::MinMaxI32,
+                },
+            };
+            (s, *junk)
+        })
+        .collect();
+
+    // --- upper projections + delivered output + top Sort --------------------
+    let sort_slots: Vec<(OutSlot, bool)> = match &sort_proj {
+        Some(p) => apply_upper_proj(&slots, p, NodeTag::T_Sort, fp)?,
+        None => slots.clone(),
+    };
+    let top_slots: Vec<(OutSlot, bool)> = match &limit_proj {
+        Some(p) => apply_upper_proj(&sort_slots, p, NodeTag::T_Limit, fp)?,
+        None => sort_slots.clone(),
+    };
+    let out: Vec<OutSlot> = top_slots.iter().filter(|(_, j)| !j).map(|(s, _)| *s).collect();
+    let sort: Option<SortSpec> = match &top_sort {
+        Some(rs) => {
+            let keys = resolve_sort_keys(
+                rs,
+                &|p: usize| match sort_slots.get(p.checked_sub(1)?) {
+                    Some((OutSlot { src: OutSrc::Col(c), render }, _)) => Some((*c, *render)),
+                    _ => None,
+                },
+                fp,
+            )?;
+            Some(SortSpec { node_id: rs.node_id, keys })
+        }
+        None => None,
+    };
 
     // --- form election ------------------------------------------------------
     // Distinct sets as sorted union-index vectors (duplicate LISTED sets
@@ -10065,6 +10092,7 @@ enum GsCell {
     /// AVG's exact {sum, count} pair (count == 0 encodes NULL).
     Ratio { sum: i128, count: i64, exact: bool },
     Bytes(Vec<u8>),
+    Moments { kind: sqe::answer::MomentKind, trip: (i64, i128, i128) },
 }
 
 /// [sqe-gsets] Assemble the union-of-sets answer. Combined columns:
@@ -10096,6 +10124,9 @@ fn assemble_gsets_answer(
             let (s, c) = pairs[row];
             return Ok(GsCell::Ratio { sum: s, count: c, exact: *exact });
         }
+        if let ColData::Moments { kind, trips } = &col.data {
+            return Ok(GsCell::Moments { kind: *kind, trip: trips[row] });
+        }
         if !col.validity.is_valid(row) {
             return Ok(GsCell::Null);
         }
@@ -10103,8 +10134,8 @@ fn assemble_gsets_answer(
             ColData::I64(v) => Ok(GsCell::I64(v[row])),
             ColData::I128(v) => Ok(GsCell::I128(v[row])),
             ColData::Bytes { .. } => Ok(GsCell::Bytes(col.data.bytes_at(row).to_vec())),
-            ColData::Ratio { .. } => unreachable!("handled above"),
-            ColData::F64(_) | ColData::Moments { .. } | ColData::List { .. } => {
+            ColData::Ratio { .. } | ColData::Moments { .. } => unreachable!("handled above"),
+            ColData::F64(_) | ColData::List { .. } => {
                 Err(bug("uncombinable answer class in a set block"))
             }
         }
@@ -10329,6 +10360,7 @@ fn materialize_gs_col(ty: TypMeta, cells: &[GsCell]) -> Result<sqe::answer::Answ
     let mut any_bytes = false;
     let mut any_i128 = false;
     let mut exact = false;
+    let mut moments = None;
     for c in cells {
         match c {
             GsCell::Ratio { exact: e, .. } => {
@@ -10337,8 +10369,21 @@ fn materialize_gs_col(ty: TypMeta, cells: &[GsCell]) -> Result<sqe::answer::Answ
             }
             GsCell::Bytes(_) => any_bytes = true,
             GsCell::I128(_) => any_i128 = true,
+            GsCell::Moments { kind, .. } => moments = Some(*kind),
             GsCell::I64(_) | GsCell::Null => {}
         }
+    }
+    if let Some(kind) = moments {
+        let mut trips = Vec::new();
+        let _ = trips.try_reserve_exact(cells.len());
+        for c in cells {
+            match c {
+                GsCell::Moments { kind: k, trip } if *k == kind => trips.push(*trip),
+                GsCell::Null => trips.push((0, 0, 0)),
+                _ => return Err("mixed moments column"),
+            }
+        }
+        return Ok(AnswerCol::moments(ty, kind, trips));
     }
     if any_ratio {
         let mut pairs = Vec::with_capacity(cells.len());
@@ -10924,6 +10969,14 @@ fn lower_bare_scan<'mcx>(
         // witnessed null-free (the rig's hits bank is; any nullable lane
         // keeps ScanServe).
         if !bank.schema.iter().all(|c| bank.null_free(c.attno)) {
+            break 'rowtopk;
+        }
+        // Winners hydrate raw decoded images: a packed-numeric lane decodes to a bare mantissa with no render scale.
+        if bank
+            .schema
+            .iter()
+            .any(|c| matches!(bank.face(c.attno), sqe::bank::Face::PackedNumeric { .. }))
+        {
             break 'rowtopk;
         }
         // Delivered tlist: plain columns only (winners hydrate from the
@@ -12405,8 +12458,16 @@ fn frame_offset(
                 let cons = cons.clamp(0, i64::MAX as i128) as i64;
                 return Some((cons, scale, Some(TS_BAND), Some((month, usecs_x as i64))));
             }
-            let total = day as i128 * USECS_PER_DAY + time as i128;
+            let day_us = day as i128 * USECS_PER_DAY;
+            let total = day_us + time as i128;
             let off = total.clamp(i64::MIN as i128, i64::MAX as i128) as i64;
+            // timestamp_pl_interval range-checks the day-adjusted value
+            // before adding the time field (timestamp.c:3206): the band
+            // magnitude is the larger excursion; the walk stays folded.
+            let cons = day_us.abs().max(total.abs()).clamp(0, i64::MAX as i128) as i64;
+            if off >= 0 && cons > off {
+                return Some((cons, scale, Some(TS_BAND), Some((0, off))));
+            }
             Some((off, scale, Some(TS_BAND), None))
         }
         _ => None,
@@ -22544,12 +22605,33 @@ fn recognize_sorted_aggref<'p>(
         let Some(te) = te else {
             return Err(sortagg());
         };
-        let Some((attno, _typid, _)) = resolve_sortagg_input(te.expr, tls, scanrelid) else {
+        let Some((attno, typid, cast)) = resolve_sortagg_input(te.expr, tls, scanrelid) else {
             return Err(sortagg());
+        };
+        // orderedsetaggs.c:261 keeps sortcl->sortop for tuplesort: a
+        // USING operator outside the default `<`/`>` family orders
+        // differently from reverse_sort.
+        let Ok(proc_oid) = ::lsyscache::get_opcode(sgc.sortop) else {
+            return Err(sortagg());
+        };
+        let desc = match sortproc_dir(proc_oid) {
+            Some(d) => d,
+            None if matches!(proc_oid, BPCHARLT_PROC | BPCHARGT_PROC) => proc_oid == BPCHARGT_PROC,
+            // percentile_cont orders its admitted integer inputs through a
+            // float8 cast. Keep this exception local to that aggregate;
+            // native float columns and unrelated operators remain refused.
+            None if ar.aggfnoid == AGG_PERCENTILE_CONT_F8
+                && cast
+                && matches!(typid, INT2OID | INT4OID | INT8OID)
+                && matches!(proc_oid, FLOAT8LT_PROC | FLOAT8GT_PROC) =>
+            {
+                proc_oid == FLOAT8GT_PROC
+            }
+            None => return Err(sortagg()),
         };
         keys.push(AggSortKey {
             col: attno,
-            desc: sgc.reverse_sort,
+            desc,
             nulls_first: sgc.nulls_first,
         });
         key_cols.push(attno);
@@ -22628,7 +22710,11 @@ fn recognize_sorted_aggref<'p>(
                             coll_oid: ar.inputcollid,
                         }));
                     }
-                    ArrayElem::Text
+                    if typid == VARCHAROID {
+                        ArrayElem::Varchar
+                    } else {
+                        ArrayElem::Text
+                    }
                 }
                 other => return Err(refuse(RefuseCause::UnsupportedType { type_oid: other })),
             };
@@ -24086,7 +24172,9 @@ fn engine_config() -> SqeConfig {
 pub(crate) fn catalog_schema(rel: &::types_rel::Relation<'_>) -> Result<Vec<ColMeta>, Box<PgError>> {
     let mut out = Vec::with_capacity(rel.rd_att.attrs.len());
     for att in rel.rd_att.attrs.iter() {
-        if att.attisdropped {
+        if att.attisdropped
+            && ::tableam::TableAm::of(rel) != Some(::tableam_vocab::TableAm::Pgrcolumnar2)
+        {
             return Err(Box::new(PgError::error(
                 "pgrcolumnar2: dropped column in catalog schema".to_string(),
             )));
@@ -24417,7 +24505,7 @@ fn render_cell<'mcx>(
                     (ColData::I64(v), ArrayElem::I64 | ArrayElem::Ts | ArrayElem::Tstz) => {
                         dv.push(Datum::from_i64(v[i]))
                     }
-                    (ColData::Bytes { .. }, ArrayElem::Text) => {
+                    (ColData::Bytes { .. }, ArrayElem::Text | ArrayElem::Varchar) => {
                         let b = elems.data.bytes_at(i);
                         let mut img = Vec::with_capacity(::datum::VARHDRSZ + b.len());
                         img.extend_from_slice(&::datum::set_varsize_4b(

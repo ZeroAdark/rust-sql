@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 
 use lwlock::{LWLock, LWLockInitialize};
 use types_core::{TimeLineID, XLogRecPtr};
+use types_guc::{PGC_POSTMASTER, PGC_S_DYNAMIC_DEFAULT, PGC_S_OVERRIDE};
 
 use crate::{CheckPoint, RecoveryState, InvalidXLogRecPtr, NUM_XLOGINSERT_LOCKS, RECOVERY_STATE_CRASH, XLOG_BLCKSZ};
 
@@ -170,7 +171,29 @@ pub(crate) fn xlog_buffers() -> i32 {
     let mut n = guc_tables::vars::XLOGbuffers.read();
     if n == -1 {
         n = crate::XLOGChooseNumBuffers();
-        guc_tables::vars::XLOGbuffers.write(n);
+        // xlog.c:4922-4931: the chosen count is registered as the dynamic
+        // default (override if that fails), so pg_settings/SHOW and the
+        // backends launched later see it rather than -1.
+        if guc_seams::set_config_option::is_installed() {
+            let buf = n.to_string();
+            let _ = guc_seams::set_config_option::call(
+                "wal_buffers",
+                Some(&buf),
+                PGC_POSTMASTER,
+                PGC_S_DYNAMIC_DEFAULT,
+            );
+            if guc_tables::vars::XLOGbuffers.read() == -1 {
+                let _ = guc_seams::set_config_option::call(
+                    "wal_buffers",
+                    Some(&buf),
+                    PGC_POSTMASTER,
+                    PGC_S_OVERRIDE,
+                );
+            }
+        }
+        if guc_tables::vars::XLOGbuffers.read() == -1 {
+            guc_tables::vars::XLOGbuffers.write(n);
+        }
     }
     debug_assert!(n > 0);
     n
@@ -281,6 +304,7 @@ fn reset_lwlock_in_place(lock: &LWLock) {
 pub fn XLOGShmemResetAfterCrash() {
     let ctl = XLogCtl();
     assert_eq!(ctl.XLogCacheBlck, xlog_buffers() - 1);
+    crate::insert::bump_recovery_local_generation();
 
     let ins = &ctl.Insert;
     ins.insertpos_lck.0.store(false, Ordering::Relaxed);

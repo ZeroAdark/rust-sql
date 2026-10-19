@@ -168,10 +168,12 @@ pub struct TIDBitmap<'mcx> {
     iterating: TbmIterating,
     lossify_start: usize,
     entry1: PagetableEntry,
-    // Sorted readout copies (C keeps pointers into the pagetable; the bitmap
-    // is read-only once iterating, so by-value copies are equivalent).
-    spages: Option<PgVec<'mcx, PagetableEntry>>,
-    schunks: Option<PgVec<'mcx, PagetableEntry>>,
+    // Sorted readout arrays of raw pagetable bucket indices (C keeps
+    // PagetableEntry pointers, tidbitmap.c:713; the bitmap is read-only once
+    // iterating, so a bucket index is as stable as C's pointer and the
+    // arrays stay pointer-sized rather than entry-sized).
+    spages: Option<PgVec<'mcx, usize>>,
+    schunks: Option<PgVec<'mcx, usize>>,
 }
 
 pub struct TbmPrivateIterator {
@@ -580,25 +582,45 @@ impl<'mcx> TIDBitmap<'mcx> {
         }
     }
 
+    /// The entry behind a readout bucket index (spages/schunks).
+    #[inline]
+    fn readout_entry(&self, idx: usize) -> &PagetableEntry {
+        let table = self.pagetable.as_ref().expect("TBM_HASH without pagetable").raw_table();
+        // SAFETY: idx was recorded by begin_private_iterate from a full bucket
+        // of this table, and the table is read-only while iterating.
+        unsafe { &table.bucket(idx).as_ref().1 }
+    }
+
     /// `tbm_begin_private_iterate`; the bitmap is read-only afterwards.
     pub fn begin_private_iterate(&mut self) -> PgResult<TbmPrivateIterator> {
         if self.status == TbmStatus::Hash && self.iterating == TbmIterating::Not {
-            let table = self.pagetable.as_ref().expect("TBM_HASH without pagetable");
-            let mut spages: PgVec<'mcx, PagetableEntry> =
+            let table =
+                self.pagetable.as_ref().expect("TBM_HASH without pagetable").raw_table();
+            let mut spages: PgVec<'mcx, usize> =
                 mcx::vec_with_capacity_in(self.mcx, self.npages as usize)?;
-            let mut schunks: PgVec<'mcx, PagetableEntry> =
+            let mut schunks: PgVec<'mcx, usize> =
                 mcx::vec_with_capacity_in(self.mcx, self.nchunks as usize)?;
-            for page in table.values() {
-                if page.ischunk {
-                    schunks.push(*page);
+            for idx in 0..table.buckets() {
+                // SAFETY: idx < buckets(); a full bucket holds a live entry.
+                let ischunk = unsafe {
+                    if !table.is_bucket_full(idx) {
+                        continue;
+                    }
+                    table.bucket(idx).as_ref().1.ischunk
+                };
+                if ischunk {
+                    schunks.push(idx);
                 } else {
-                    spages.push(*page);
+                    spages.push(idx);
                 }
             }
             debug_assert!(spages.len() == self.npages as usize);
             debug_assert!(schunks.len() == self.nchunks as usize);
-            spages.sort_unstable_by_key(|p| p.blockno);
-            schunks.sort_unstable_by_key(|p| p.blockno);
+            // SAFETY: every index was just taken from a full bucket of this
+            // table, which is not mutated here.
+            let blockno_at = |&idx: &usize| unsafe { table.bucket(idx).as_ref().1.blockno };
+            spages.sort_unstable_by_key(blockno_at);
+            schunks.sort_unstable_by_key(blockno_at);
             self.spages = Some(spages);
             self.schunks = Some(schunks);
         }
@@ -716,9 +738,9 @@ impl TbmPrivateIterator {
         debug_assert!(tbm.iterating == TbmIterating::Private);
         let nchunks = tbm.nchunks as usize;
         let npages = tbm.npages as usize;
-        let schunks: &[PagetableEntry] = tbm.schunks.as_deref().unwrap_or(&[]);
+        let schunks: &[usize] = tbm.schunks.as_deref().unwrap_or(&[]);
         while self.schunkptr < nchunks {
-            let chunk = &schunks[self.schunkptr];
+            let chunk = tbm.readout_entry(schunks[self.schunkptr]);
             let mut schunkbit = self.schunkbit;
             advance_schunkbit(chunk, &mut schunkbit);
             if schunkbit < PAGES_PER_CHUNK {
@@ -731,12 +753,15 @@ impl TbmPrivateIterator {
         // Emit the numerically earlier of the next lossy page and the next
         // exact page.
         if self.schunkptr < nchunks {
-            let chunk = &schunks[self.schunkptr];
+            let chunk = tbm.readout_entry(schunks[self.schunkptr]);
             let chunk_blockno = chunk.blockno + self.schunkbit as BlockNumber;
             let next_exact_blockno = if tbm.status == TbmStatus::OnePage {
                 Some(tbm.entry1.blockno)
             } else {
-                tbm.spages.as_deref().and_then(|s| s.get(self.spageptr)).map(|p| p.blockno)
+                tbm.spages
+                    .as_deref()
+                    .and_then(|s| s.get(self.spageptr))
+                    .map(|&i| tbm.readout_entry(i).blockno)
             };
             if self.spageptr >= npages || next_exact_blockno.is_none_or(|b| chunk_blockno < b) {
                 self.schunkbit += 1;
@@ -752,7 +777,9 @@ impl TbmPrivateIterator {
             let page = if tbm.status == TbmStatus::OnePage {
                 &tbm.entry1
             } else {
-                &tbm.spages.as_deref().expect("iterating without spages")[self.spageptr]
+                tbm.readout_entry(
+                    tbm.spages.as_deref().expect("iterating without spages")[self.spageptr],
+                )
             };
             self.spageptr += 1;
             return Some(TbmIterateResult {

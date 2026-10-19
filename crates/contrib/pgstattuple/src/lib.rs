@@ -166,15 +166,25 @@ pub(crate) fn cstrings_composite_result(
     // The input functions' FmgrInfos (and the scratch their by-reference
     // results live in) must outlive heap_form_tuple's copy.
     let mut flinfos: Vec<FmgrInfo> = Vec::with_capacity(n);
+    // TupleDescGetAttInMetadata (pgstattuple.c:115) resolves every column's
+    // input function before any value is converted.
+    let mut inputs: Vec<Option<(types_core::Oid, types_core::Oid)>> = Vec::with_capacity(n);
     for i in 0..n {
         let att = tupdesc.attr(i);
-        if att.attisdropped {
+        inputs.push(if att.attisdropped {
+            None
+        } else {
+            Some(lsyscache::getTypeInputInfo(att.atttypid)?)
+        });
+    }
+    for i in 0..n {
+        let att = tupdesc.attr(i);
+        let Some((infunc, typioparam)) = inputs[i] else {
             nulls[i] = true;
             continue;
-        }
+        };
         match &values[i] {
             Some(s) => {
-                let (infunc, typioparam) = lsyscache::getTypeInputInfo(att.atttypid)?;
                 flinfos.push(fmgr_core::fmgr_info(infunc)?);
                 let cstr = std::ffi::CString::new(s.as_str())
                     .expect("cstrings_composite_result: interior NUL");
@@ -221,38 +231,17 @@ pub(crate) fn relation_open_by_text_arg<'m>(
 ) -> PgResult<types_rel::Relation<'m>> {
     // SAFETY: arg i is a non-null text (STRICT).
     let v = unsafe { fcinfo.arg_varlena_packed(i)? };
-    let rawname = String::from_utf8_lossy(v.data()).into_owned();
     let encoding = if mbutils_seams::get_database_encoding::is_installed() {
         mbutils_seams::get_database_encoding::call()
     } else {
         wchar::PG_SQL_ASCII
     };
-    // C textToQualifiedNameList: false/NIL → 42602; quoted-empty `""` is kept.
-    let names = match varlena::split_identifier_string(mcx, &rawname, b'.', encoding)? {
-        Some(names) if !names.is_empty() => names,
-        _ => {
-            return Err(Box::new(
-                PgError::error("invalid name syntax")
-                    .with_sqlstate(types_error::ERRCODE_INVALID_NAME),
-            ));
-        }
-    };
+    let names = qualified_name_parts(mcx, v.data(), encoding)?;
     let (catalogname, schemaname, relname) = match names.as_slice() {
         [r] => (None, None, r.as_str()),
         [s, r] => (None, Some(s.as_str()), r.as_str()),
         [c, s, r] => (Some(c.as_str()), Some(s.as_str()), r.as_str()),
-        _ => {
-            // namespace.c:3578 formats this with NameListToString(names): the
-            // parsed list (downcased / unquoted / whitespace-trimmed) joined by
-            // '.', never the raw text argument.
-            return Err(Box::new(
-                PgError::error(format!(
-                    "improper relation name (too many dotted names): {}",
-                    names.join(".")
-                ))
-                .with_sqlstate(types_error::ERRCODE_SYNTAX_ERROR),
-            ))
-        }
+        _ => unreachable!("qualified_name_parts bounds the list at three"),
     };
     let rv = rel_vocab::RangeVar {
         catalogname,
@@ -263,6 +252,36 @@ pub(crate) fn relation_open_by_text_arg<'m>(
         location: -1,
     };
     relation::relation_openrv(mcx, &rv, lockmode)
+}
+
+// textToQualifiedNameList + the makeRangeVarFromNameList length check, over
+// the text's server-encoding bytes.
+fn qualified_name_parts(
+    mcx: Mcx<'_>,
+    rawname: &[u8],
+    encoding: wchar::pg_enc,
+) -> PgResult<Vec<String>> {
+    // C textToQualifiedNameList: false/NIL → 42602; quoted-empty `""` is kept.
+    let names = match varlena::split_identifier_string_bytes(mcx, rawname, b'.', encoding)? {
+        Some(names) if !names.is_empty() => names,
+        _ => {
+            return Err(Box::new(
+                PgError::error("invalid name syntax")
+                    .with_sqlstate(types_error::ERRCODE_INVALID_NAME),
+            ));
+        }
+    };
+    if names.len() > 3 {
+        // namespace.c:3578 formats this with NameListToString(names): the
+        // parsed list (downcased / unquoted / whitespace-trimmed) joined by
+        // '.', never the raw text argument; the bytes go out as-is.
+        let mut msg = b"improper relation name (too many dotted names): ".to_vec();
+        msg.extend_from_slice(&names.join(&b'.'));
+        return Err(Box::new(
+            PgError::error_raw_message(msg).with_sqlstate(types_error::ERRCODE_SYNTAX_ERROR),
+        ));
+    }
+    Ok(names.iter().map(|n| String::from_utf8_lossy(n).into_owned()).collect())
 }
 
 /// Copy one MAIN-fork block out under a share lock (optionally strategy-read).
@@ -319,4 +338,23 @@ pub fn init_seams() {
         // pgstattuple.c's PG_MODULE_MAGIC_EXT has no _PG_init.
         pg_init: None,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn too_many_dotted_names_keeps_raw_bytes() {
+        let ctx = mcx::MemoryContext::new("pgstattuple test");
+        let err =
+            qualified_name_parts(ctx.mcx(), b"\xff.b.c.d", wchar::PG_SQL_ASCII).unwrap_err();
+        assert_eq!(
+            err.message_raw.as_deref(),
+            Some(b"improper relation name (too many dotted names): \xff.b.c.d".as_slice())
+        );
+        let names = qualified_name_parts(ctx.mcx(), b"A.b", wchar::PG_SQL_ASCII).unwrap();
+        assert_eq!(names, ["a", "b"]);
+        assert!(qualified_name_parts(ctx.mcx(), b"", wchar::PG_SQL_ASCII).is_err());
+    }
 }

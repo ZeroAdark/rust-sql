@@ -1,4 +1,4 @@
-//! GL-BULKWRITE-1 (#686): the bulk-write dirty-page governor.
+//! regression (#686): the bulk-write dirty-page governor.
 //!
 //! pgrust-only; no C counterpart. The defect it pays down: a COPY/CTAS whose
 //! write volume exceeds the pod's memory envelope kills the server. Buffered

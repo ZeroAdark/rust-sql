@@ -1,7 +1,6 @@
 //! Parallel btree scan coordination (nbtree.c _bt_parallel_* family).
 
 use ::datum::Datum;
-use ::mcx::Mcx;
 use ::types_core::{BlockNumber, InvalidBlockNumber};
 use ::types_error::PgResult;
 use ::types_nbtree::{BTScanOpaqueData, BTScanPosInvalidate, BTScanPosIsValid, P_NONE};
@@ -35,6 +34,9 @@ pub(crate) fn arm_restore_arrays_fault(on: bool) {
 /// die/cancel that the error-unwind path never delivers as an epoch bump —
 /// the pgrust stand-in for C's latch-driven `ConditionVariableSleep` wakeup.
 const SEIZE_PARK_POLL: core::time::Duration = core::time::Duration::from_millis(10);
+
+// PG_WAIT_IPC | WaitEventIPC row 7 ("BtreePage" in wait_event_names.txt).
+pub(crate) const WAIT_EVENT_BTREE_PAGE: u32 = 0x0800_0000 + 7;
 
 /// btparallelrescan.
 pub fn btparallelrescan(shared: &BTParallelScanShared) {
@@ -128,7 +130,14 @@ pub(crate) fn bt_parallel_seize(
                 // normal path, where wake_all wakes us long before timeout).
                 let seen = shared.lot.epoch();
                 drop(g);
+                let report = waitevent_seams::pgstat_report_wait_start::is_installed();
+                if report {
+                    waitevent_seams::pgstat_report_wait_start::call(WAIT_EVENT_BTREE_PAGE);
+                }
                 shared.lot.park_timeout(seen, SEIZE_PARK_POLL);
+                if report {
+                    waitevent_seams::pgstat_report_wait_end::call();
+                }
                 crate::check_for_interrupts()?;
                 g = lock(shared);
                 continue;
@@ -275,13 +284,12 @@ fn serialize_arrays(so: &BTScanOpaqueData<'_>) -> Vec<BtParallelArrayElem> {
     out
 }
 
-// _bt_parallel_restore_arrays; caller holds the state lock. C divergence: the
-// superseded by-ref sk_argument stays in the scan-lifetime arena (no pfree).
+// _bt_parallel_restore_arrays; caller holds the state lock (nbtree.c:733
+// pfree + datumCopy = the array's reused skip_arg buffer).
 fn restore_arrays(elems: &[BtParallelArrayElem], so: &mut BTScanOpaqueData<'_>) -> PgResult<()> {
-    let mcx: Mcx<'_> = *so.keyData.allocator();
     #[cfg(test)]
     if RESTORE_ARRAYS_FAULT.with(|f| f.get()) {
-        return Err(Box::new(mcx.oom(0)));
+        return Err(Box::new(so.keyData.allocator().oom(0)));
     }
     let BTScanOpaqueData {
         keyData, arrayKeys, ..
@@ -309,10 +317,9 @@ fn restore_arrays(elems: &[BtParallelArrayElem], so: &mut BTScanOpaqueData<'_>) 
                     }
                     Some(BtParallelSkipArg::Byval(d)) => skey.sk_argument = *d,
                     Some(BtParallelSkipArg::Byref(bytes)) => {
-                        let mut v: ::mcx::PgVec<'_, u8> =
-                            ::mcx::vec_with_capacity_in(mcx, bytes.len())?;
-                        ::mcx::vec_append_bytes(&mut v, bytes)?;
-                        skey.sk_argument = Datum::from_usize(v.leak().as_ptr() as usize);
+                        array.skip_arg.clear();
+                        ::mcx::vec_append_bytes(&mut array.skip_arg, bytes)?;
+                        skey.sk_argument = Datum::from_usize(array.skip_arg.as_ptr() as usize);
                     }
                 }
             }

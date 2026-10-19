@@ -22,8 +22,8 @@ pub mod vfd;
 pub mod wait_event {
     pub const PG_WAIT_IO: u32 = 0x0A00_0000;
     pub const WAIT_EVENT_BUFFILE_READ: u32 = PG_WAIT_IO + 6;
-    pub const WAIT_EVENT_BUFFILE_WRITE: u32 = PG_WAIT_IO + 7;
-    pub const WAIT_EVENT_BUFFILE_TRUNCATE: u32 = PG_WAIT_IO + 8;
+    pub const WAIT_EVENT_BUFFILE_TRUNCATE: u32 = PG_WAIT_IO + 7;
+    pub const WAIT_EVENT_BUFFILE_WRITE: u32 = PG_WAIT_IO + 8;
     pub const WAIT_EVENT_COPY_FILE_COPY: u32 = PG_WAIT_IO + 14;
     pub const WAIT_EVENT_COPY_FILE_READ: u32 = PG_WAIT_IO + 15;
     pub const WAIT_EVENT_COPY_FILE_WRITE: u32 = PG_WAIT_IO + 16;
@@ -84,6 +84,8 @@ pub fn init_seams() {
     file_seams::fsync_fname::set(|fname, isdir| sync::fsync_fname(fname, isdir));
     file_seams::data_sync_elevel::set(sync::data_sync_elevel);
     file_seams::with_allocated_dir::set(desc::with_allocated_dir);
+    file_seams::acquire_external_fd::set(vfd::AcquireExternalFD);
+    file_seams::release_external_fd::set(vfd::ReleaseExternalFD);
 
     // fd.c owns these GUC variables' backing storage (fd.c:146-171).
     {

@@ -353,11 +353,9 @@ fn pgarch_ArchiverCopyLoop(af: &mut ArchFilesState, module: &ArchiveModule) -> P
         loop {
             // C also bails if !PostmasterIsAlive(); one address space makes
             // postmaster death unobservable from a live thread.
-            if interrupt::ShutdownRequestPending() {
+            if copy_loop_shutdown_requested()? {
                 return Ok(());
             }
-
-            ProcessPgArchInterrupts()?;
 
             if let Some(errdetail) = module.check_configured() {
                 ereport(WARNING)
@@ -657,7 +655,23 @@ fn pgarch_archiveDone(xlog: &str) -> PgResult<()> {
     Ok(())
 }
 
+// pgarch.c:411: C's SIGTERM handler ran asynchronously, so the flag is
+// visible before the next command; here the dispatch inside
+// ProcessPgArchInterrupts is what sets it, so re-check afterwards.
+fn copy_loop_shutdown_requested() -> PgResult<bool> {
+    if interrupt::ShutdownRequestPending() {
+        return Ok(true);
+    }
+    ProcessPgArchInterrupts()?;
+    Ok(interrupt::ShutdownRequestPending())
+}
+
 fn ProcessPgArchInterrupts() -> PgResult<()> {
+    // pgarch.c:419: the SIGHUP/SIGTERM handlers ran asynchronously before
+    // this check; the thread model runs them here so a copy backlog sees
+    // the reload/shutdown without waiting for the loop to drain.
+    procsignal::DrainThreadSignals()?;
+
     if procsignal_seams::proc_signal_barrier_pending::call() {
         procsignal_seams::process_proc_signal_barrier::call()?;
     }

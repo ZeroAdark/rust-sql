@@ -109,6 +109,12 @@ impl<'mcx> Bitmapset<'mcx> {
         self.nwords == 0
     }
 
+    /// Empties the set, keeping the allocated words for reuse.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.nwords = 0;
+    }
+
     #[inline]
     pub fn nwords(&self) -> usize {
         self.nwords as usize

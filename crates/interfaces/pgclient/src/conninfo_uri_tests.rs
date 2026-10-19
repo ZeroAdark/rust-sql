@@ -66,7 +66,9 @@ fn uri_resolves_with_defaults() {
     assert_eq!(get(&o, "port").as_deref(), Some("5433"));
     assert_eq!(get(&o, "dbname").as_deref(), Some("db"));
     assert_eq!(get(&o, "sslmode").as_deref(), Some("prefer"));
-    assert_eq!(get(&o, "gssencmode").as_deref(), Some("prefer"));
+    // DefaultGSSMode without ENABLE_GSS (fe-connect.c:141), as the reference build.
+    assert_eq!(get(&o, "gssencmode").as_deref(), Some("disable"));
+    assert_eq!(get(&o, "sslcertmode").as_deref(), Some("allow"));
 }
 
 // conninfo_uri_decode: %xy in every component, %00 forbidden, bad tokens

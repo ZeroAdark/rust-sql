@@ -1067,6 +1067,17 @@ fn get_object_address_usermapping(
     Ok(address)
 }
 
+// objectaddress.c get_object_address_defacl: errmsg("... \"%c\"", objtype) is
+// the first INPUT BYTE (a multibyte lead byte goes out alone; NUL truncates).
+fn unrecognized_defacl_objtype(objtype: u8) -> PgError {
+    let mut msg = b"unrecognized default ACL object type \"".to_vec();
+    msg.push(objtype);
+    msg.push(b'"');
+    PgError::error_raw_message(msg)
+        .with_sqlstate(types_error::ERRCODE_INVALID_PARAMETER_VALUE)
+        .with_hint("Valid object types are \"r\", \"S\", \"f\", \"T\", \"n\", \"L\".")
+}
+
 // get_object_address_defacl (objectaddress.c).
 fn get_object_address_defacl(
     object: &NodeList<'_>,
@@ -1089,18 +1100,7 @@ fn get_object_address_defacl(
         b'T' => "types",
         b'n' => "schemas",
         b'L' => "large objects",
-        other => {
-            return Err(Box::new(
-                PgError::error(format!(
-                    "unrecognized default ACL object type \"{}\"",
-                    other as char
-                ))
-                .with_sqlstate(types_error::ERRCODE_INVALID_PARAMETER_VALUE)
-                .with_hint(
-                    "Valid object types are \"r\", \"S\", \"f\", \"T\", \"n\", \"L\".",
-                ),
-            ))
-        }
+        other => return Err(Box::new(unrecognized_defacl_objtype(other))),
     };
     let address = ObjectAddress::set(DefaultAclRelationId, InvalidOid);
     let not_found = || -> PgResult<ObjectAddress> {
@@ -1902,7 +1902,26 @@ mod tests {
         assert_eq!(e.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
     }
 
-    // objectaddress.c:1702 atoi (fp-catalog-objectaddress-p1#2): INT_MIN is
+    // regression: the %c byte goes out raw.
+    #[test]
+    fn defacl_objtype_message_carries_the_first_input_byte() {
+        let e = unrecognized_defacl_objtype(0xC3);
+        assert_eq!(
+            e.message_raw.as_deref(),
+            Some(b"unrecognized default ACL object type \"\xC3\"".as_slice())
+        );
+        assert_eq!(e.sqlstate(), types_error::ERRCODE_INVALID_PARAMETER_VALUE);
+        assert_eq!(
+            e.hint(),
+            Some("Valid object types are \"r\", \"S\", \"f\", \"T\", \"n\", \"L\".")
+        );
+        let e = unrecognized_defacl_objtype(0);
+        assert_eq!(e.message(), "unrecognized default ACL object type \"");
+        let e = unrecognized_defacl_objtype(b'x');
+        assert_eq!(e.message(), "unrecognized default ACL object type \"x\"");
+    }
+
+    // objectaddress.c:1702 atoi (regression): INT_MIN is
     // representable, larger magnitudes wrap through (int) strtol.
     #[test]
     fn c_atoi_is_int_strtol() {

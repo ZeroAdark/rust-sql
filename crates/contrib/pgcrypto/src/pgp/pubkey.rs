@@ -1,8 +1,9 @@
 
 use super::cfb::PgpCfb;
 use super::consts::*;
+use super::context::PgpContext;
 use super::mpi::{mpi_cksum, read_mpi, Mpi};
-use super::packet::PktReader;
+use super::packet::{read_fixed, PktReader};
 use super::s2k::S2k;
 
 pub const PGP_PUB_RSA_ENCRYPT_SIGN: i32 = 1;
@@ -55,32 +56,43 @@ pub struct PubKey {
 /// the version byte is read and checked (PXE_PGP_NOT_V4_KEYPKT) before the
 /// time/algo bytes are required, and every short read is PXE_PGP_CORRUPT_DATA
 /// (pullf_read_fixed).
-pub(super) fn read_public_key(body: &[u8], pos: &mut usize) -> Result<PubKey, String> {
-    let ver = *body.get(*pos).ok_or_else(|| CORRUPT_DATA.to_string())?;
+pub(super) fn read_public_key(
+    body: &[u8],
+    pos: &mut usize,
+    ctx: &mut PgpContext,
+) -> Result<PubKey, String> {
+    read_public_key_last(body, pos, ctx).map(|(pk, _)| pk)
+}
+
+/// Also reports the byte count of the final MPI pull: a zero-byte
+/// pullf_read_fixed still goes through pktreader_pull (pgp-decrypt.c:185).
+fn read_public_key_last(
+    body: &[u8],
+    pos: &mut usize,
+    ctx: &mut PgpContext,
+) -> Result<(PubKey, usize), String> {
+    let ver = read_fixed(body, *pos, 1, ctx)?[0];
     *pos += 1;
     if ver != 4 {
         return Err(NOT_V4_KEYPKT.to_string());
     }
-    if *pos + 4 > body.len() {
-        return Err(CORRUPT_DATA.to_string());
-    }
     let mut time = [0u8; 4];
-    time.copy_from_slice(&body[*pos..*pos + 4]);
+    time.copy_from_slice(read_fixed(body, *pos, 4, ctx)?);
     *pos += 4;
-    let algo = *body.get(*pos).ok_or_else(|| CORRUPT_DATA.to_string())? as i32;
+    let algo = read_fixed(body, *pos, 1, ctx)?[0] as i32;
     *pos += 1;
 
     let (material, can_encrypt, pub_mpis): (KeyMaterial, bool, Vec<Mpi>) = match algo {
         PGP_PUB_DSA_SIGN => {
-            let p = read_mpi(body, pos)?;
-            let q = read_mpi(body, pos)?;
-            let g = read_mpi(body, pos)?;
-            let y = read_mpi(body, pos)?;
+            let p = read_mpi(body, pos, ctx)?;
+            let q = read_mpi(body, pos, ctx)?;
+            let g = read_mpi(body, pos, ctx)?;
+            let y = read_mpi(body, pos, ctx)?;
             (KeyMaterial::Dsa { x: None }, false, vec![p, q, g, y])
         }
         PGP_PUB_RSA_SIGN | PGP_PUB_RSA_ENCRYPT | PGP_PUB_RSA_ENCRYPT_SIGN => {
-            let n = read_mpi(body, pos)?;
-            let e = read_mpi(body, pos)?;
+            let n = read_mpi(body, pos, ctx)?;
+            let e = read_mpi(body, pos, ctx)?;
             // pgp-pubkey.c:214: only PGP_PUB_RSA_SIGN cannot encrypt; the
             // secret material (d, p, q, u) is read for all three.
             let can = algo != PGP_PUB_RSA_SIGN;
@@ -96,9 +108,9 @@ pub(super) fn read_public_key(body: &[u8], pos: &mut usize) -> Result<PubKey, St
             (mat, can, pubm)
         }
         PGP_PUB_ELG_ENCRYPT => {
-            let p = read_mpi(body, pos)?;
-            let g = read_mpi(body, pos)?;
-            let y = read_mpi(body, pos)?;
+            let p = read_mpi(body, pos, ctx)?;
+            let g = read_mpi(body, pos, ctx)?;
+            let y = read_mpi(body, pos, ctx)?;
             let pubm = vec![p.clone(), g.clone(), y.clone()];
             (
                 KeyMaterial::Elg {
@@ -111,18 +123,25 @@ pub(super) fn read_public_key(body: &[u8], pos: &mut usize) -> Result<PubKey, St
                 pubm,
             )
         }
-        _ => return Err(UNKNOWN_PUBALGO.to_string()),
+        _ => {
+            ctx.dbg(&format!("unknown public algo: {algo}"));
+            return Err(UNKNOWN_PUBALGO.to_string());
+        }
     };
 
     let key_id = calc_key_id(ver, &time, algo, &pub_mpis)?;
-    Ok(PubKey {
-        ver,
-        time,
-        algo,
-        key_id,
-        can_encrypt,
-        material,
-    })
+    let last = pub_mpis.last().map_or(0, Mpi::nbytes);
+    Ok((
+        PubKey {
+            ver,
+            time,
+            algo,
+            key_id,
+            can_encrypt,
+            material,
+        },
+        last,
+    ))
 }
 
 fn calc_key_id(ver: u8, time: &[u8; 4], algo: i32, mpis: &[Mpi]) -> Result<[u8; 8], String> {
@@ -146,38 +165,32 @@ fn calc_key_id(ver: u8, time: &[u8; 4], algo: i32, mpis: &[Mpi]) -> Result<[u8; 
     Ok(id)
 }
 
+/// pgp-pubkey.c:342 process_secret_key.
 fn process_secret_key(
     body: &[u8],
     psw: Option<&[u8]>,
+    ctx: &mut PgpContext,
 ) -> Result<PubKey, String> {
     let mut pos = 0usize;
-    let mut pk = read_public_key(body, &mut pos)?;
+    let mut pk = read_public_key(body, &mut pos, ctx)?;
 
-    if pos >= body.len() {
-        return Err(CORRUPT_DATA.to_string());
-    }
-    let hide_type = body[pos] as i32;
+    let hide_type = read_fixed(body, pos, 1, ctx)?[0] as i32;
     pos += 1;
 
     let (sec_bytes, sha1_mode) = if hide_type == HIDE_SHA1 || hide_type == HIDE_CKSUM {
         let psw = psw.ok_or_else(|| "Need password for secret key".to_string())?;
-        if pos >= body.len() {
-            return Err(CORRUPT_DATA.to_string());
-        }
-        let cipher_algo = body[pos] as i32;
+        let cipher_algo = read_fixed(body, pos, 1, ctx)?[0] as i32;
         pos += 1;
-        let (mut s2k, consumed) = S2k::read(&body[pos..]).map_err(|e| e.to_string())?;
+        let (mut s2k, consumed) = S2k::read(&body[pos..], ctx).map_err(|e| e.to_string())?;
         pos += consumed;
         s2k.process(cipher_algo, psw).map_err(|e| e.to_string())?;
 
         let bs = cipher_block_size(cipher_algo);
         if bs == 0 {
+            ctx.dbg(&format!("unknown cipher algo={cipher_algo}"));
             return Err(UNSUPPORTED_CIPHER.to_string());
         }
-        if pos + bs > body.len() {
-            return Err(CORRUPT_DATA.to_string());
-        }
-        let iv = &body[pos..pos + bs];
+        let iv = read_fixed(body, pos, bs, ctx)?;
         pos += bs;
 
         // upstream 4c5128ca0b30 (18.6): pgcrypto: Add option to revert to prior decryption behavior
@@ -189,6 +202,7 @@ fn process_secret_key(
     } else if hide_type == HIDE_CLEAR {
         (body[pos..].to_vec(), false)
     } else {
+        ctx.dbg("unknown hide type");
         return Err(KEYPKT_CORRUPT.to_string());
     };
 
@@ -197,24 +211,25 @@ fn process_secret_key(
     let mut sp = 0usize;
     match &mut pk.material {
         KeyMaterial::Rsa { d, p, q, u, .. } => {
-            *d = Some(read_mpi(&sec_bytes, &mut sp)?);
-            *p = Some(read_mpi(&sec_bytes, &mut sp)?);
-            *q = Some(read_mpi(&sec_bytes, &mut sp)?);
-            *u = Some(read_mpi(&sec_bytes, &mut sp)?);
+            *d = Some(read_mpi(&sec_bytes, &mut sp, ctx)?);
+            *p = Some(read_mpi(&sec_bytes, &mut sp, ctx)?);
+            *q = Some(read_mpi(&sec_bytes, &mut sp, ctx)?);
+            *u = Some(read_mpi(&sec_bytes, &mut sp, ctx)?);
         }
         KeyMaterial::Elg { x, .. } | KeyMaterial::Dsa { x } => {
-            *x = Some(read_mpi(&sec_bytes, &mut sp)?);
+            *x = Some(read_mpi(&sec_bytes, &mut sp, ctx)?);
         }
     }
 
     let end = if sha1_mode {
-        check_key_sha1(&pk, &sec_bytes, sp)?
+        check_key_sha1(&pk, &sec_bytes, sp, ctx)?
     } else {
-        check_key_cksum(&pk, &sec_bytes, sp)?
+        check_key_cksum(&pk, &sec_bytes, sp, ctx)?
     };
     // pgp-pubkey.c:449 pgp_expect_packet_end: anything after the checksum
     // is PXE_PGP_CORRUPT_DATA.
     if end != sec_bytes.len() {
+        ctx.dbg("pgp_expect_packet_end: got data");
         return Err(CORRUPT_DATA.to_string());
     }
 
@@ -224,17 +239,15 @@ fn process_secret_key(
 /// pgp-pubkey.c:253 check_key_sha1 — SHA1 over the secret MPIs must match
 /// the trailing 20 bytes; a mismatch is PXE_PGP_KEYPKT_CORRUPT (:290), a
 /// short read PXE_PGP_CORRUPT_DATA. Returns the position after the digest.
-fn check_key_sha1(pk: &PubKey, sec: &[u8], at: usize) -> Result<usize, String> {
-    if at + 20 > sec.len() {
-        return Err(CORRUPT_DATA.to_string());
-    }
-    let got = &sec[at..at + 20];
+fn check_key_sha1(pk: &PubKey, sec: &[u8], at: usize, ctx: &mut PgpContext) -> Result<usize, String> {
+    let got = read_fixed(sec, at, 20, ctx)?;
     let mut md = Digest::new(PGP_DIGEST_SHA1).ok_or(UNSUPPORTED_HASH.to_string())?;
     for m in secret_mpis(pk) {
         md.update(&[(m.bits >> 8) as u8, (m.bits & 0xFF) as u8]);
         md.update(&m.data);
     }
     if md.finish() != got {
+        ctx.dbg("key sha1 check failed");
         return Err(KEYPKT_CORRUPT.to_string());
     }
     Ok(at + 20)
@@ -243,16 +256,15 @@ fn check_key_sha1(pk: &PubKey, sec: &[u8], at: usize) -> Result<usize, String> {
 /// pgp-pubkey.c:299 check_key_cksum — 16-bit sum over the secret MPIs must
 /// match the 2 trailing bytes; a mismatch is PXE_PGP_KEYPKT_CORRUPT (:331).
 /// Returns the position after the checksum.
-fn check_key_cksum(pk: &PubKey, sec: &[u8], at: usize) -> Result<usize, String> {
-    if at + 2 > sec.len() {
-        return Err(CORRUPT_DATA.to_string());
-    }
-    let got = ((sec[at] as u32) << 8) + sec[at + 1] as u32;
+fn check_key_cksum(pk: &PubKey, sec: &[u8], at: usize, ctx: &mut PgpContext) -> Result<usize, String> {
+    let buf = read_fixed(sec, at, 2, ctx)?;
+    let got = ((buf[0] as u32) << 8) + buf[1] as u32;
     let mut my = 0u32;
     for m in secret_mpis(pk) {
         my = mpi_cksum(my, m);
     }
     if my != got {
+        ctx.dbg("key cksum check failed");
         return Err(KEYPKT_CORRUPT.to_string());
     }
     Ok(at + 2)
@@ -273,7 +285,13 @@ fn secret_mpis(pk: &PubKey) -> Vec<&Mpi> {
     }
 }
 
-pub fn read_key(data: &[u8], psw: Option<&[u8]>, pubtype: i32) -> Result<PubKey, String> {
+/// pgp-pubkey.c:475 internal_read_key.
+pub fn read_key(
+    data: &[u8],
+    psw: Option<&[u8]>,
+    pubtype: i32,
+    ctx: &mut PgpContext,
+) -> Result<PubKey, String> {
     let mut rdr = PktReader::new(data);
     let mut enc_key: Option<PubKey> = None;
     let mut got_main_key = false;
@@ -283,7 +301,8 @@ pub fn read_key(data: &[u8], psw: Option<&[u8]>, pubtype: i32) -> Result<PubKey,
             None => break,
             Some(h) => h,
         };
-        let body = rdr.read_body(&hdr).map_err(|_| CORRUPT_DATA.to_string())?;
+        // pgp-decrypt.c:201 pktreader_pull: a truncated body reads as EOF.
+        let body = rdr.read_body_avail(&hdr).map_err(|_| CORRUPT_DATA.to_string())?;
 
         let mut found: Option<PubKey> = None;
         match hdr.tag {
@@ -298,13 +317,17 @@ pub fn read_key(data: &[u8], psw: Option<&[u8]>, pubtype: i32) -> Result<PubKey,
                     return Err("Cannot decrypt with public key".to_string());
                 }
                 let mut pos = 0;
-                found = Some(read_public_key(&body, &mut pos)?);
+                let (pk, last) = read_public_key_last(&body.data, &mut pos, ctx)?;
+                found = Some(pk);
+                // pgp-pubkey.c:529: the reader is freed without draining, so
+                // whatever follows the public fields is parsed as a header.
+                rdr.pos = body.pos_after_read(pos, last);
             }
             t if t == PGP_PKT_SECRET_SUBKEY => {
                 if pubtype != 1 {
                     return Err("Refusing to encrypt with secret key".to_string());
                 }
-                found = Some(process_secret_key(&body, psw)?);
+                found = Some(process_secret_key(&body.data, psw, ctx)?);
             }
             t if t == PGP_PKT_SIGNATURE
                 || t == PGP_PKT_MARKER
@@ -312,7 +335,10 @@ pub fn read_key(data: &[u8], psw: Option<&[u8]>, pubtype: i32) -> Result<PubKey,
                 || t == PGP_PKT_USER_ID
                 || t == PGP_PKT_USER_ATTR
                 || t == PGP_PKT_PRIV_61 => {}
-            _ => return Err("Unexpected packet in key data".to_string()),
+            t => {
+                ctx.dbg(&format!("unknown/unexpected packet: {t}"));
+                return Err("Unexpected packet in key data".to_string());
+            }
         }
 
         if let Some(pk) = found {

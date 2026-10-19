@@ -262,3 +262,56 @@ fn system_user_registered_at_6311() {
     assert_eq!(row.func as usize, fc_system_user as usize);
     assert_eq!(row.nargs, 0);
 }
+
+// #2722: a cstring-stored name_ops key ending right before a PROT_NONE page
+// (the buffer pool's last page); the comparators faulted past it.
+#[cfg(unix)]
+#[test]
+fn comparators_read_cstring_keys_only_through_their_nul() {
+    setup();
+    let key = b"abs_27457\0";
+    // SAFETY: two fresh private anonymous pages; the second made inaccessible.
+    let at = unsafe {
+        let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+        let base = libc::mmap(
+            core::ptr::null_mut(),
+            2 * page,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        assert_ne!(base, libc::MAP_FAILED);
+        let base = base.cast::<u8>();
+        assert_eq!(libc::mprotect(base.add(page).cast(), page, libc::PROT_NONE), 0);
+        let at = base.add(page - key.len());
+        core::ptr::copy_nonoverlapping(key.as_ptr(), at, key.len());
+        at
+    };
+    let key = Datum::from_usize(at as usize);
+    let same = name("abs_27457");
+    let lower = name("abs_1");
+    let ctx = MemoryContext::new("t");
+
+    let mut fci = LocalFcinfo::<2>::new(C_COLLATION_OID);
+    fci.set_arg(0, key);
+    fci.set_arg(1, Datum::from_usize(same.data.as_ptr() as usize));
+    assert_eq!(fc_btnamecmp(None, &mut fci).unwrap().as_i32(), 0);
+    assert!(fc_nameeq(None, &mut fci).unwrap().as_bool());
+    assert!(!fc_namene(None, &mut fci).unwrap().as_bool());
+    fci.set_arg(1, Datum::from_usize(lower.data.as_ptr() as usize));
+    assert_eq!(fc_btnamecmp(None, &mut fci).unwrap().as_i32(), 1);
+    assert!(fc_namegt(None, &mut fci).unwrap().as_bool());
+    assert!(fc_namege(None, &mut fci).unwrap().as_bool());
+    assert!(!fc_namelt(None, &mut fci).unwrap().as_bool());
+    assert!(!fc_namele(None, &mut fci).unwrap().as_bool());
+
+    fci.set_arg(1, text_datum(ctx.mcx(), "abs_27457"));
+    assert!(fc_nameeqtext(None, &mut fci).unwrap().as_bool());
+    assert_eq!(fc_btnametextcmp(None, &mut fci).unwrap().as_i32(), 0);
+    let mut fci = LocalFcinfo::<2>::new(C_COLLATION_OID);
+    fci.set_arg(0, text_datum(ctx.mcx(), "abs_3"));
+    fci.set_arg(1, key);
+    assert!(fc_textgtname(None, &mut fci).unwrap().as_bool());
+    assert!(fc_bttextnamecmp(None, &mut fci).unwrap().as_i32() > 0);
+}

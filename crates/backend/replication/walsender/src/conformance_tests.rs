@@ -242,3 +242,63 @@ fn update_progress_skipped_xact_is_silent_without_sync_standbys() {
     WalSndCtl().sync_standbys_status.store(0, std::sync::atomic::Ordering::Relaxed);
     WalSndKill(0, 0);
 }
+
+fn debug2_reports() -> Vec<String> {
+    FATAL_REPORTS
+        .lock()
+        .expect("fatal reports mutex")
+        .iter()
+        .filter(|(lvl, _, _)| *lvl == types_error::DEBUG2)
+        .map(|(_, _, m)| m.clone())
+        .collect()
+}
+
+// walsender.c:4118 WalSndKeepalive: DEBUG2 "sending replication keepalive"
+// precedes every keepalive.
+#[test]
+fn keepalive_logs_debug2_before_sending() {
+    let _g = slot_lock();
+    conformance_setup();
+    SENT_PTR.with(|c| c.set(0x5000));
+    WIRE.with(|w| w.borrow_mut().clear());
+    FATAL_REPORTS.lock().expect("fatal reports mutex").clear();
+    let saved = elog::config::log_min_messages();
+    elog::config::set_log_min_messages(types_error::DEBUG2);
+    let prev = elog::set_emit_log_hook(Some(fatal_capture_hook));
+    let r = streaming::WalSndKeepalive(false, InvalidXLogRecPtr);
+    elog::set_emit_log_hook(prev);
+    elog::config::set_log_min_messages(saved);
+    r.expect("keepalive");
+    pqcomm::pq_flush().expect("flush");
+    let reports = debug2_reports();
+    assert_eq!(reports, vec!["sending replication keepalive".to_string()]);
+    assert!(contains(&wire(), b"k"), "the keepalive itself is still sent");
+}
+
+// walsender.c:2652-2668 ProcessStandbyHSFeedbackMessage: the decoded feedback
+// is logged at DEBUG2 (with the frontend reply time) before any state changes.
+// The handler's next steps touch PGPROC / TransamVariables, which the unit
+// harness does not provide, so the split-out logging step is driven directly.
+#[test]
+fn hot_standby_feedback_logs_debug2_with_its_fields() {
+    let _g = slot_lock();
+    conformance_setup();
+    if !timestamp_seams::timestamptz_to_str::is_installed() {
+        timestamp_seams::timestamptz_to_str::set(|t| format!("<ts {t}>"));
+    }
+    let reply_time_str = timestamp_seams::timestamptz_to_str::call(7);
+    FATAL_REPORTS.lock().expect("fatal reports mutex").clear();
+    let saved = elog::config::log_min_messages();
+    elog::config::set_log_min_messages(types_error::DEBUG2);
+    let prev = elog::set_emit_log_hook(Some(fatal_capture_hook));
+    replies::hs_feedback_debug2(7, 3, 5, 0, 0);
+    elog::set_emit_log_hook(prev);
+    elog::config::set_log_min_messages(saved);
+    let reports = debug2_reports();
+    assert_eq!(
+        reports,
+        vec![format!(
+            "hot standby feedback xmin 3 epoch 5, catalog_xmin 0 epoch 0 reply_time {reply_time_str}"
+        )]
+    );
+}

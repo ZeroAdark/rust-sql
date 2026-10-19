@@ -165,7 +165,14 @@ fn build_distinct_groups<'mcx>(
     mss: &mut MultiSort,
 ) -> PgResult<(PgVec<'mcx, SortItem>, usize)> {
     let numrows = items.len();
-    let mut groups: PgVec<'mcx, SortItem> = PgVec::new_in(mcx);
+    // mcv.c:429 count_distinct_groups (a user comparator sees both passes).
+    let mut ngroups = 1usize;
+    for i in 1..numrows {
+        if store.compare(mss, items[i], items[i - 1])? != 0 {
+            ngroups += 1;
+        }
+    }
+    let mut groups: PgVec<'mcx, SortItem> = mcx::vec_with_capacity_in(mcx, ngroups)?;
     groups.push(SortItem { off: items[0].off, count: 1 });
     let mut j = 0usize;
     for i in 1..numrows {
@@ -175,7 +182,7 @@ fn build_distinct_groups<'mcx>(
         }
         groups[j].count += 1;
     }
-    let ngroups = groups.len();
+    debug_assert_eq!(groups.len(), ngroups);
     // mcv.c:456 qsort_interruptible(groups, ..., compare_sort_item_count):
     // descending by count, C-exact qsort tie order.
     qsort_interruptible(&mut groups, |a, b| {

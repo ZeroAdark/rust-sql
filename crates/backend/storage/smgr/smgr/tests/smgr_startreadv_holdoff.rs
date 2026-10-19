@@ -42,6 +42,7 @@ fn startreadv_error_inside_hold_bracket_leaves_interrupts_resumed() {
         "unexpected error: {}",
         err.message
     );
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_UNDEFINED_FILE, "md.c errcode_for_file_access on ENOENT");
 
     // C: errfinish zeroed the count before the longjmp; the catcher sees 0.
     assert_eq!(

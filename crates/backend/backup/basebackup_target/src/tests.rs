@@ -78,3 +78,12 @@ fn server_target_detail_contract() {
     assert_eq!(handle.type_name, "server");
     assert!(matches!(handle.detail_arg, TargetDetail::Server(ref p) if p == "/backups"));
 }
+
+// server.rs ports basebackup_server.c: its reports name that C unit.
+#[test]
+fn server_sink_reports_name_basebackup_server_c() {
+    let l = crate::server::report_location("bbsink_server_new", 89);
+    assert_eq!(l.filename.as_deref(), Some("basebackup_server.c"));
+    assert_eq!(l.lineno, 89);
+    assert_eq!(l.funcname.as_deref(), Some("bbsink_server_new"));
+}

@@ -61,7 +61,9 @@ pub struct FileList(Vec<LoadedFile>);
 // libraries in load order, each with the filename it was opened under.
 pub struct LoadedModule {
     pub library_path: String,
-    pub module_name: &'static str,
+    // None for a module declared with plain PG_MODULE_MAGIC (no name, no
+    // version; pg_get_loaded_modules shows NULLs).
+    pub module_name: Option<&'static str>,
 }
 
 // SerializeLibraryState (dfmgr.c:722-739): file_list's filenames in load
@@ -348,9 +350,24 @@ pub fn loaded_modules() -> Vec<LoadedModule> {
         s.borrow()
             .list
             .iter()
-            .map(|f| LoadedModule { library_path: f.filename.clone(), module_name: f.entry.name })
+            .map(|f| LoadedModule {
+                library_path: f.filename.clone(),
+                module_name: magic_module_name(f.entry.name),
+            })
             .collect()
     })
+}
+
+// pg_get_loaded_modules reports the PG_MODULE_MAGIC_EXT name (dfmgr.c:451),
+// which equals the library name except for contrib/intarray (MODULE_big =
+// _int, _int_op.c:9 .name = "intarray"); the in-tree modules declared with
+// plain PG_MODULE_MAGIC have none.
+fn magic_module_name(library: &'static str) -> Option<&'static str> {
+    match library {
+        "_int" => Some("intarray"),
+        "injection_points" | "test_oat_hooks" | "test_custom_types" => None,
+        other => Some(other),
+    }
 }
 
 // The postmaster's file_list, captured on its thread for a child thread's
@@ -422,23 +439,68 @@ pub fn load_external_function(
     funcname: &str,
     signal_not_found: bool,
 ) -> PgResult<Option<PGFunction>> {
+    let (fullname, entry) = resolve_library(filename)?;
+    match (entry.lookup)(funcname) {
+        Some(f) => Ok(Some(f)),
+        None if signal_not_found => Err(undefined_function(funcname, &fullname)),
+        None => Ok(None),
+    }
+}
+
+fn resolve_library(filename: &str) -> PgResult<(String, BuiltinLibraryEntry)> {
     let filename = match filename.strip_prefix("$libdir/") {
         Some(simple) if pg_path::first_dir_separator(simple).is_none() => simple,
         _ => filename,
     };
     let fullname = expand_dynamic_library_name(filename)?;
     let entry = internal_load_library(&fullname)?;
-    match (entry.lookup)(funcname) {
-        Some(f) => Ok(Some(f)),
-        None if signal_not_found => Err(Box::new(
-            PgError::error(format!(
-                "could not find function \"{funcname}\" in file \"{fullname}\""
-            ))
-            .with_sqlstate(ERRCODE_UNDEFINED_FUNCTION)
-            .with_error_location(loc(131, "load_external_function")),
-        )),
-        None => Ok(None),
+    Ok((fullname, entry))
+}
+
+fn undefined_function(funcname: &str, fullname: &str) -> Box<PgError> {
+    Box::new(
+        PgError::error(format!(
+            "could not find function \"{funcname}\" in file \"{fullname}\""
+        ))
+        .with_sqlstate(ERRCODE_UNDEFINED_FUNCTION)
+        .with_error_location(loc(131, "load_external_function")),
+    )
+}
+
+// fetch_finfo_record (fmgr.c:464-471): a SQL-callable symbol needs its
+// pg_finfo_<name> record. Registered libraries expose exactly their V1
+// functions; C's dlsym also resolves the module entry points, the magic
+// block function and every pg_finfo_<v1> record, none of which carries a
+// record of its own. One registry lookup per name (fmgr_core caches the
+// resolved function and counts these).
+const MODULE_ENTRY_POINTS: &[&str] =
+    &["_PG_init", "_PG_fini", "_PG_output_plugin_init", "_PG_archive_module_init"];
+
+pub fn load_sql_callable_function(filename: &str, funcname: &str) -> PgResult<PGFunction> {
+    let (fullname, entry) = resolve_library(filename)?;
+    let found = (entry.lookup)(funcname);
+    if let Some(f) = found {
+        if !MODULE_ENTRY_POINTS.contains(&funcname) {
+            return Ok(f);
+        }
     }
+    let exported = found.is_some()
+        || funcname == "Pg_magic_func"
+        || (funcname == "_PG_init" && entry.pg_init.is_some())
+        || funcname
+            .strip_prefix("pg_finfo_")
+            .is_some_and(|v1| !MODULE_ENTRY_POINTS.contains(&v1) && (entry.lookup)(v1).is_some());
+    if !exported {
+        return Err(undefined_function(funcname, &fullname));
+    }
+    Err(Box::new(
+        PgError::error(format!(
+            "could not find function information for function \"{funcname}\""
+        ))
+        .with_sqlstate(ERRCODE_UNDEFINED_FUNCTION)
+        .with_hint("SQL-callable functions need an accompanying PG_FUNCTION_INFO_V1(funcname).")
+        .with_error_location(loc(471, "fetch_finfo_record")),
+    ))
 }
 
 #[cfg(test)]
@@ -461,7 +523,7 @@ mod tests {
     }
 
     fn loaded_module_names() -> Vec<&'static str> {
-        loaded_modules().into_iter().map(|m| m.module_name).collect()
+        loaded_modules().into_iter().filter_map(|m| m.module_name).collect()
     }
 
     #[track_caller]
@@ -485,6 +547,28 @@ mod tests {
             &format!("could not find function \"nosuchsymbol\" in file \"{pkglib}/tlib{DLSUFFIX}\""),
         );
         assert!(load_external_function("$libdir/tlib", "nosuchsymbol", false).unwrap().is_none());
+    }
+
+    #[test]
+    fn intarray_reports_its_magic_block_name() {
+        setup();
+        register_builtin_library(BuiltinLibraryEntry { name: "_int", lookup: |_| None, pg_init: None });
+        load_file("_int", false).unwrap_or_else(|e| panic!("{}", e.message()));
+        assert_eq!(loaded_module_names(), vec!["intarray"]);
+    }
+
+    #[test]
+    fn plain_magic_module_has_no_name() {
+        setup();
+        register_builtin_library(BuiltinLibraryEntry {
+            name: "injection_points",
+            lookup: |_| None,
+            pg_init: None,
+        });
+        load_file("injection_points", false).unwrap_or_else(|e| panic!("{}", e.message()));
+        let modules = loaded_modules();
+        assert_eq!(modules.len(), 1);
+        assert_eq!(modules[0].module_name, None);
     }
 
     #[test]
@@ -637,7 +721,7 @@ mod tests {
         assert_eq!(m.len(), 1);
         assert_eq!(
             (m[0].module_name, m[0].library_path.as_str()),
-            ("tlib", format!("{pkglib}/tlib{DLSUFFIX}").as_str())
+            (Some("tlib"), format!("{pkglib}/tlib{DLSUFFIX}").as_str())
         );
     }
 
@@ -780,5 +864,57 @@ mod tests {
         .join()
         .unwrap();
         assert_eq!(loaded_module_names(), vec!["tpre", "tses", "tlib"]);
+    }
+
+    // fetch_finfo_record (fmgr.c:464-471): symbols dlsym resolves but that
+    // carry no pg_finfo_ record (the magic block function, _PG_init, every
+    // pg_finfo_<v1> record) raise the "function information" form; symbols
+    // absent from the library keep load_external_function's form.
+    #[test]
+    fn symbols_without_finfo_records_report_the_c_message() {
+        let pkglib = setup();
+        register_builtin_library(BuiltinLibraryEntry {
+            name: "tfinfo",
+            lookup: |symbol| {
+                let stub: PGFunction = |_, _| Err(Box::new(PgError::error("stub".to_string())));
+                match symbol {
+                    "v1fn" => Some(stub),
+                    _ => None,
+                }
+            },
+            pg_init: Some(|| Ok(())),
+        });
+        assert!(load_sql_callable_function("$libdir/tfinfo", "v1fn").is_ok());
+        let no_record = |funcname: &str| {
+            let e = load_sql_callable_function("$libdir/tfinfo", funcname)
+                .err()
+                .unwrap_or_else(|| panic!("{funcname}: expected an error"));
+            assert_eq!(e.sqlstate(), ERRCODE_UNDEFINED_FUNCTION, "{funcname}");
+            assert_eq!(
+                e.message(),
+                format!("could not find function information for function \"{funcname}\""),
+            );
+            assert_eq!(
+                e.hint(),
+                Some("SQL-callable functions need an accompanying PG_FUNCTION_INFO_V1(funcname)."),
+                "{funcname}"
+            );
+        };
+        no_record("Pg_magic_func");
+        no_record("_PG_init");
+        no_record("pg_finfo_v1fn");
+        for funcname in ["nosuch", "pg_finfo_nosuch", "pg_finfo__PG_init", "_PG_fini"] {
+            assert_err(
+                load_sql_callable_function("$libdir/tfinfo", funcname),
+                ERRCODE_UNDEFINED_FUNCTION,
+                &format!("could not find function \"{funcname}\" in file \"{pkglib}/tfinfo{DLSUFFIX}\""),
+            );
+        }
+        // No _PG_init in the library (tlib): C's dlsym misses it too.
+        assert_err(
+            load_sql_callable_function("$libdir/tlib", "_PG_init"),
+            ERRCODE_UNDEFINED_FUNCTION,
+            &format!("could not find function \"_PG_init\" in file \"{pkglib}/tlib{DLSUFFIX}\""),
+        );
     }
 }

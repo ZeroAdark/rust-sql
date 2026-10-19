@@ -1,0 +1,502 @@
+-- Differential fixture for the 2026-09-13 audit bug batch 250 (deferred
+-- rows re-verified: dfmgr's pg_finfo_ record gate, WindowAgg duplicate
+-- window-function dedup). Run via scripts/bugs-batch250-e2e.sh against the
+-- frozen expected captured from C PostgreSQL 18.6.
+\set VERBOSITY verbose
+\pset pager off
+-- regression: a symbol the library exports without a pg_finfo_ record
+-- (the magic block function, _PG_init, a pg_finfo_ record itself) is
+-- fetch_finfo_record's 42883 with its HINT, not load_external_function's.
+CREATE FUNCTION b250_m() RETURNS void AS '$libdir/cube', 'Pg_magic_func' LANGUAGE C;
+ERROR:  42883: could not find function information for function "Pg_magic_func"
+HINT:  SQL-callable functions need an accompanying PG_FUNCTION_INFO_V1(funcname).
+CREATE FUNCTION b250_i() RETURNS void AS '$libdir/plpgsql', '_PG_init' LANGUAGE C;
+ERROR:  42883: could not find function information for function "_PG_init"
+HINT:  SQL-callable functions need an accompanying PG_FUNCTION_INFO_V1(funcname).
+CREATE FUNCTION b250_fi() RETURNS void AS '$libdir/cube', 'pg_finfo_cube_in' LANGUAGE C;
+ERROR:  42883: could not find function information for function "pg_finfo_cube_in"
+HINT:  SQL-callable functions need an accompanying PG_FUNCTION_INFO_V1(funcname).
+LOG:  00000: rewritten parse tree:
+DETAIL:  (
+   {QUERY 
+   :commandType 1 
+   :querySource 0 
+   :canSetTag true 
+   :utilityStmt <> 
+   :resultRelation 0 
+   :hasAggs false 
+   :hasWindowFuncs false 
+   :hasTargetSRFs false 
+   :hasSubLinks false 
+   :hasDistinctOn false 
+   :hasRecursive false 
+   :hasModifyingCTE false 
+   :hasForUpdate false 
+   :hasRowSecurity false 
+   :hasGroupRTE false 
+   :isReturn false 
+   :cteList <> 
+   :rtable <> 
+   :rteperminfos <> 
+   :jointree 
+      {FROMEXPR 
+      :fromlist <> 
+      :quals <>
+      }
+   :mergeActionList <> 
+   :mergeTargetRelation 0 
+   :mergeJoinCondition <> 
+   :targetList (
+      {TARGETENTRY 
+      :expr 
+         {OPEXPR 
+         :opno 551 
+         :opfuncid 177 
+         :opresulttype 23 
+         :opretset false 
+         :opcollid 0 
+         :inputcollid 0 
+         :args (
+            {PARAM 
+            :paramkind 0 
+            :paramid 1 
+            :paramtype 23 
+            :paramtypmod -1 
+            :paramcollid 0 
+            :location 7
+            }
+            {CONST 
+            :consttype 23 
+            :consttypmod -1 
+            :constcollid 0 
+            :constlen 4 
+            :constbyval true 
+            :constisnull false 
+            :location 12 
+            :constvalue 4 [ 1 0 0 0 0 0 0 0 ]
+            }
+         )
+         :location 10
+         }
+      :resno 1 
+      :resname ?column? 
+      :ressortgroupref 0 
+      :resorigtbl 0 
+      :resorigcol 0 
+      :resjunk false
+      }
+   )
+   :override 0 
+   :onConflict <> 
+   :returningOldAlias <> 
+   :returningNewAlias <> 
+   :returningList <> 
+   :groupClause <> 
+   :groupDistinct false 
+   :groupingSets <> 
+   :havingQual <> 
+   :windowClause <> 
+   :distinctClause <> 
+   :sortClause <> 
+   :limitOffset <> 
+   :limitCount <> 
+   :limitOption 0 
+   :rowMarks <> 
+   :setOperations <> 
+   :constraintDeps <> 
+   :withCheckOptions <> 
+   :stmt_location 0 
+   :stmt_len 0
+   }
+)
+
+SELECT b250_dsql(1);
+LOG:  00000: parse tree:
+DETAIL:     {QUERY 
+   :commandType 1 
+   :querySource 0 
+   :canSetTag true 
+   :utilityStmt <> 
+   :resultRelation 0 
+   :hasAggs false 
+   :hasWindowFuncs false 
+   :hasTargetSRFs false 
+   :hasSubLinks false 
+   :hasDistinctOn false 
+   :hasRecursive false 
+   :hasModifyingCTE false 
+   :hasForUpdate false 
+   :hasRowSecurity false 
+   :hasGroupRTE false 
+   :isReturn false 
+   :cteList <> 
+   :rtable <> 
+   :rteperminfos <> 
+   :jointree 
+      {FROMEXPR 
+      :fromlist <> 
+      :quals <>
+      }
+   :mergeActionList <> 
+   :mergeTargetRelation 0 
+   :mergeJoinCondition <> 
+   :targetList (
+      {TARGETENTRY 
+      :expr 
+         {OPEXPR 
+         :opno 551 
+         :opfuncid 177 
+         :opresulttype 23 
+         :opretset false 
+         :opcollid 0 
+         :inputcollid 0 
+         :args (
+            {PARAM 
+            :paramkind 0 
+            :paramid 1 
+            :paramtype 23 
+            :paramtypmod -1 
+            :paramcollid 0 
+            :location 7
+            }
+            {CONST 
+            :consttype 23 
+            :consttypmod -1 
+            :constcollid 0 
+            :constlen 4 
+            :constbyval true 
+            :constisnull false 
+            :location 12 
+            :constvalue 4 [ 1 0 0 0 0 0 0 0 ]
+            }
+         )
+         :location 10
+         }
+      :resno 1 
+      :resname ?column? 
+      :ressortgroupref 0 
+      :resorigtbl 0 
+      :resorigcol 0 
+      :resjunk false
+      }
+   )
+   :override 0 
+   :onConflict <> 
+   :returningOldAlias <> 
+   :returningNewAlias <> 
+   :returningList <> 
+   :groupClause <> 
+   :groupDistinct false 
+   :groupingSets <> 
+   :havingQual <> 
+   :windowClause <> 
+   :distinctClause <> 
+   :sortClause <> 
+   :limitOffset <> 
+   :limitCount <> 
+   :limitOption 0 
+   :rowMarks <> 
+   :setOperations <> 
+   :constraintDeps <> 
+   :withCheckOptions <> 
+   :stmt_location 0 
+   :stmt_len 0
+   }
+
+LOG:  00000: rewritten parse tree:
+DETAIL:  (
+   {QUERY 
+   :commandType 1 
+   :querySource 0 
+   :canSetTag true 
+   :utilityStmt <> 
+   :resultRelation 0 
+   :hasAggs false 
+   :hasWindowFuncs false 
+   :hasTargetSRFs false 
+   :hasSubLinks false 
+   :hasDistinctOn false 
+   :hasRecursive false 
+   :hasModifyingCTE false 
+   :hasForUpdate false 
+   :hasRowSecurity false 
+   :hasGroupRTE false 
+   :isReturn false 
+   :cteList <> 
+   :rtable <> 
+   :rteperminfos <> 
+   :jointree 
+      {FROMEXPR 
+      :fromlist <> 
+      :quals <>
+      }
+   :mergeActionList <> 
+   :mergeTargetRelation 0 
+   :mergeJoinCondition <> 
+   :targetList (
+      {TARGETENTRY 
+      :expr 
+         {OPEXPR 
+         :opno 551 
+         :opfuncid 177 
+         :opresulttype 23 
+         :opretset false 
+         :opcollid 0 
+         :inputcollid 0 
+         :args (
+            {PARAM 
+            :paramkind 0 
+            :paramid 1 
+            :paramtype 23 
+            :paramtypmod -1 
+            :paramcollid 0 
+            :location 7
+            }
+            {CONST 
+            :consttype 23 
+            :consttypmod -1 
+            :constcollid 0 
+            :constlen 4 
+            :constbyval true 
+            :constisnull false 
+            :location 12 
+            :constvalue 4 [ 1 0 0 0 0 0 0 0 ]
+            }
+         )
+         :location 10
+         }
+      :resno 1 
+      :resname ?column? 
+      :ressortgroupref 0 
+      :resorigtbl 0 
+      :resorigcol 0 
+      :resjunk false
+      }
+   )
+   :override 0 
+   :onConflict <> 
+   :returningOldAlias <> 
+   :returningNewAlias <> 
+   :returningList <> 
+   :groupClause <> 
+   :groupDistinct false 
+   :groupingSets <> 
+   :havingQual <> 
+   :windowClause <> 
+   :distinctClause <> 
+   :sortClause <> 
+   :limitOffset <> 
+   :limitCount <> 
+   :limitOption 0 
+   :rowMarks <> 
+   :setOperations <> 
+   :constraintDeps <> 
+   :withCheckOptions <> 
+   :stmt_location 0 
+   :stmt_len 0
+   }
+)
+
+ b250_dsql 
+-----------
+         2
+(1 row)
+
+CREATE FUNCTION b250_dpl(int) RETURNS int LANGUAGE plpgsql
+  SET debug_print_parse = on SET debug_print_rewritten = on
+  AS $$ DECLARE r int; BEGIN SELECT $1 + 2 INTO r; RETURN r; END $$;
+SELECT b250_dpl(1);
+LOG:  00000: parse tree:
+DETAIL:     {QUERY 
+   :commandType 1 
+   :querySource 0 
+   :canSetTag true 
+   :utilityStmt <> 
+   :resultRelation 0 
+   :hasAggs false 
+   :hasWindowFuncs false 
+   :hasTargetSRFs false 
+   :hasSubLinks false 
+   :hasDistinctOn false 
+   :hasRecursive false 
+   :hasModifyingCTE false 
+   :hasForUpdate false 
+   :hasRowSecurity false 
+   :hasGroupRTE false 
+   :isReturn false 
+   :cteList <> 
+   :rtable <> 
+   :rteperminfos <> 
+   :jointree 
+      {FROMEXPR 
+      :fromlist <> 
+      :quals <>
+      }
+   :mergeActionList <> 
+   :mergeTargetRelation 0 
+   :mergeJoinCondition <> 
+   :targetList (
+      {TARGETENTRY 
+      :expr 
+         {OPEXPR 
+         :opno 551 
+         :opfuncid 177 
+         :opresulttype 23 
+         :opretset false 
+         :opcollid 0 
+         :inputcollid 0 
+         :args (
+            {PARAM 
+            :paramkind 0 
+            :paramid 1 
+            :paramtype 23 
+            :paramtypmod -1 
+            :paramcollid 0 
+            :location 7
+            }
+            {CONST 
+            :consttype 23 
+            :consttypmod -1 
+            :constcollid 0 
+            :constlen 4 
+            :constbyval true 
+            :constisnull false 
+            :location 12 
+            :constvalue 4 [ 2 0 0 0 0 0 0 0 ]
+            }
+         )
+         :location 10
+         }
+      :resno 1 
+      :resname ?column? 
+      :ressortgroupref 0 
+      :resorigtbl 0 
+      :resorigcol 0 
+      :resjunk false
+      }
+   )
+   :override 0 
+   :onConflict <> 
+   :returningOldAlias <> 
+   :returningNewAlias <> 
+   :returningList <> 
+   :groupClause <> 
+   :groupDistinct false 
+   :groupingSets <> 
+   :havingQual <> 
+   :windowClause <> 
+   :distinctClause <> 
+   :sortClause <> 
+   :limitOffset <> 
+   :limitCount <> 
+   :limitOption 0 
+   :rowMarks <> 
+   :setOperations <> 
+   :constraintDeps <> 
+   :withCheckOptions <> 
+   :stmt_location 0 
+   :stmt_len 0
+   }
+
+LOG:  00000: rewritten parse tree:
+DETAIL:  (
+   {QUERY 
+   :commandType 1 
+   :querySource 0 
+   :canSetTag true 
+   :utilityStmt <> 
+   :resultRelation 0 
+   :hasAggs false 
+   :hasWindowFuncs false 
+   :hasTargetSRFs false 
+   :hasSubLinks false 
+   :hasDistinctOn false 
+   :hasRecursive false 
+   :hasModifyingCTE false 
+   :hasForUpdate false 
+   :hasRowSecurity false 
+   :hasGroupRTE false 
+   :isReturn false 
+   :cteList <> 
+   :rtable <> 
+   :rteperminfos <> 
+   :jointree 
+      {FROMEXPR 
+      :fromlist <> 
+      :quals <>
+      }
+   :mergeActionList <> 
+   :mergeTargetRelation 0 
+   :mergeJoinCondition <> 
+   :targetList (
+      {TARGETENTRY 
+      :expr 
+         {OPEXPR 
+         :opno 551 
+         :opfuncid 177 
+         :opresulttype 23 
+         :opretset false 
+         :opcollid 0 
+         :inputcollid 0 
+         :args (
+            {PARAM 
+            :paramkind 0 
+            :paramid 1 
+            :paramtype 23 
+            :paramtypmod -1 
+            :paramcollid 0 
+            :location 7
+            }
+            {CONST 
+            :consttype 23 
+            :consttypmod -1 
+            :constcollid 0 
+            :constlen 4 
+            :constbyval true 
+            :constisnull false 
+            :location 12 
+            :constvalue 4 [ 2 0 0 0 0 0 0 0 ]
+            }
+         )
+         :location 10
+         }
+      :resno 1 
+      :resname ?column? 
+      :ressortgroupref 0 
+      :resorigtbl 0 
+      :resorigcol 0 
+      :resjunk false
+      }
+   )
+   :override 0 
+   :onConflict <> 
+   :returningOldAlias <> 
+   :returningNewAlias <> 
+   :returningList <> 
+   :groupClause <> 
+   :groupDistinct false 
+   :groupingSets <> 
+   :havingQual <> 
+   :windowClause <> 
+   :distinctClause <> 
+   :sortClause <> 
+   :limitOffset <> 
+   :limitCount <> 
+   :limitOption 0 
+   :rowMarks <> 
+   :setOperations <> 
+   :constraintDeps <> 
+   :withCheckOptions <> 
+   :stmt_location 0 
+   :stmt_len 0
+   }
+)
+
+ b250_dpl 
+----------
+        3
+(1 row)
+
+RESET client_min_messages;
+DROP FUNCTION b250_dsql(int);
+DROP FUNCTION b250_dpl(int);

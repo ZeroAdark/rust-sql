@@ -727,7 +727,7 @@ impl TrgmPackedGraph {
 
 /// Per-key-column resolved opclass state (C GinState's per-attnum arrays:
 /// one resolved support proc per slot, plus supportCollation /
-/// canPartialMatch and the storage attribute's byval/len).
+/// canPartialMatch and the storage attribute's byval/len/typstorage).
 #[derive(Clone, Copy, Debug)]
 pub struct GinColState {
     pub compare: GinCompareFn,
@@ -740,6 +740,9 @@ pub struct GinColState {
     pub can_partial_match: bool,
     pub key_byval: bool,
     pub key_len: i16,
+    /// pg_type.typstorage of the key type (ginutil.c:125-128 TupleDescInitEntry):
+    /// the multicolumn entry tupdesc's attstorage, never the index column's.
+    pub key_storage: i8,
 }
 
 impl GinColState {
@@ -758,6 +761,7 @@ impl GinColState {
             can_partial_match: false,
             key_byval,
             key_len,
+            key_storage: if key_len == -1 { b'x' as i8 } else { b'p' as i8 },
         }
     }
 
@@ -774,6 +778,7 @@ impl GinColState {
             can_partial_match: false,
             key_byval: false,
             key_len: -1,
+            key_storage: b'x' as i8,
         }
     }
 
@@ -791,6 +796,7 @@ impl GinColState {
             can_partial_match: true,
             key_byval: false,
             key_len: -1,
+            key_storage: b'x' as i8,
         }
     }
 
@@ -808,6 +814,7 @@ impl GinColState {
             can_partial_match: false,
             key_byval: false,
             key_len: -1,
+            key_storage: b'x' as i8,
         }
     }
 
@@ -830,6 +837,7 @@ impl GinColState {
             can_partial_match: true,
             key_byval,
             key_len,
+            key_storage: if key_len == -1 { b'x' as i8 } else { b'p' as i8 },
         }
     }
 }
@@ -888,6 +896,9 @@ pub struct GinScanEntryData<'scan> {
     pub queryOrig: Datum,
     pub queryCategory: GinNullCategory,
     pub isPartialMatch: bool,
+    /// C's extra_data != NULL for this entry: never deduplicated
+    /// (ginscan.c:77).
+    pub hasExtraData: bool,
     pub strategy: StrategyNumber,
     pub searchMode: i32,
     pub attnum: OffsetNumber,
@@ -922,6 +933,7 @@ impl<'scan> GinScanEntryData<'scan> {
             queryOrig: Datum::null(),
             queryCategory: GIN_CAT_NORM_KEY,
             isPartialMatch: false,
+            hasExtraData: false,
             strategy: 0,
             searchMode: GIN_SEARCH_MODE_DEFAULT,
             attnum: 0,

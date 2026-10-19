@@ -21,7 +21,7 @@ use logicalproto::LogicalRepRelation;
 use mcx::{Mcx, MemoryContext};
 use types_core::{InvalidTransactionId, InvalidXLogRecPtr, Oid, TimestampTz, TransactionId, XLogRecPtr};
 use types_error::{
-    ErrorLocation, PgError, PgResult, DEBUG2, ERRCODE_ADMIN_SHUTDOWN, ERRCODE_CONNECTION_FAILURE,
+    ErrorLocation, PgError, PgResult, DEBUG1, DEBUG2, ERRCODE_ADMIN_SHUTDOWN, ERRCODE_CONNECTION_FAILURE,
     ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE, ERRCODE_PROTOCOL_VIOLATION, ERROR, FATAL, LOG, WARNING,
 };
 
@@ -223,8 +223,13 @@ pub(crate) struct ApplyErrorContextFrame {
 
 impl ApplyErrorContextFrame {
     pub(crate) fn push() -> Self {
+        // A walked frame as well as an emit decorator: C's callback sits on
+        // error_context_stack, so GetErrorContextStack (a PL/pgSQL EXCEPTION
+        // block's PG_EXCEPTION_CONTEXT inside a replica trigger) sees the
+        // "processing remote data for replication origin ..." line at the
+        // catch, not only when the error leaves the apply loop.
         ApplyErrorContextFrame {
-            callback: elog::push_emit_context_callback(Box::new(apply_error_callback)),
+            callback: elog::push_context_frame(Box::new(apply_error_callback), true),
         }
     }
 
@@ -345,7 +350,7 @@ pub(crate) fn stop_skipping_changes() {
 // specified a wrong subskiplsn).
 pub(crate) fn clear_subscription_skip_lsn(mcx: Mcx<'_>, finish_lsn: XLogRecPtr) -> PgResult<()> {
     let myskiplsn = my_sub(|s| s.skiplsn);
-    if myskiplsn == InvalidXLogRecPtr {
+    if myskiplsn == InvalidXLogRecPtr || parallel::am_parallel_apply_worker() {
         return Ok(());
     }
 
@@ -442,13 +447,63 @@ pub(crate) fn maybe_reread_subscription(mcx: Mcx<'_>) -> PgResult<()> {
     result
 }
 
+// apply_worker_exit's leader arm (worker.c:3963): reset the launcher's
+// last-start time so the replacement is not throttled by
+// wal_retrieve_retry_interval.
+fn apply_worker_exit(subid: Oid) {
+    let is_leader = launcher::my_worker_slot()
+        .and_then(launcher::worker_snapshot)
+        .is_some_and(|w| !w.is_tablesync() && !w.is_parallel_apply());
+    if is_leader {
+        launcher::ApplyLauncherForgetWorkerStartTime(subid);
+    }
+    APPLY_WORKER_EXIT.set(true);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RereadChange {
+    Removed,
+    Disabled,
+    ParamChange,
+}
+
+// maybe_reread_subscription's LOG lines (worker.c:4005, 4019, 4050, 4054).
+pub(crate) fn reread_change_message(change: RereadChange, name: &str, parallel: bool) -> String {
+    match change {
+        RereadChange::Removed => format!(
+            "logical replication worker for subscription \"{name}\" will stop because the subscription was removed"
+        ),
+        RereadChange::Disabled => format!(
+            "logical replication worker for subscription \"{name}\" will stop because the subscription was disabled"
+        ),
+        RereadChange::ParamChange if parallel => format!(
+            "logical replication parallel apply worker for subscription \"{name}\" will stop because of a parameter change"
+        ),
+        RereadChange::ParamChange => format!(
+            "logical replication worker for subscription \"{name}\" will restart because of a parameter change"
+        ),
+    }
+}
+
+// worker.c:3919: force as %d, every LSN as %X/%X.
+fn feedback_debug_line(force: bool, recvpos: u64, writepos: u64, flushpos: u64) -> String {
+    let lsn = |v: u64| format!("{:X}/{:X}", (v >> 32) as u32, v as u32);
+    format!(
+        "sending feedback (force {}) to recv {}, write {}, flush {}",
+        force as u8,
+        lsn(recvpos),
+        lsn(writepos),
+        lsn(flushpos)
+    )
+}
+
 fn maybe_reread_subscription_guts(mcx: Mcx<'_>) -> PgResult<()> {
     let subid = my_sub(|s| s.oid);
     let newsub = load_subscription(mcx, subid)?;
 
-    let exit_msg = match &newsub {
-        None => Some("subscription was removed"),
-        Some(n) if !n.enabled => Some("subscription was disabled"),
+    let change = match &newsub {
+        None => Some(RereadChange::Removed),
+        Some(n) if !n.enabled => Some(RereadChange::Disabled),
         Some(n) => {
             let differs = my_sub(|old| {
                 n.conninfo != old.conninfo
@@ -463,36 +518,22 @@ fn maybe_reread_subscription_guts(mcx: Mcx<'_>) -> PgResult<()> {
                     // authentication: a change must reconnect and re-enforce.
                     || n.passwordrequired != old.passwordrequired
             });
-            if differs {
-                Some("subscription was modified")
-            } else {
-                None
-            }
+            differs.then_some(RereadChange::ParamChange)
         }
     };
 
-    if let Some(why) = exit_msg {
+    if let Some(change) = change {
         let name = my_sub(|s| s.name.clone());
-        if parallel::am_parallel_apply_worker() && newsub.is_some() {
-            // apply_worker_exit's parallel arm (worker.c:3929): don't stop —
-            // the leader detects the change and restarts logical replication;
-            // stopping here could trip the leader's queue error paths.
-            let _ = elog::elog(
-                LOG,
-                format!(
-                    "logical replication parallel apply worker for subscription \"{name}\" will stop because {why}"
-                ),
-            );
-        } else {
-            let _ = elog::elog(
-                LOG,
-                format!(
-                    "logical replication worker for subscription \"{name}\" will stop because {why}"
-                ),
-            );
-            APPLY_WORKER_EXIT.set(true);
+        let parallel = parallel::am_parallel_apply_worker();
+        let _ = elog::elog(LOG, reread_change_message(change, &name, parallel));
+        // A removed subscription exits every worker (worker.c:4012);
+        // apply_worker_exit's parallel arm (worker.c:3944) returns instead —
+        // the leader detects the change and restarts logical replication, and
+        // the parallel worker goes on with the re-read subscription.
+        if !parallel || newsub.is_none() {
+            apply_worker_exit(subid);
+            return Ok(());
         }
-        return Ok(());
     }
 
     // worker.c:4064: exit if the subscription owner's superuser privileges
@@ -515,7 +556,7 @@ fn maybe_reread_subscription_guts(mcx: Mcx<'_>) -> PgResult<()> {
                         "logical replication worker for subscription \"{name}\" will restart because the subscription owner's superuser privileges have been revoked"
                     ),
                 );
-                APPLY_WORKER_EXIT.set(true);
+                apply_worker_exit(subid);
             }
             return Ok(());
         }
@@ -661,12 +702,7 @@ pub(crate) fn send_feedback(
     msg.extend_from_slice(&(now as i64).to_be_bytes());
     msg.push(request_reply as u8);
 
-    let _ = elog::elog(
-        DEBUG2,
-        format!(
-            "sending feedback (force {force}) to recv {recvpos:X}, write {writepos:X}, flush {flushpos:X}"
-        ),
-    );
+    let _ = elog::elog(DEBUG2, feedback_debug_line(force, recvpos, writepos, flushpos));
 
     if let Err(e) = conn.put_copy_data(&msg) {
         return Err(wal_stream_send_error(&e));
@@ -689,6 +725,8 @@ pub(crate) fn send_feedback(
 // (AcceptInvalidationMessages + maybe_reread_subscription) is how a worker
 // against a quiet publisher ever notices subscription DDL.
 const NAPTIME_PER_CYCLE: i64 = 1000;
+// wait_event_names.txt Activity class: LogicalApplyMain (worker.c:3765).
+const WAIT_EVENT_LOGICAL_APPLY_MAIN: u32 = 0x0500_0000 | 7;
 
 // LogicalRepApplyLoop (worker.c:3574). The copy-both read is the client's
 // get_copy_data; Block means "nothing available now" and maps to C's len==0
@@ -796,7 +834,7 @@ fn apply_loop_guts(conn: &mut PgConn, mut last_received: XLogRecPtr) -> PgResult
                 } else {
                     NAPTIME_PER_CYCLE
                 };
-                let readable = conn.wait_readable_timeout(wait_time)?;
+                let readable = conn.wait_readable_timeout_ev(wait_time, WAIT_EVENT_LOGICAL_APPLY_MAIN)?;
 
                 if interrupt::ConfigReloadPending() {
                     interrupt::SetConfigReloadPending(false);
@@ -1349,12 +1387,19 @@ fn apply_worker_body(slot: usize) -> PgResult<()> {
                 s.twophasestate = pg_subscription::LOGICALREP_TWOPHASE_STATE_ENABLED;
             }
         });
-        let name = my_sub(|s| s.name.clone());
-        let _ = elog::elog(
-            LOG,
-            format!("logical replication apply worker for subscription \"{name}\" two_phase is ENABLED"),
-        );
     }
+
+    let name = my_sub(|s| s.name.clone());
+    let state = match my_sub(|s| s.twophasestate) {
+        pg_subscription::LOGICALREP_TWOPHASE_STATE_DISABLED => "DISABLED",
+        pg_subscription::LOGICALREP_TWOPHASE_STATE_PENDING => "PENDING",
+        pg_subscription::LOGICALREP_TWOPHASE_STATE_ENABLED => "ENABLED",
+        _ => "?",
+    };
+    let _ = elog::elog(
+        DEBUG1,
+        format!("logical replication apply worker for subscription \"{name}\" two_phase is {state}"),
+    );
 
     // start_apply (worker.c:4506).
     let r = apply_loop(&mut conn, origin_startpos);

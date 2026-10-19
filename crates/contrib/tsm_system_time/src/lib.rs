@@ -171,14 +171,13 @@ fn negative_time() -> Box<PgError> {
     )
 }
 
-// Never called: the registry resolves by prosrc (internal-typed argument).
+// TABLESAMPLE resolves the method by prosrc; a direct SQL call only
+// observes non-NULL (C returns a palloc'd TsmRoutine, tsm_system_time.c).
 fn fc_tsm_system_time_handler(
     _flinfo: Option<&mut FmgrInfo>,
     _fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    Err(Box::new(PgError::error(
-        "tsm_system_time_handler cannot be called directly",
-    )))
+    Ok(Datum::from_usize(HANDLER_SYMBOL.as_ptr() as usize))
 }
 
 fn lookup(function: &str) -> Option<PGFunction> {

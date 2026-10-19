@@ -6,7 +6,7 @@
 -- C PostgreSQL 18.6.
 \set VERBOSITY verbose
 \pset pager off
--- fp-path-joinrels#1: a partition comparator returning NULL while merging
+-- regression: a partition comparator returning NULL while merging
 -- the bounds of two partitioned tables is XX000 "function N returned NULL"
 -- (partition_bounds_merge -> FunctionCall2Coll), never a panic.
 CREATE FUNCTION b145_cmp(a int, b int) RETURNS int LANGUAGE plpgsql IMMUTABLE AS $$
@@ -31,7 +31,7 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 NOTICE:  00000: XX000 function N returned NULL
 RESET enable_partitionwise_join;
--- fp-util-clauses-p1#1: a SQL function's jsonpath parameter bound from a
+-- regression: a SQL function's jsonpath parameter bound from a
 -- heap tuple keeps its short varlena header; contain_mutable_functions
 -- over the body's JSON_EXISTS (constraint_exclusion) detoasts it like
 -- DatumGetJsonPathP.
@@ -51,7 +51,7 @@ SELECT p, b145_jf(p) FROM b145_jp ORDER BY p::text;
 (3 rows)
 
 RESET constraint_exclusion;
--- fp-adt-like_support#1: a regex operator without a RESTRICT estimator only
+-- regression: a regex operator without a RESTRICT estimator only
 -- reaches regex_fixed_prefix through index support, where C passes a NULL
 -- rest_selec and skips the recursive selectivity walk; the walk over
 -- 200000 alternation bars inside an ARE comment is what overflows the stack.
@@ -72,3 +72,61 @@ SELECT count(*) FROM b145_rt WHERE s ~~~ ('^abc1(?#' || repeat('|', 200000) || '
     12
 (1 row)
 
+-- regression: a Gather/Gather Merge inside a glob subplan (the
+-- MIN/MAX initplan of a flattened UNION ALL whose non-simple member is
+-- planned as its own subquery) that references a TOP-level initplan
+-- param. set_param_references must walk the parents parked in subroots
+-- while the subplan is fixed (setrefs.c:2579 root->parent_root chain), or
+-- the Gather's initParam is empty and the workers never receive the
+-- param the pushed-down qual reads.
+CREATE TABLE b145_sr_t AS SELECT g AS x, g AS q FROM generate_series(1, 200000) g;
+CREATE INDEX b145_sr_t_x ON b145_sr_t(x);
+CREATE TABLE b145_sr_u AS SELECT g AS x, g AS q FROM generate_series(1, 20000) g;
+CREATE TABLE b145_sr_z AS SELECT g AS z FROM generate_series(1, 100) g;
+ANALYZE b145_sr_t; ANALYZE b145_sr_u; ANALYZE b145_sr_z;
+SET parallel_setup_cost = 0;
+SET parallel_tuple_cost = 0;
+SET min_parallel_table_scan_size = 0;
+SET max_parallel_workers_per_gather = 2;
+EXPLAIN (COSTS OFF)
+SELECT min(x) FROM (SELECT x, q FROM b145_sr_t UNION ALL SELECT x, q FROM b145_sr_u GROUP BY 1, 2) s
+WHERE q > (SELECT max(z) FROM b145_sr_z);
+                                             QUERY PLAN                                              
+-----------------------------------------------------------------------------------------------------
+ Result
+   InitPlan 1
+     ->  Finalize Aggregate
+           ->  Gather
+                 Workers Planned: 1
+                 ->  Partial Aggregate
+                       ->  Parallel Seq Scan on b145_sr_z
+   InitPlan 2
+     ->  Limit
+           ->  Merge Append
+                 Sort Key: b145_sr_t.x
+                 ->  Index Scan using b145_sr_t_x on b145_sr_t
+                       Index Cond: (x IS NOT NULL)
+                       Filter: (q > (InitPlan 1).col1)
+                 ->  Subquery Scan on "*SELECT* 2"
+                       ->  Group
+                             Group Key: b145_sr_u.x, b145_sr_u.q
+                             ->  Gather Merge
+                                   Workers Planned: 2
+                                   ->  Sort
+                                         Sort Key: b145_sr_u.x, b145_sr_u.q
+                                         ->  Parallel Seq Scan on b145_sr_u
+                                               Filter: ((x IS NOT NULL) AND (q > (InitPlan 1).col1))
+(23 rows)
+
+SELECT min(x) FROM (SELECT x, q FROM b145_sr_t UNION ALL SELECT x, q FROM b145_sr_u GROUP BY 1, 2) s
+WHERE q > (SELECT max(z) FROM b145_sr_z);
+ min 
+-----
+ 101
+(1 row)
+
+RESET parallel_setup_cost;
+RESET parallel_tuple_cost;
+RESET min_parallel_table_scan_size;
+RESET max_parallel_workers_per_gather;
+DROP TABLE b145_sr_t, b145_sr_u, b145_sr_z;

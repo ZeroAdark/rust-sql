@@ -15,15 +15,17 @@ use ::types_core::OffsetNumber;
 
 const DEF_NPTR: usize = 5;
 const DEF_NENTRY: usize = 2048;
-const SIZEOF_C_ENTRY_ACCUMULATOR: usize = 56;
+// sizeof(GinEntryAccumulator) on LP64: 32-byte RBTNode + key/category/attnum/
+// shouldSort/list/maxcount/count (gin_private.h:427-437).
+const SIZEOF_C_ENTRY_ACCUMULATOR: usize = 64;
 
-/// GetMemoryChunkSpace over C's default aset: pow2 bucket incl. the 8-byte
-/// chunk header below the 8KB chunk limit, header + MAXALIGN above. Drives
-/// only the maintenance_work_mem dump boundary.
+/// GetMemoryChunkSpace over C's default aset (aset.c:1512): the pow2 freelist
+/// bucket of the request plus the 8-byte chunk header up to the 8KB chunk
+/// limit, MAXALIGN + header above. Drives only the maintenance_work_mem dump
+/// boundary.
 fn chunk_space(sz: usize) -> usize {
-    let s = sz + 8;
-    if s <= 8 * 1024 {
-        s.next_power_of_two().max(16)
+    if sz <= 8 * 1024 {
+        sz.next_power_of_two().max(8) + 8
     } else {
         MAXALIGN(sz) + 8
     }
@@ -36,6 +38,10 @@ struct KeyRef {
     /// Value bytes of the copied key (accumulator-owned; null for categories).
     ptr: *const u8,
     len: u32,
+    /// The bytes are a whole compressed varlena image rather than a value
+    /// payload; C's comparator detoasts, so an image must never match a flat
+    /// payload with the same bytes.
+    image: bool,
 }
 
 impl KeyRef {
@@ -52,6 +58,7 @@ impl PartialEq for KeyRef {
     fn eq(&self, other: &Self) -> bool {
         self.attnum == other.attnum
             && self.category == other.category
+            && self.image == other.image
             && self.bytes() == other.bytes()
     }
 }
@@ -71,6 +78,7 @@ impl core::hash::Hash for KeyRef {
         h.write_u64(dedup_hash_seed());
         self.attnum.hash(h);
         self.category.hash(h);
+        self.image.hash(h);
         self.bytes().hash(h);
     }
 }
@@ -110,10 +118,10 @@ pub struct BuildAccumulator<'s> {
     dump_pos: usize,
 }
 
-fn key_value_bytes(col: &GinColState, key: Datum) -> (*const u8, u32) {
+fn key_value_bytes(col: &GinColState, key: Datum) -> (*const u8, u32, bool) {
     if col.key_byval {
         // By-value keys hash as the 8-byte word; KeyRef points nowhere.
-        (core::ptr::null(), 0)
+        (core::ptr::null(), 0, false)
     } else if col.key_len == -1 {
         // SAFETY: non-null varlena key datum.
         unsafe {
@@ -123,18 +131,19 @@ fn key_value_bytes(col: &GinColState, key: Datum) -> (*const u8, u32) {
                 // that GinFormTuple stored compressed) hash by their whole
                 // image; identical keys compress identically, so grouping is
                 // unchanged, and the dump-order sort compares detoasted.
-                (p, varatt::varsize_any(p) as u32)
+                (p, varatt::varsize_any(p) as u32, true)
             } else if varatt::varatt_is_1b(p) {
                 (
                     p.add(varatt::VARHDRSZ_SHORT),
                     (varatt::varsize_1b(p) - varatt::VARHDRSZ_SHORT) as u32,
+                    false,
                 )
             } else {
-                (p.add(4), (varatt::varsize_4b(p) - 4) as u32)
+                (p.add(4), (varatt::varsize_4b(p) - 4) as u32, false)
             }
         }
     } else {
-        (key.as_usize() as *const u8, col.key_len as u32)
+        (key.as_usize() as *const u8, col.key_len as u32, false)
     }
 }
 
@@ -184,10 +193,10 @@ impl<'s> BuildAccumulator<'s> {
         category: GinNullCategory,
     ) -> PgResult<()> {
         let key_byval = self.state.col(attnum).key_byval;
-        let (ptr, len) = if category == GIN_CAT_NORM_KEY {
+        let (ptr, len, image) = if category == GIN_CAT_NORM_KEY {
             key_value_bytes(self.state.col(attnum), key)
         } else {
-            (core::ptr::null(), 0)
+            (core::ptr::null(), 0, false)
         };
         let probe = KeyRef {
             attnum,
@@ -199,6 +208,7 @@ impl<'s> BuildAccumulator<'s> {
                 ptr
             },
             len,
+            image,
         };
 
         // By-value keys fold the word into the map key via a synthetic ref.
@@ -210,6 +220,7 @@ impl<'s> BuildAccumulator<'s> {
                 category,
                 ptr: byval_word.as_ptr(),
                 len: 8,
+                image: false,
             }
         } else {
             probe
@@ -264,14 +275,14 @@ impl<'s> BuildAccumulator<'s> {
             list,
         });
         let stored = if category == GIN_CAT_NORM_KEY {
-            let (p, l) = if key_byval {
+            let (p, l, image) = if key_byval {
                 // Point at the entry's stored 8-byte word (stable: Datum is
                 // stored by value; use a copy in the accumulator arena).
                 let mut w: PgVec<'s, u8> = mcx::vec_with_capacity_in(self.mcx, 8)?;
                 crate::vec_append(&mut w, &key_copied.as_u64().to_ne_bytes())?;
                 let p = w.as_ptr();
                 core::mem::forget(w);
-                (p, 8u32)
+                (p, 8u32, false)
             } else {
                 key_value_bytes(self.state.col(attnum), key_copied)
             };
@@ -280,6 +291,7 @@ impl<'s> BuildAccumulator<'s> {
                 category,
                 ptr: p,
                 len: l,
+                image,
             }
         } else {
             KeyRef {
@@ -287,6 +299,7 @@ impl<'s> BuildAccumulator<'s> {
                 category,
                 ptr: core::ptr::null(),
                 len: 0,
+                image: false,
             }
         };
         self.map.insert(stored, idx);

@@ -268,7 +268,7 @@ fn ConstructTupleDescriptor<'mcx>(
     mcx: Mcx<'mcx>,
     heapRelation: &Relation<'mcx>,
     indexInfo: &IndexInfo<'mcx>,
-    indexColNames: &[&str],
+    indexColNames: &[&[u8]],
     accessMethodId: Oid,
     collationIds: &[Oid],
     opclassIds: &[Oid],
@@ -303,7 +303,7 @@ fn ConstructTupleDescriptor<'mcx>(
             to.attislocal = true;
             to.attcollation = if i < numkeyatts { collationIds[i] } else { InvalidOid };
             to.attname = NameData::default();
-            to.attname.namestrcpy(colname);
+            to.attname.namestrcpy_bytes(colname);
             to.attnotnull = false;
             to.atthasdef = false;
             to.atthasmissing = false;
@@ -320,7 +320,7 @@ fn ConstructTupleDescriptor<'mcx>(
             let mut containing_rowtypes = mcx::PgVec::new_in(mcx);
             catalog_heap::CheckAttributeType(
                 mcx,
-                colname,
+                &String::from_utf8_lossy(colname),
                 keyType,
                 attcollation,
                 &mut containing_rowtypes,
@@ -334,7 +334,7 @@ fn ConstructTupleDescriptor<'mcx>(
             to.attislocal = true;
             to.attcollation = if i < numkeyatts { collationIds[i] } else { InvalidOid };
             to.attname = NameData::default();
-            to.attname.namestrcpy(colname);
+            to.attname.namestrcpy_bytes(colname);
             to.atttypid = keyType;
             to.attlen = shape.typlen;
             to.atttypmod = nodes_core::expr_typmod(indexkey);
@@ -631,10 +631,12 @@ pub struct IndexCreateExtra<'a> {
 pub fn index_create<'mcx>(
     mcx: Mcx<'mcx>,
     heapRelation: &Relation<'mcx>,
-    indexRelationName: &str,
+    // Bytes, as C's char*: a makeObjectName-generated name may end inside
+    // a multibyte character (SQL_ASCII) and is stored verbatim.
+    indexRelationName: &[u8],
     indexRelationId: Oid,
     indexInfo: &mut IndexInfo<'mcx>,
-    indexColNames: &[&str],
+    indexColNames: &[&[u8]],
     accessMethodId: Oid,
     tableSpaceId: Oid,
     collationIds: &[Oid],
@@ -687,17 +689,19 @@ pub fn index_create<'mcx>(
         ));
     }
     for i in 0..indexInfo.ii_NumIndexKeyAttrs as usize {
-        // TEXT/VARCHAR/BPCHAR_BTREE_PATTERN_OPS_OID (pg_opclass.dat; names
-        // are pinned catalog rows, so the CLAOID probe C does is a constant).
+        // TEXT/VARCHAR/BPCHAR_BTREE_PATTERN_OPS_OID (pg_opclass.dat); the
+        // name comes from the current pg_opclass row (index.c:847), so a
+        // renamed opclass reports its new name.
         if collationIds[i] != InvalidOid
             && matches!(opclassIds[i], 4217 | 4218 | 4219)
             && !lsyscache::get_collation_isdeterministic(collationIds[i])?
         {
-            let opcname = match opclassIds[i] {
-                4217 => "text_pattern_ops",
-                4218 => "varchar_pattern_ops",
-                _ => "bpchar_pattern_ops",
+            let Some((opcname, _, _)) =
+                syscache_seams::pg_opclass_name_namespace_method::call(opclassIds[i])?
+            else {
+                return Err(crate::opclass_lookup_failed(opclassIds[i]));
             };
+            let opcname = String::from_utf8_lossy(opcname.name_str()).into_owned();
             return Err(err(
                 format!(
                     "nondeterministic collations are not supported for operator class \"{opcname}\""
@@ -719,14 +723,15 @@ pub fn index_create<'mcx>(
         ));
     }
 
-    if lsyscache::get_relname_relid(indexRelationName, namespaceId)? != InvalidOid {
+    if lsyscache::get_relname_relid_bytes(indexRelationName, namespaceId)? != InvalidOid {
+        let shown = String::from_utf8_lossy(indexRelationName);
         if extra.flags & INDEX_CREATE_IF_NOT_EXISTS != 0 {
             // index.c:899-902: the NOTICE carries errcode(ERRCODE_DUPLICATE_TABLE)
             // (42P07), which psql shows under VERBOSITY verbose.
             elog_seams::ereport::call(
                 PgError::new(
                     types_error::NOTICE,
-                    format!("relation \"{indexRelationName}\" already exists, skipping"),
+                    format!("relation \"{shown}\" already exists, skipping"),
                 )
                 .with_sqlstate(ERRCODE_DUPLICATE_TABLE),
             )?;
@@ -734,7 +739,7 @@ pub fn index_create<'mcx>(
             return Ok((InvalidOid, InvalidOid));
         }
         return Err(err(
-            format!("relation \"{indexRelationName}\" already exists"),
+            format!("relation \"{shown}\" already exists"),
             ERRCODE_DUPLICATE_TABLE,
         ));
     }
@@ -749,7 +754,8 @@ pub fn index_create<'mcx>(
     {
         return Err(err(
             format!(
-                "constraint \"{indexRelationName}\" for relation \"{}\" already exists",
+                "constraint \"{}\" for relation \"{}\" already exists",
+                String::from_utf8_lossy(indexRelationName),
                 heapRelation.name()
             ),
             types_error::ERRCODE_DUPLICATE_OBJECT,
@@ -1062,7 +1068,7 @@ pub fn index_constraint_create<'mcx>(
     indexRelationId: Oid,
     parentConstraintId: Oid,
     indexInfo: &IndexInfo<'mcx>,
-    constraintName: &str,
+    constraintName: &[u8],
     constraintType: u8,
     constr_flags: u16,
     allow_system_table_mods: bool,

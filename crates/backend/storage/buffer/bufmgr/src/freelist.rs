@@ -91,6 +91,7 @@ fn ctl() -> &'static BufferStrategyControl {
 // nextVictimBuffer, int firstFreeBuffer, int lastFreeBuffer, uint32
 // completePasses, pg_atomic_uint32 numBufferAllocs, int bgwprocno = 28,
 // MAXALIGN 32.
+const C_SIZEOF_BUFFER_STRATEGY_CONTROL: usize = 28;
 const C_MAXALIGN_SIZEOF_BUFFER_STRATEGY_CONTROL: usize = 32;
 
 /// StrategyShmemSize (freelist.c:463): the lookup hash table (see
@@ -107,6 +108,9 @@ pub fn StrategyShmemSize() -> PgResult<usize> {
 
 pub fn StrategyInitialize(nbuffers: i32) -> PgResult<()> {
     InitBufTable(nbuffers + lwlock::NUM_BUFFER_PARTITIONS)?;
+    // freelist.c:494: the control block's ShmemIndex row; the live state is
+    // the OnceLock below.
+    shmem::ShmemInitStruct("Buffer Strategy Status", C_SIZEOF_BUFFER_STRATEGY_CONTROL)?;
     STRATEGY
         .set(BufferStrategyControl {
             clock: CacheAligned(ClockSweep {
@@ -149,31 +153,42 @@ fn ClockSweepTick() -> i32 {
         let original_victim = victim;
         victim %= nbuffers;
         if victim == 0 {
-            let mut expected = original_victim + 1;
-            c.buffer_strategy_lock.with(|| loop {
-                let wrapped = expected % nbuffers;
-                match c.clock.next_victim_buffer.compare_exchange(
-                    expected,
-                    wrapped,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                ) {
-                    Ok(_) => {
-                        // SAFETY: strategy spinlock held.
-                        unsafe { *c.clock.complete_passes.get() += 1 };
-                        break;
-                    }
-                    Err(v) => {
-                        if v < nbuffers {
-                            break;
-                        }
-                        expected = v;
-                    }
-                }
-            });
+            fold_clock_hand(original_victim + 1);
         }
     }
     victim as i32
+}
+
+/// freelist.c:155-171: a wraparound caller folds the hand and counts its
+/// pass; when another wraparound caller folded first the CAS is retried
+/// against the folded value (a no-op) and still counts, so completePasses
+/// equals the number of laps.
+pub(crate) fn fold_clock_hand(mut expected: u32) {
+    let c = ctl();
+    let nbuffers = NBuffersInited() as u32;
+    c.buffer_strategy_lock.with(|| loop {
+        let wrapped = expected % nbuffers;
+        match c.clock.next_victim_buffer.compare_exchange(
+            expected,
+            wrapped,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => {
+                // SAFETY: strategy spinlock held.
+                unsafe { *c.clock.complete_passes.get() += 1 };
+                break;
+            }
+            Err(v) => expected = v,
+        }
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn set_clock_hand_for_test(hand: u32) {
+    let c = ctl();
+    c.buffer_strategy_lock
+        .with(|| c.clock.next_victim_buffer.store(hand, Ordering::Relaxed));
 }
 
 /// Returns the victim with its header spinlock HELD (`Victim` carries that

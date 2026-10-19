@@ -210,15 +210,21 @@ fn backend_arm_opens_and_syncs_through_fd_seams() {
     std::fs::write(dir.join("global/pg_control"), fixture_bytes()).unwrap();
     let datadir = dir.to_str().unwrap();
 
+    // controldata_utils.c:79: the read opens through OpenTransientFile, i.e.
+    // BasicOpenFilePerm's EMFILE/ENFILE release-and-retry loop, never a raw
+    // open(2) (regression).
     let (mut cf, crc_ok) = get_controlfile(datadir).unwrap();
     assert!(crc_ok);
-    assert_eq!(my_file_trace(), Vec::<&str>::new());
+    assert_eq!(my_file_trace(), vec!["basic_open_file"]);
 
     update_controlfile(datadir, &mut cf, true).unwrap();
-    assert_eq!(my_file_trace(), vec!["basic_open_file", "pg_fsync"]);
+    assert_eq!(my_file_trace(), vec!["basic_open_file", "basic_open_file", "pg_fsync"]);
 
     update_controlfile(datadir, &mut cf, false).unwrap();
-    assert_eq!(my_file_trace(), vec!["basic_open_file", "pg_fsync", "basic_open_file"]);
+    assert_eq!(
+        my_file_trace(),
+        vec!["basic_open_file", "basic_open_file", "pg_fsync", "basic_open_file"]
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

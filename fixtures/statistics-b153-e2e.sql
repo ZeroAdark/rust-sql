@@ -1,0 +1,43 @@
+-- Two-binary differential corpus for the 2026-09-13 bug-inventory batch
+-- batch-153-backend-statistics (C 18.6 oracle vs pgrust). Each leg is one
+-- row of the batch (scripts/statistics-b153-e2e.sh).
+CREATE DATABASE b153e2e TEMPLATE template0 ENCODING 'UTF8';
+\c b153e2e
+\set VERBOSITY verbose
+-- regression: text_to_stavalues re-throws the soft
+-- input error as a WARNING with every field (schema/datatype/constraint).
+CREATE DOMAIN b153_posint AS int CHECK (VALUE > 0);
+CREATE TABLE b153_td(a b153_posint);
+SELECT pg_restore_attribute_stats('schemaname', 'public', 'relname', 'b153_td', 'attname', 'a', 'inherited', false, 'null_frac', 0.1::real, 'most_common_vals', '{-1}'::text, 'most_common_freqs', '{0.5}'::real[]);
+SELECT pg_restore_attribute_stats('schemaname', 'public', 'relname', 'b153_td', 'attname', 'a', 'inherited', false, 'null_frac', 0.1::real, 'most_common_vals', '{x}'::text, 'most_common_freqs', '{0.5}'::real[]);
+-- regression: the MCV build compares adjacent sorted rows twice
+-- (count_distinct_groups, then build_distinct_groups); a user comparator
+-- sees the same number of calls as in C.
+CREATE TYPE b153_myint;
+CREATE FUNCTION b153_myint_in(cstring) RETURNS b153_myint LANGUAGE internal IMMUTABLE STRICT AS 'int4in';
+CREATE FUNCTION b153_myint_out(b153_myint) RETURNS cstring LANGUAGE internal IMMUTABLE STRICT AS 'int4out';
+CREATE TYPE b153_myint (INPUT=b153_myint_in, OUTPUT=b153_myint_out, LIKE=int4);
+CREATE CAST (b153_myint AS int4) WITHOUT FUNCTION AS IMPLICIT;
+CREATE CAST (int4 AS b153_myint) WITHOUT FUNCTION AS ASSIGNMENT;
+CREATE FUNCTION b153_myint_lt(b153_myint, b153_myint) RETURNS bool LANGUAGE internal IMMUTABLE STRICT AS 'int4lt';
+CREATE FUNCTION b153_myint_le(b153_myint, b153_myint) RETURNS bool LANGUAGE internal IMMUTABLE STRICT AS 'int4le';
+CREATE FUNCTION b153_myint_eq(b153_myint, b153_myint) RETURNS bool LANGUAGE internal IMMUTABLE STRICT AS 'int4eq';
+CREATE FUNCTION b153_myint_ge(b153_myint, b153_myint) RETURNS bool LANGUAGE internal IMMUTABLE STRICT AS 'int4ge';
+CREATE FUNCTION b153_myint_gt(b153_myint, b153_myint) RETURNS bool LANGUAGE internal IMMUTABLE STRICT AS 'int4gt';
+CREATE SEQUENCE b153_cmpseq;
+CREATE FUNCTION b153_myint_cmp(b153_myint, b153_myint) RETURNS int LANGUAGE plpgsql IMMUTABLE STRICT AS $$ BEGIN PERFORM nextval('public.b153_cmpseq'); RETURN btint4cmp($1::int, $2::int); END $$;
+CREATE OPERATOR < (LEFTARG=b153_myint, RIGHTARG=b153_myint, PROCEDURE=b153_myint_lt);
+CREATE OPERATOR <= (LEFTARG=b153_myint, RIGHTARG=b153_myint, PROCEDURE=b153_myint_le);
+CREATE OPERATOR = (LEFTARG=b153_myint, RIGHTARG=b153_myint, PROCEDURE=b153_myint_eq);
+CREATE OPERATOR >= (LEFTARG=b153_myint, RIGHTARG=b153_myint, PROCEDURE=b153_myint_ge);
+CREATE OPERATOR > (LEFTARG=b153_myint, RIGHTARG=b153_myint, PROCEDURE=b153_myint_gt);
+CREATE OPERATOR CLASS b153_myint_ops DEFAULT FOR TYPE b153_myint USING btree AS OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, OPERATOR 4 >=, OPERATOR 5 >, FUNCTION 1 b153_myint_cmp(b153_myint, b153_myint);
+CREATE TABLE b153_tm(a b153_myint, b b153_myint);
+INSERT INTO b153_tm SELECT (i%5)::b153_myint, (i%3)::b153_myint FROM generate_series(1,30) i;
+ANALYZE b153_tm;
+CREATE TABLE b153_cnt AS SELECT nextval('b153_cmpseq') - 1 AS univariate;
+CREATE STATISTICS b153_sm (mcv) ON a, b FROM b153_tm;
+SELECT setval('b153_cmpseq', 1, false);
+ANALYZE b153_tm;
+SELECT nextval('b153_cmpseq') - 1 - univariate AS mcv_compares FROM b153_cnt;
+SELECT stxdmcv IS NOT NULL FROM pg_statistic_ext_data WHERE stxoid = (SELECT oid FROM pg_statistic_ext WHERE stxname = 'b153_sm');

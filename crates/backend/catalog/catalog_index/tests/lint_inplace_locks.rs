@@ -1,11 +1,11 @@
 //! Unit-shaped wiring for crates/backend/catalog/catalog_index/tests/lint-inplace-locks.sh — the standing guard
-//! for GL-INPLACE-1 defect (A): a TRANSACTIONAL pg_class updater that does not
+//! for regression defect (A): a TRANSACTIONAL pg_class updater that does not
 //! hold LOCKTAG_TUPLE at InplaceUpdateTupleLock silently discards a concurrent
 //! inplace writer's relfrozenxid/relminmxid advance, which is a durable
 //! wraparound-safety regression rather than a transient wrong answer. Nothing
 //! else catches it: there is no error, no assertion (C's heapam.c:4241
 //! LockHeldByMe assert has no counterpart here), and no output difference —
-//! only a catalog that drifts. See notes/GL-INPLACE-1-letter.md.
+//! only a catalog that drifts. See notes/regression-letter.md.
 //!
 //! Lives in catalog_index because it hosts RelationSetNewRelfilenumber, the
 //! one of the seven sites that writes BOTH relfrozenxid and relminmxid:

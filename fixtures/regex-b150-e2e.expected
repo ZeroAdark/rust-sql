@@ -13,7 +13,7 @@ SELECT count(*) >= 0 AS spencer FROM (SELECT set_config('regex_engine', 'spencer
  t
 (1 row)
 
--- fp-regex-regc_nfa-p2#1: every cached regexp owns a RegexpMemoryContext under
+-- regression: every cached regexp owns a RegexpMemoryContext under
 -- RegexpCacheMemoryContext, identified by its pattern (regexp.c:204,231)
 SELECT 'abc' ~ 'b150_a(b)c' AS m1, 'xyz' ~* '^b150_x.*z$' AS m2, 'abc' ~ 'b150_a(b)c' AS m3;
  m1 | m2 | m3 

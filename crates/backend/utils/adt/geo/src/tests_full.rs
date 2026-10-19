@@ -372,3 +372,36 @@ fn point_count_overflow_is_soft_and_full_size_is_admitted_first() {
     let err = io::poly_in(ctx.mcx(), &s, Some(&mut esc)).unwrap_err();
     assert_eq!(err.message(), "invalid memory alloc request size 1073741832");
 }
+
+// geo_ops.c hands the raw cstring to pair_decode / float8in_internal, whose
+// 22P02 echoes the original bytes even when they are not UTF-8.
+#[test]
+fn geo_in_non_utf8_reports_raw_bytes() {
+    let ctx = MemoryContext::new("t");
+    let err = io::point_in(b"\xff", None).unwrap_err();
+    assert_eq!(err.sqlstate(), ERRCODE_INVALID_TEXT_REPRESENTATION);
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(&b"invalid input syntax for type point: \"\xff\""[..])
+    );
+    let err = io::point_in(b"(1,\xff)", None).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(&b"invalid input syntax for type point: \"(1,\xff)\""[..])
+    );
+    let err = io::path_in(ctx.mcx(), b"\xff", None).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(&b"invalid input syntax for type path: \"\xff\""[..])
+    );
+    let err = io::poly_in(ctx.mcx(), b"\xff", None).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(&b"invalid input syntax for type polygon: \"\xff\""[..])
+    );
+    let err = io::line_in(b"{1,2,\xff}", None).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(&b"invalid input syntax for type line: \"{1,2,\xff}\""[..])
+    );
+}

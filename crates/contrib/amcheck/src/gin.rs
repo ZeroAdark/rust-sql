@@ -10,7 +10,7 @@ use ::gin_vocab::{
 use ::mcx::{Mcx, MemoryContext, PgVec};
 use ::nbtree::itup::{copy_index_tuple, index_tuple_size, ITup};
 use ::types_core::{catalog::GIN_AM_OID, BlockNumber, InvalidBlockNumber, OffsetNumber, Oid, BLCKSZ};
-use ::types_error::{PgError, PgResult, ERRCODE_INDEX_CORRUPTED};
+use ::types_error::{PgError, PgResult, DEBUG1, DEBUG3, ERRCODE_INDEX_CORRUPTED};
 use ::types_rel::Relation;
 use ::types_storage::buf::BufferAccessStrategyType;
 use ::types_storage::bufpage::{ItemIdData, MaxIndexTuplesPerPage, PageRef};
@@ -47,6 +47,10 @@ unsafe fn copy_itup_arena(amcx: Mcx<'_>, itup: ITup) -> PgResult<ITup> {
 #[track_caller]
 #[cold]
 #[inline(never)]
+fn debug(level: ::types_error::ErrorLevel, msg: String) -> PgResult<()> {
+    elog_seams::ereport::call(PgError::new(level, msg))
+}
+
 fn corrupt(msg: String) -> Box<PgError> {
     Box::new(PgError::error(msg).with_sqlstate(ERRCODE_INDEX_CORRUPTED))
 }
@@ -173,6 +177,8 @@ fn gin_check_posting_tree_parent_keys_consistency(
         blkno: posting_tree_root,
     });
 
+    debug(DEBUG3, format!("processing posting tree at blk {posting_tree_root}"))?;
+
     while let Some(cur) = stack.pop() {
         ::gin::check_for_interrupts()?;
 
@@ -208,6 +214,8 @@ fn check_posting_tree_page(
     if opaque.flags & GIN_LEAF != 0 {
         let min_item = item_pointer_set_min();
 
+        debug(DEBUG1, format!("page blk: {}, type leaf", cur.blkno))?;
+
         if *leafdepth == -1 {
             *leafdepth = cur.depth;
         } else if cur.depth != *leafdepth {
@@ -221,6 +229,33 @@ fn check_posting_tree_page(
         let mut list: PgVec<'_, ItemPointerData> = mcx::vec_new_in(amcx);
         ginam::gin_data_leaf_page_get_items(bytes, &min_item, &mut list)?;
         let nlist = list.len();
+
+        let tidrange = if nlist > 0 {
+            format!(
+                "{} tids ({}, {}) - ({}, {})",
+                nlist,
+                ItemPointerGetBlockNumberNoCheck(&list[0]),
+                ItemPointerGetOffsetNumberNoCheck(&list[0]),
+                ItemPointerGetBlockNumberNoCheck(&list[nlist - 1]),
+                ItemPointerGetOffsetNumberNoCheck(&list[nlist - 1])
+            )
+        } else {
+            "0 tids".to_string()
+        };
+        if cur.parentblk != InvalidBlockNumber {
+            debug(
+                DEBUG3,
+                format!(
+                    "blk {}: parent {} highkey ({}, {}), {tidrange}",
+                    cur.blkno,
+                    cur.parentblk,
+                    ItemPointerGetBlockNumberNoCheck(&cur.parentkey),
+                    ItemPointerGetOffsetNumberNoCheck(&cur.parentkey)
+                ),
+            )?;
+        } else {
+            debug(DEBUG3, format!("blk {}: root leaf, {tidrange}", cur.blkno))?;
+        }
 
         if cur.parentblk != InvalidBlockNumber
             && ItemPointerGetOffsetNumberNoCheck(&cur.parentkey) != InvalidOffsetNumber
@@ -238,6 +273,26 @@ fn check_posting_tree_page(
 
     let maxoff = opaque.maxoff;
     let rightlink = opaque.rightlink;
+
+    debug(DEBUG1, format!("page blk: {}, type data, maxoff {maxoff}", cur.blkno))?;
+
+    if cur.parentblk != InvalidBlockNumber {
+        debug(
+            DEBUG3,
+            format!(
+                "blk {}: internal posting tree page with {maxoff} items, parent {} highkey ({}, {})",
+                cur.blkno,
+                cur.parentblk,
+                ItemPointerGetBlockNumberNoCheck(&cur.parentkey),
+                ItemPointerGetOffsetNumberNoCheck(&cur.parentkey)
+            ),
+        )?;
+    } else {
+        debug(
+            DEBUG3,
+            format!("blk {}: root internal posting tree page with {maxoff} items", cur.blkno),
+        )?;
+    }
 
     let pd_lower = page.pd_lower();
     let lowersize = (pd_lower as usize).wrapping_sub(MAXALIGN(SizeOfPageHeaderData));
@@ -273,6 +328,19 @@ fn check_posting_tree_page(
     let mut i = FirstOffsetNumber;
     while i <= maxoff {
         let posting_item = ginam::posting_item_at(bytes, i);
+
+        let (key_blk, key_off) = if !(i == maxoff && rightlink == InvalidBlockNumber) {
+            (
+                ItemPointerGetBlockNumberNoCheck(&posting_item.key),
+                ItemPointerGetOffsetNumberNoCheck(&posting_item.key),
+            )
+        } else {
+            (0, 0)
+        };
+        debug(
+            DEBUG3,
+            format!("key ({key_blk}, {key_off}) -> {}", PostingItemGetBlockNumber(&posting_item)),
+        )?;
 
         if i == maxoff && rightlink == InvalidBlockNumber {
             if ItemPointerGetBlockNumberNoCheck(&posting_item.key) != 0
@@ -394,6 +462,8 @@ fn check_entry_page<'a>(
 
     check_index_page(rel, page, cur.blkno)?;
 
+    debug(DEBUG3, format!("processing entry tree page at blk {}, maxoff: {maxoff}", cur.blkno))?;
+
     if let Some(parenttup) = cur.parenttup {
         let mut parent_key_category = GIN_CAT_NORM_KEY;
         // SAFETY: parenttup is an owned copy of a live entry tuple.
@@ -425,6 +495,10 @@ fn check_entry_page<'a>(
                 parent_key_category,
             )? < 0
         {
+            debug(
+                DEBUG3,
+                format!("split detected for blk: {}, parent blk: {}", cur.blkno, cur.parentblk),
+            )?;
             // SAFETY: parenttup is a live owned tuple copy.
             let copy = unsafe { copy_itup_arena(amcx, parenttup)? };
             stack.push(GinEntryScanItem {
@@ -627,7 +701,7 @@ fn check_index_page(rel: &Relation<'_>, page: &PageRef<'_>, block_no: BlockNumbe
         ));
     }
 
-    if BLCKSZ - page.pd_special() as usize != MAXALIGN(core::mem::size_of::<GinPageOpaqueData>()) {
+    if page.special_size() as usize != MAXALIGN(core::mem::size_of::<GinPageOpaqueData>()) {
         return Err(Box::new(
             PgError::error(format!(
                 "index \"{}\" contains corrupted page at block {}",
@@ -965,8 +1039,27 @@ mod tests {
     // buffer every iteration; the bump arena cannot, so the walk must not
     // allocate them at all. After the first page the check arena is at its
     // steady state and further pages must not move its footprint.
+    static EREPORTS: std::sync::Mutex<Vec<(std::thread::ThreadId, String)>> =
+        std::sync::Mutex::new(Vec::new());
+
+    // The walk's DEBUG lines (verify_gin.c:444) go through the ereport seam;
+    // a bare test session collects them here (nothing at ERROR or above).
+    fn install_ereport_stub() {
+        if !elog_seams::ereport::is_installed() {
+            elog_seams::ereport::set(|err| {
+                assert!(err.level().0 < ::types_error::ERROR.0, "ereport seam: {}", err.message());
+                EREPORTS
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push((std::thread::current().id(), err.message().to_string()));
+                Ok(())
+            });
+        }
+    }
+
     #[test]
     fn entry_page_walk_keeps_the_check_arena_flat() {
+        install_ereport_stub();
         let fixture = MemoryContext::new_bump("amcheck gin walk fixture");
         let fmcx = fixture.mcx();
         let rel = int4_gin_rel(fmcx);
@@ -1009,6 +1102,15 @@ mod tests {
         }
         let after_all = arena.stats().arena_footprint;
         assert!(stack.is_empty() && leafdepth == 0);
+        let me = std::thread::current().id();
+        let walk_line = format!("processing entry tree page at blk {GIN_ROOT_BLKNO}, maxoff: {ntuples}");
+        let announced = EREPORTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|(t, m)| *t == me && *m == walk_line)
+            .count();
+        assert_eq!(announced, 32, "verify_gin.c:444 DEBUG3 line per page visited");
         assert_eq!(
             after_first, after_all,
             "check arena grew by {} bytes over 31 more pages of {ntuples} tuples: per-tuple copies leak",

@@ -344,3 +344,86 @@ fn write_failure_report_avoids_the_collector_input_pipe() {
         libc::close(fds[1]);
     }
 }
+
+/// jsonlog.c:212: state_code is emitted only for a non-zero sqlerrcode;
+/// INFO/NOTICE/LOG records (ERRCODE_SUCCESSFUL_COMPLETION) carry no key.
+#[test]
+fn jsonlog_omits_state_code_for_successful_completion() {
+    let _g = lock();
+    let info = types_error::PgError::new(types_error::LOG, "hello".to_string());
+    assert_eq!(info.sqlstate, types_error::ERRCODE_SUCCESSFUL_COMPLETION);
+    let line = errlog::jsonlog_line(&info);
+    assert!(!line.contains("\"state_code\""), "{line}");
+    assert!(line.contains("\"error_severity\":\"LOG\""), "{line}");
+    let err = types_error::PgError::new(types_error::ERROR, "boom".to_string());
+    let line = errlog::jsonlog_line(&err);
+    assert!(line.contains("\"state_code\":\"XX000\""), "{line}");
+}
+
+/// syslogger.c:1229: fopen("a") through a dangling symlink creates the
+/// target (with the log_file_mode mode) instead of failing with ENOENT.
+#[cfg(unix)]
+#[test]
+fn logfile_open_creates_the_target_of_a_dangling_symlink() {
+    use std::os::unix::fs::PermissionsExt;
+    let _g = lock();
+    let dir = std::env::temp_dir().join(format!("sysltest-symlink-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("target.log");
+    let link = dir.join("fixed.log");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let saved = LOG_FILE_MODE.swap(0o600, Relaxed);
+    let fh = logfile_open(link.to_str().unwrap(), "a", true).unwrap();
+    assert!(!fh.is_null(), "logfile_open through a dangling symlink failed");
+    unsafe { libc::fclose(fh) };
+    LOG_FILE_MODE.store(saved, Relaxed);
+    let md = std::fs::metadata(&target).expect("symlink target created");
+    assert_eq!(md.permissions().mode() & 0o777, 0o600);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+static FORK_FAILURE_LOGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn capture_fork_failure(e: &PgError, _output_to_server: &mut bool) {
+    FORK_FAILURE_LOGS.lock().unwrap_or_else(|p| p.into_inner()).push(e.message().to_string());
+}
+
+// syslogger.c:711: "could not fork system logger: %m" carries the launch
+// failure's errno.
+#[test]
+fn fork_failure_message_expands_errno() {
+    let _g = lock();
+    FORK_FAILURE_LOGS.lock().unwrap_or_else(|p| p.into_inner()).clear();
+    let prior = elog::sink::set_emit_log_hook(Some(capture_fork_failure));
+    log_fork_failure(libc::EAGAIN).unwrap();
+    elog::sink::set_emit_log_hook(prior);
+    let logs = FORK_FAILURE_LOGS.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let expected = format!("could not fork system logger: {}", elog::errno::strerror(libc::EAGAIN));
+    assert!(logs.iter().any(|m| m == &expected), "expected {expected:?}, got {logs:?}");
+}
+
+/// csvlog.c:79 / jsonlog.c:126: the per-writer line counter (and the cached
+/// session-start time) restart when MyProcPid changes — a retained pool
+/// thread's next task pid must not inherit the previous task's count.
+#[test]
+fn log_line_number_restarts_when_my_proc_pid_changes() {
+    let _g = lock();
+    let prev = init_small::globals::MyProcPid();
+    let info = types_error::PgError::new(types_error::LOG, "hello".to_string());
+    init_small::globals::SetMyProcPid(777001);
+    let _ = errlog::jsonlog_line(&info);
+    let _ = errlog::csvlog_line(&info);
+    let json = errlog::jsonlog_line(&info);
+    let csv = errlog::csvlog_line(&info);
+    assert!(json.contains("\"line_num\":2,"), "{json}");
+    assert!(csv.contains(",777001,,"), "{csv}");
+    assert!(csv.contains(".bdb29,2,"), "{csv}");
+    init_small::globals::SetMyProcPid(777002);
+    let json = errlog::jsonlog_line(&info);
+    let csv = errlog::csvlog_line(&info);
+    assert!(json.contains("\"line_num\":1,"), "{json}");
+    assert!(csv.contains(",777002,,"), "{csv}");
+    assert!(csv.contains(".bdb2a,1,"), "{csv}");
+    init_small::globals::SetMyProcPid(prev);
+}

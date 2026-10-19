@@ -53,12 +53,37 @@ struct SpgVacState<'a, 'cb, 'mcx> {
     last_filled_block: BlockNumber,
 }
 
-fn vacuum_delay_point() -> PgResult<()> {
-    crate::check_for_interrupts()?;
-    if init_small::globals::VacuumCostActive() {
-        vacuum_seams::vacuum_delay_point::call(false)?;
+// spgvacuum.c:869/712 call vacuum_delay_point unconditionally: an autovacuum
+// worker's pending config reload is processed there even while
+// VacuumCostActive is false; unit rigs without seams_init keep the bare
+// interrupt check.
+pub(crate) fn vacuum_delay_point() -> PgResult<()> {
+    if vacuum_seams::vacuum_delay_point::is_installed() {
+        return vacuum_seams::vacuum_delay_point::call(false);
     }
-    Ok(())
+    crate::check_for_interrupts()
+}
+
+// RELATION_IS_LOCAL (rel.h:659).
+fn relation_is_local(rel: &::types_rel::RelationData<'_>) -> bool {
+    rel.rd_islocaltemp
+        || rel.rd_createSubid.get() != ::types_core::InvalidSubTransactionId
+}
+
+// spgvacuum.c:851-854: the relation length is read under the extension lock
+// for a shared relation, so a concurrent SpGistNewBuffer extension cannot
+// expose its still-zeroed page to this scan.
+pub(crate) fn relation_length_for_scan(index: &Relation<'_>) -> PgResult<BlockNumber> {
+    let need_lock = !relation_is_local(index);
+    if need_lock {
+        ::lmgr::LockRelationForExtension(index, ::types_rel::ExclusiveLock)?;
+    }
+    let num_pages =
+        bufmgr::relation_get_number_of_blocks_in_fork::call(index, ForkNumber::MAIN_FORKNUM)?;
+    if need_lock {
+        ::lmgr::UnlockRelationForExtension(index, ::types_rel::ExclusiveLock)?;
+    }
+    Ok(num_pages)
 }
 
 // vac_tid_reaped over the sorted dead-TID image; the collect callback never
@@ -435,7 +460,7 @@ fn vacuum_redirect_and_placeholder(
                 }
 
                 dt.tupstate = SPGIST_PLACEHOLDER;
-                dt.pointer = ItemPointerData::default();
+                dt.pointer = ItemPointerData::invalid();
                 dt.encode(dt_slice);
 
                 item_to_placeholder.push(i);
@@ -658,7 +683,6 @@ fn spgprocesspending(state: &mut SpgVacState<'_, '_, '_>) -> PgResult<()> {
 
 /// spgvacuumscan: physical-order scan; the relation length is rechecked so
 /// pages added by concurrent splits are visited.
-/// LockRelationForExtension around the length check: single-backend no-op.
 fn spgvacuumscan<'mcx>(
     info: &IndexVacuumInfo<'_, 'mcx>,
     stats: &mut IndexBulkDeleteResult,
@@ -686,8 +710,7 @@ fn spgvacuumscan<'mcx>(
     let mut current: BlockNumber = SPGIST_METAPAGE_BLKNO + 1;
     let mut num_pages;
     loop {
-        num_pages =
-            bufmgr::relation_get_number_of_blocks_in_fork::call(index, ForkNumber::MAIN_FORKNUM)?;
+        num_pages = relation_length_for_scan(index)?;
         if current >= num_pages {
             break;
         }
@@ -807,6 +830,67 @@ mod pending_drain_tests {
 }
 
 #[cfg(test)]
+mod scan_length_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    use std::sync::Once;
+    use ::mcx::MemoryContext;
+
+    static DELAY_POINT_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static EXT_LOCKS: AtomicUsize = AtomicUsize::new(0);
+    static EXT_UNLOCKS: AtomicUsize = AtomicUsize::new(0);
+
+    fn install() {
+        static INSTALL: Once = Once::new();
+        INSTALL.call_once(|| {
+            vacuum_seams::vacuum_delay_point::set(|_is_analyze| {
+                DELAY_POINT_CALLS.fetch_add(1, SeqCst);
+                Ok(())
+            });
+            lock_seams::lock_acquire_extended::set(|tag, mode, _, _, _, _| {
+                assert_eq!(mode, ::types_rel::ExclusiveLock);
+                assert_eq!(tag, ::types_storage::lock::LOCKTAG::relation_extend(tag.locktag_field1, tag.locktag_field2));
+                EXT_LOCKS.fetch_add(1, SeqCst);
+                Ok(::types_storage::lock::LOCKACQUIRE_OK)
+            });
+            lock_seams::lock_release::set(|_, _, _| {
+                EXT_UNLOCKS.fetch_add(1, SeqCst);
+                Ok(true)
+            });
+            bufmgr::relation_get_number_of_blocks_in_fork::set(|_, _| Ok(7));
+        });
+    }
+
+    // spgvacuum.c:869: the per-page delay point reaches vacuum_delay_point
+    // even while VacuumCostActive is false (a pending autovacuum config
+    // reload is processed there).
+    #[test]
+    fn vacuum_delay_point_reaches_the_seam_without_cost_active() {
+        install();
+        assert!(!init_small::globals::VacuumCostActive());
+        let before = DELAY_POINT_CALLS.load(SeqCst);
+        vacuum_delay_point().unwrap();
+        assert_eq!(DELAY_POINT_CALLS.load(SeqCst), before + 1);
+    }
+
+    // spgvacuum.c:851-854: the length check of a shared index is bracketed by
+    // the relation-extension ExclusiveLock; a local relation skips it.
+    #[test]
+    fn relation_length_is_read_under_the_extension_lock() {
+        install();
+        let _g = crate::tests::lock();
+        let cx = MemoryContext::new_bump("spgvacuum length test");
+        let index = crate::tests::index_rel(cx.mcx());
+        let (l0, u0) = (EXT_LOCKS.load(SeqCst), EXT_UNLOCKS.load(SeqCst));
+        assert_eq!(relation_length_for_scan(&index).unwrap(), 7);
+        assert_eq!((EXT_LOCKS.load(SeqCst), EXT_UNLOCKS.load(SeqCst)), (l0 + 1, u0 + 1));
+        index.rd_createSubid.set(1);
+        assert_eq!(relation_length_for_scan(&index).unwrap(), 7);
+        assert_eq!((EXT_LOCKS.load(SeqCst), EXT_UNLOCKS.load(SeqCst)), (l0 + 1, u0 + 1));
+    }
+}
+
+#[cfg(test)]
 mod crit_section_tests {
     use super::*;
     use crate::tests::{
@@ -914,5 +998,42 @@ mod crit_section_tests {
         assert_eq!(take_crit_section_count(), 0, "END_CRIT_SECTION after the WAL record");
         assert_eq!(stats.tuples_removed, 1.0);
         assert_eq!(buf_page_mut(buffer).as_ref().max_offset_number(), 0);
+    }
+
+    // spgvacuum.c:551 ItemPointerSetInvalid: a REDIRECT aged into a PLACEHOLDER
+    // stores (InvalidBlockNumber, 0), the bytes spgxlog.c:899 redo writes too.
+    #[test]
+    fn redirect_to_placeholder_stores_an_invalid_pointer() {
+        let _serial = lock();
+        install();
+        if !procarray_seams::global_vis_test_for::is_installed() {
+            procarray_seams::global_vis_test_for::set(|_rel| ::types_core::GlobalVisStateHandle::new(3));
+        }
+        if !::transam_xlog_seams::xlog_logical_info_active::is_installed() {
+            ::transam_xlog_seams::xlog_logical_info_active::set(|| false);
+        }
+        let buffer = push_page();
+        {
+            let mut pm = buf_page_mut(buffer);
+            ::types_spgist::SpGistInitPage(&mut pm, ::types_spgist::SPGIST_LEAF);
+            let dead = ::types_spgist::spgFormDeadTuple(0, SPGIST_REDIRECT, 5, 2);
+            assert_eq!(pm.add_item(&dead, InvalidOffsetNumber, 0), Some(FirstOffsetNumber));
+            let lt = leaf_tuple(ItemPointerData::new(10, 1));
+            assert_eq!(pm.add_item(&lt, InvalidOffsetNumber, 0), Some(2));
+            page_opaque_update(&mut pm, |op| op.nRedirection = 1);
+        }
+        let ctx = MemoryContext::new("t");
+        let index = index_rel(ctx.mcx());
+        let heap = heap_rel(ctx.mcx());
+        init_small::globals::SetCritSectionCount(0);
+        set_wal_fail(false);
+        vacuum_redirect_and_placeholder(&index, &heap, buffer)
+            .unwrap_or_else(|e| panic!("vacuumRedirectAndPlaceholder on the fake pool: {e:?}"));
+        assert_eq!(take_crit_section_count(), 0);
+        let pm = buf_page_mut(buffer);
+        let dt = SpGistDeadTupleHeader::decode(item_slice(&pm.as_ref(), FirstOffsetNumber));
+        assert_eq!(dt.tupstate, SPGIST_PLACEHOLDER);
+        assert_eq!(dt.pointer, ItemPointerData::invalid());
+        assert_eq!(page_opaque(&pm.as_ref()).nPlaceholder, 1);
     }
 }

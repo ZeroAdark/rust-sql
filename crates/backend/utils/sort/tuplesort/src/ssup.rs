@@ -156,24 +156,15 @@ pub fn apply_cmp(cmp: SortComparator, x: Datum, y: Datum) -> i32 {
             })
         },
         SortComparator::NameC => {
-            // SAFETY: name datums point at live 64-byte NameData blocks.
-            let (a, b) = unsafe {
-                (
-                    &*(x.as_usize() as *const [u8; 64]),
-                    &*(y.as_usize() as *const [u8; 64]),
-                )
-            };
+            // SAFETY: name datums are live NameData blocks or, for btree
+            // name_ops index keys, NUL-terminated cstrings.
+            let (a, b) = unsafe { (name_datum_bytes(x), name_datum_bytes(y)) };
             namefastcmp_c(a, b)
         }
         SortComparator::NameLocale(locale) => {
             // SAFETY: as NameC.
-            let (a, b) = unsafe {
-                (
-                    &*(x.as_usize() as *const [u8; 64]),
-                    &*(y.as_usize() as *const [u8; 64]),
-                )
-            };
-            varstrfastcmp_locale(name_cstr(a), name_cstr(b), locale, false)
+            let (a, b) = unsafe { (name_datum_bytes(x), name_datum_bytes(y)) };
+            varstrfastcmp_locale(a, b, locale, false)
         }
         // SAFETY: as TextC.
         SortComparator::TextLocale(locale) => unsafe {
@@ -240,24 +231,40 @@ pub fn apply_cmp(cmp: SortComparator, x: Datum, y: Datum) -> i32 {
     }
 }
 
-fn name_cstr(n: &[u8; 64]) -> &[u8] {
-    let len = n.iter().position(|&b| b == 0).unwrap_or(64);
-    &n[..len]
+/// A name datum's bytes before its NUL (at most NAMEDATALEN). Index builds
+/// sort btree name_ops keys, which are stored as cstring (opckeytype), so the
+/// datum may end at its NUL: read byte by byte and stop there, as C's strncmp.
+///
+/// # Safety
+/// `d` points at memory readable through its first NUL or 64 bytes, whichever
+/// comes first, and live for `'a`.
+unsafe fn name_datum_bytes<'a>(d: Datum) -> &'a [u8] {
+    let p = d.as_usize() as *const u8;
+    let mut len = 0;
+    // SAFETY: bytes up to and including the first NUL are readable (caller).
+    while len < 64 && unsafe { p.add(len).read() } != 0 {
+        len += 1;
+    }
+    // SAFETY: the first `len` bytes were just read.
+    unsafe { core::slice::from_raw_parts(p, len) }
 }
 
-// C namefastcmp_c: strncmp(NameStr, NameStr, NAMEDATALEN).
+// C namefastcmp_c: strncmp(NameStr, NameStr, NAMEDATALEN), over the bytes
+// before each NUL (the shorter name's NUL compares as 0).
 #[inline]
-fn namefastcmp_c(a: &[u8; 64], b: &[u8; 64]) -> i32 {
-    for i in 0..64 {
+fn namefastcmp_c(a: &[u8], b: &[u8]) -> i32 {
+    let n = a.len().min(b.len());
+    for i in 0..n {
         let (x, y) = (a[i], b[i]);
         if x != y {
             return if x < y { -1 } else { 1 };
         }
-        if x == 0 {
-            return 0;
-        }
     }
-    0
+    match (a.len() > n, b.len() > n) {
+        (true, false) => 1,
+        (false, true) => -1,
+        _ => 0,
+    }
 }
 
 std::thread_local! {
@@ -327,13 +334,19 @@ pub fn apply_cmp_in(cmp: SortComparator, x: Datum, y: Datum, collation: Oid, mcx
 }
 
 // varstrfastcmp_locale (varlena.c); the tie-break memcmp+len equals C's
-// strcmp (text carries no NULs).
-fn varstrfastcmp_locale(a1: &[u8], a2: &[u8], locale: &pg_locale::PgLocale, bpchar: bool) -> i32 {
+// strcmp (text carries no NULs; a char_bpchar NUL is cut like C's
+// NUL-terminated buf1/buf2 at varlena.c:2306,2320).
+pub(crate) fn varstrfastcmp_locale(
+    a1: &[u8],
+    a2: &[u8],
+    locale: &pg_locale::PgLocale,
+    bpchar: bool,
+) -> i32 {
     if a1.len() == a2.len() && a1 == a2 {
         return 0;
     }
     let (a1, a2) = if bpchar {
-        (bpchartruelen(a1), bpchartruelen(a2))
+        (nul_truncate(bpchartruelen(a1)), nul_truncate(bpchartruelen(a2)))
     } else {
         (a1, a2)
     };
@@ -349,6 +362,13 @@ fn varstrfastcmp_locale(a1: &[u8], a2: &[u8], locale: &pg_locale::PgLocale, bpch
         return varlena::varstrfastcmp_c(a1, a2);
     }
     result
+}
+
+fn nul_truncate(s: &[u8]) -> &[u8] {
+    match s.iter().position(|&b| b == 0) {
+        Some(i) => &s[..i],
+        None => s,
+    }
 }
 
 fn bpchartruelen(s: &[u8]) -> &[u8] {
@@ -582,7 +602,7 @@ pub fn prepare_sort_support_abbrev(
     ))
 }
 
-fn abbrev_arm_for(comparator: SortComparator) -> Option<AbbrevArm> {
+pub(crate) fn abbrev_arm_for(comparator: SortComparator) -> Option<AbbrevArm> {
     let kind = match comparator {
         SortComparator::TextC => AbbrevKind::VarStrC,
         SortComparator::BpcharC => AbbrevKind::BpcharC,
@@ -664,8 +684,9 @@ pub fn comparator_for_opfamily(
         F_BTFLOAT4SORTSUPPORT => SortComparator::Float32,
         F_BTFLOAT8SORTSUPPORT => SortComparator::Float64,
         F_BTINT2SORTSUPPORT => SortComparator::Int16,
-        // btoidfastcmp: unsigned; the zero-extended datum word compares exact.
-        F_BTOIDSORTSUPPORT => SortComparator::Unsigned,
+        // btoidfastcmp truncates to Oid: datum words reach here both
+        // sign-extended (tuple deform) and zero-extended (oidin).
+        F_BTOIDSORTSUPPORT => SortComparator::Uint32,
         F_BTINT8SORTSUPPORT | F_TIMESTAMP_SORTSUPPORT => SortComparator::SignedI64,
         F_BTTEXTSORTSUPPORT | F_BPCHAR_SORTSUPPORT => {
             varstr_comparator(sort_support_function == F_BPCHAR_SORTSUPPORT, collation)?
@@ -766,6 +787,9 @@ pub fn comparator_for_gist_index_col(opfamily: Oid, opcintype: Oid) -> PgResult<
                 Datum::from_usize(&mut shim as *mut ::types_gist::GistSortSupportShim as usize),
             );
             flinfo.invoke(&mut frame)?;
+            if frame.isnull {
+                return Err(Box::new(PgError::error(format!("function {other} returned NULL"))));
+            }
             match shim.comparator {
                 Some(cmp) => Ok(SortComparator::GistOpclass(cmp)),
                 None => panic!("gist sortsupport proc {other} installed no comparator"),
@@ -897,8 +921,57 @@ mod name_ssup_tests {
         zebra[..5].copy_from_slice(b"Zebra");
         let mut apple = [0u8; 64];
         apple[..5].copy_from_slice(b"apple");
-        assert!(namefastcmp_c(&zebra, &apple) < 0);
-        assert_eq!(name_cstr(&zebra), b"Zebra");
+        // SAFETY: NUL-terminated 64-byte blocks on the stack.
+        let (z, a) = unsafe {
+            (
+                name_datum_bytes(Datum::from_usize(zebra.as_ptr() as usize)),
+                name_datum_bytes(Datum::from_usize(apple.as_ptr() as usize)),
+            )
+        };
+        assert!(namefastcmp_c(z, a) < 0);
+        assert_eq!(z, b"Zebra");
+        assert!(namefastcmp_c(b"abc", b"abcd") < 0);
+        assert!(namefastcmp_c(b"abcd", b"abc") > 0);
+        assert_eq!(namefastcmp_c(b"abc", b"abc"), 0);
+    }
+
+    // #2722: an index build sorts btree name_ops keys, stored as cstring
+    // (opckeytype); the comparator reads one through its NUL and no further.
+    // The key sits right before a PROT_NONE page.
+    #[cfg(unix)]
+    #[test]
+    fn namec_reads_cstring_keys_only_through_their_nul() {
+        // SAFETY: sysconf is always callable.
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        // SAFETY: fresh private anonymous mapping of two pages; the second is
+        // made inaccessible, the first holds the key in its last bytes.
+        let at = unsafe {
+            let base = libc::mmap(
+                core::ptr::null_mut(),
+                2 * page,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            );
+            assert_ne!(base, libc::MAP_FAILED);
+            let base = base.cast::<u8>();
+            assert_eq!(libc::mprotect(base.add(page).cast(), page, libc::PROT_NONE), 0);
+            let key = b"abs_27457\0";
+            let at = base.add(page - key.len());
+            core::ptr::copy_nonoverlapping(key.as_ptr(), at, key.len());
+            at
+        };
+        let mut full = [0u8; 64];
+        full[..9].copy_from_slice(b"abs_27457");
+        let key = Datum::from_usize(at as usize);
+        let other = Datum::from_usize(full.as_ptr() as usize);
+        assert_eq!(apply_cmp(SortComparator::NameC, key, other), 0);
+        assert_eq!(apply_cmp(SortComparator::NameC, other, key), 0);
+        full[4] = b'3';
+        assert!(apply_cmp(SortComparator::NameC, key, other) < 0);
+        // SAFETY: the mapping made above; nothing refers to it any more.
+        unsafe { libc::munmap(at.sub(page - 10).cast(), 2 * page) };
     }
 }
 

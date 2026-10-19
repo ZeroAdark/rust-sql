@@ -1,8 +1,8 @@
-//! GL-FLUSHPIPE-1 — the pending-flush queue (flush pipelining v1).
+//! regression — the pending-flush queue (flush pipelining v1).
 //!
 //! PORTED from the pre-v0.2 main (archive/main-t56-20260729): the v1
 //! stack-node queue (archive 7a9a683159 + liveness 796e776348 + the
-//! GL-FLUSHSIM-1 findings a2433546a4) and the inc-5(d) d1 DeferredTail
+//! regression findings a2433546a4) and the inc-5(d) d1 DeferredTail
 //! ticket half (archive e3bcfe4b1b). The stmt-task d2 commit-PREFIX
 //! bracket (worker-inserted commit records + the committail mode) was NOT
 //! ported — it is stmt-as-task substrate; the deferred-ticket API below is
@@ -29,7 +29,7 @@
 //! XLogFlush(XactLastRecEnd), xact.c:1502); the caller still returns only
 //! when the record is durable, and clog mark / ProcArrayEndTransaction /
 //! lock release / the ack all stay after durability, byte-C. See
-//! GL-FLUSHPIPE-1 letter §2 (the split decision: "v1 splits nothing",
+//! regression letter §2 (the split decision: "v1 splits nothing",
 //! coordinator-signed).
 //!
 //! # Knob
@@ -172,7 +172,7 @@ pub struct FlushPipeStats {
     pub retry_rearm: AtomicU64,
     /// Completions observed only AFTER a timeout lap (the directed wake
     /// was lost/misdirected/late; the completion itself still delivered).
-    /// GL-FLUSHSIM-1 §5.2: closes the stats blind spot for lost WAKES —
+    /// regression §5.2: closes the stats blind spot for lost WAKES —
     /// nonzero in steady state is the soft missed-wake tripwire (the node
     /// still exits via `completed`, so the L4 conservation identity
     /// registered == completed + self_served + backstop_self_served +
@@ -211,7 +211,7 @@ pub(crate) fn count_leader_flush() {
     trace(|| "leader flush".into());
 }
 
-/// GL-FLUSHSIM-1 negotiated seam (letter §5.3 ask 1) — SIM BUILDS ONLY,
+/// regression negotiated seam (letter §5.3 ask 1) — SIM BUILDS ONLY,
 /// zero production cost: the flushsim mutation battery arms this one-shot
 /// flag to make the NEXT registration skip its queue link (the true
 /// dropped-REGISTRATION mutation; the wake-drop class is harness-side).
@@ -493,7 +493,7 @@ pub(crate) fn wait_for_flush(lsn: XLogRecPtr) -> FlushWaitOutcome {
     };
     let node_ptr = &node as *const FlushWaitNode as *mut FlushWaitNode;
 
-    // GL-FLUSHSIM-1 dropped-registration mutation seam (sim builds only;
+    // regression dropped-registration mutation seam (sim builds only;
     // compiles to `false` in production).
     #[cfg(pgrust_sim)]
     let link_dropped = sim::take_skip_link();
@@ -563,7 +563,7 @@ pub(crate) fn wait_for_flush(lsn: XLogRecPtr) -> FlushWaitOutcome {
         if let Some(l) = my_latch {
             latch::ResetLatch(l);
         }
-        // GL-FLUSHSIM-1 FINDING-1: the backstop/re-arm block is gated on a
+        // regression FINDING-1: the backstop/re-arm block is gated on a
         // GENUINE timeout. A latch-set wake that finds us neither
         // completed nor covered (spurious sets: the SwitchToSharedLatch
         // startup set; a completer's SetLatch left unconsumed by a
@@ -581,7 +581,7 @@ pub(crate) fn wait_for_flush(lsn: XLogRecPtr) -> FlushWaitOutcome {
             if timed_out {
                 // The completion arrived but its directed wake never did
                 // (lost/misdirected/late) — the soft missed-wake tripwire
-                // (GL-FLUSHSIM-1 §5.2).
+                // (regression §5.2).
                 STATS.completed_after_timeout.fetch_add(1, Relaxed);
                 trace(|| "completed observed on a TIMEOUT lap (lost wake?)".into());
             }
@@ -617,8 +617,8 @@ pub(crate) fn wait_for_flush(lsn: XLogRecPtr) -> FlushWaitOutcome {
 
 // ---------------------------------------------------------------------------
 // inc-5(d) d1 — DEFERRED registration (the DeferredTail queue half;
-// flushpipe inc-1.5 §5, GL-FLUSHPIPE-1 §8.2 APPROVED-WITH-GATES; co-owned
-// with GL-STMTTASK-2 §14). A registrant that must NOT park (in the archive:
+// flushpipe inc-1.5 §5, regression §8.2 APPROVED-WITH-GATES; co-owned
+// with regression §14). A registrant that must NOT park (in the archive:
 // the d2 worker commit prefix and R3 commit cycles — neither ported)
 // registers a HEAP ticket and returns; the flush walk directed-wakes the
 // ticket's TARGET (the tail host's latch); the tail host consumes the

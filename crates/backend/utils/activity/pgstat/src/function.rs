@@ -64,16 +64,16 @@ pub fn pgstat_drop_function(proid: Oid) {
 pub fn pgstat_init_function_usage(fn_oid: Oid) -> PgResult<PgStat_FunctionCallUsage> {
     let key = function_key(fn_oid);
     let (created_entry, save_f_total_time) = pending::with_state(|st| {
-        let created = !st.have_pending(key);
-        let PendingData::Function(f) = st.prep_pending_entry(key) else {
+        let (PendingData::Function(f), created) = st.prep_pending_entry_ext(key) else {
             unreachable!("function key holds non-function pending data")
         };
         (created, f.total_time)
     });
 
-    // A newly-created entry may be for a concurrently dropped function: plain
-    // function calls don't process invalidations, so probe pg_proc before
-    // creating stats for it.
+    // A newly-created shared entry may be for a concurrently dropped function:
+    // plain function calls don't process invalidations, so probe pg_proc
+    // before creating stats for it (pgstat_function.c:110). An existing shared
+    // entry (e.g. flushed by an earlier transaction) skips the probe.
     if created_entry {
         inval_seams::accept_invalidation_messages::call()?;
         if !syscache_seams::search_syscache_exists_procoid::call(fn_oid)? {

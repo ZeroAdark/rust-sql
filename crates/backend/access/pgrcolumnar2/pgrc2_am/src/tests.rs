@@ -214,6 +214,21 @@ fn table_dir_is_a_sibling_of_the_main_fork() {
     assert_eq!(dir, "base/5/pgrc2_16384");
 }
 
+#[test]
+fn temp_table_dirs_carry_the_backend_namespace() {
+    use types_storage::storage::RelFileLocator;
+    let loc = RelFileLocator {
+        spcOid: 1663,
+        dbOid: 5,
+        relNumber: 16384,
+    };
+    let dir7 = crate::dirpath::table_dir_path(loc, 7);
+    let dir8 = crate::dirpath::table_dir_path(loc, 8);
+    assert_eq!(dir7, "base/5/pgrc2_t7_16384");
+    assert_eq!(dir8, "base/5/pgrc2_t8_16384");
+    assert_ne!(dir7, crate::dirpath::table_dir_path(loc, -1));
+}
+
 // ---------------------------------------------------------------------------
 // The ino-reuse hole: stale hit without invalidation (tooth 1), correct
 // bytes after invalidate_relid (tooth 2) — the M3-F→M3-H seam contract.

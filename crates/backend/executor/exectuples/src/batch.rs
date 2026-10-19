@@ -327,7 +327,7 @@ pub struct SoaDictTable {
     pub lazy: *const (),
     pub lazy_ensure: Option<unsafe fn(*const (), u32)>,
     pub lazy_ensure_all: Option<unsafe fn(*const ())>,
-    /// Dict-images readability witness (GL-TESTFIX-1 F-R1-1; the dict-tier
+    /// Dict-images readability witness (regression F-R1-1; the dict-tier
     /// twin of [`SoaTextSpan`]'s publisher law): true = the PUBLISHER
     /// guarantees every entry's varlena image lies inside ONE readable
     /// allocation it owns (the decode arena / the mmap'd part payload), so

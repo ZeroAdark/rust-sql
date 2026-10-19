@@ -61,6 +61,10 @@ struct SISegHdr {
     msgnumLock: Spinlock,
     buffer: [UnsafeCell<WireMsg>; MAXNUMMESSAGES as usize],
     numProcs: AtomicI32,
+    // C's `int *pgprocnos` slot (sinvaladt.c:194): the array itself follows
+    // procState here, but the pointer's bytes are part of
+    // offsetof(SISeg, procState) = SharedInvalShmemSize's header term.
+    _pgprocnos: usize,
     // ProcState[NumProcStateSlots] then pgprocnos i32[NumProcStateSlots]
     // follow the header in the segment (C's FLEXIBLE_ARRAY_MEMBER + pointer).
 }

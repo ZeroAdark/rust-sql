@@ -69,7 +69,7 @@ counters!(RuntimeStats, RuntimeStatsSnapshot;
     /// M5-5 decaying priorities: priority updates applied (one per RG per
     /// crossed decay quantum until the RG reaches the p_min floor).
     priority_decays,
-    /// POOL-QOS (GL-POOLDB-1 mitigation): interactive demand published
+    /// POOL-QOS (regression mitigation): interactive demand published
     /// (unmet-width units added at fresh bound publishes).
     qos_demand_published,
     /// POOL-QOS: demoted serves that yielded their thread at a morsel
@@ -80,7 +80,7 @@ counters!(RuntimeStats, RuntimeStatsSnapshot;
     /// POOL-QOS: demoted holders that released/re-acquired their permit at
     /// a step boundary because priority waiters were parked.
     qos_permit_defers,
-    /// POOL-QOS memory governor (GL-CONCMEM-1): step boundaries where the
+    /// POOL-QOS memory governor (regression): step boundaries where the
     /// QoS moves (yield/defer) were HELD because the process was over the
     /// memory bar — the serve ran on toward completion instead of
     /// interleaving.

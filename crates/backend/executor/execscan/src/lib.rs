@@ -92,6 +92,21 @@ enum EpqFetch {
     FallThrough,
 }
 
+/// ExecScanFetch's decision, side-effect free: under an EPQ recheck the
+/// test tuple (or its exhaustion) for `scanrelid` is served without ever
+/// touching the access method, so AM-side setup must not run either.
+pub fn epq_substitutes(estate: &EStateData<'_>, scanrelid: Index) -> bool {
+    if !estate.es_epq_active || scanrelid == 0 {
+        return false;
+    }
+    let idx = (scanrelid - 1) as usize;
+    estate.es_epq.as_ref().is_some_and(|subs| {
+        subs.relsubs_done[idx]
+            || subs.relsubs_slot[idx].is_some()
+            || subs.relsubs_rowmark[idx].is_some()
+    })
+}
+
 // ExecScanFetch's es_epq_active arm: test-tuple substitution.
 fn epq_fetch<'mcx, N: ScanNode<'mcx>>(
     node: &mut N,

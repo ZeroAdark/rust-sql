@@ -3,7 +3,9 @@
 
 use ::datum::Datum;
 use ::mcx::Mcx;
-use ::types_core::{Oid, INT4OID};
+use ::types_core::{
+    Oid, BOOLOID, INT2OID, INT4OID, OIDOID, RECORDOID, TEXTOID, TIMESTAMPTZOID, XIDOID,
+};
 use ::types_error::{PgError, PgResult};
 use ::types_fmgr::{
     byref_result, varlena_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo,
@@ -190,13 +192,34 @@ struct LockRows {
     tuples: Vec<Vec<u8>>,
 }
 
-fn collect_lock_rows(mcx: Mcx<'_>, flinfo: &FmgrInfo) -> PgResult<LockRows> {
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
-    if resolved.class != funcapi::TypeFuncClass::Composite {
-        return Err(Box::new(PgError::error("return type must be a row type")));
+// lockfuncs.c:115-149: the fixed 16-column descriptor, built and blessed by
+// the function itself rather than resolved from its declaration.
+const LOCK_STATUS_COLUMNS: [(&str, Oid); NUM_LOCK_STATUS_COLUMNS] = [
+    ("locktype", TEXTOID),
+    ("database", OIDOID),
+    ("relation", OIDOID),
+    ("page", INT4OID),
+    ("tuple", INT2OID),
+    ("virtualxid", TEXTOID),
+    ("transactionid", XIDOID),
+    ("classid", OIDOID),
+    ("objid", OIDOID),
+    ("objsubid", INT2OID),
+    ("virtualtransaction", TEXTOID),
+    ("pid", INT4OID),
+    ("mode", TEXTOID),
+    ("granted", BOOLOID),
+    ("fastpath", BOOLOID),
+    ("waitstart", TIMESTAMPTZOID),
+];
+
+fn collect_lock_rows(mcx: Mcx<'_>) -> PgResult<LockRows> {
+    let mut desc = ::tupdesc::CreateTemplateTupleDesc(mcx, NUM_LOCK_STATUS_COLUMNS as i32)?;
+    for (i, (name, typid)) in LOCK_STATUS_COLUMNS.iter().enumerate() {
+        ::tupdesc::TupleDescInitEntry(&mut desc, i as i16 + 1, Some(name), *typid, -1, 0)?;
     }
-    let mut desc = resolved.result_tuple_desc.expect("composite result carries a tupdesc");
-    debug_assert_eq!(desc.natts as usize, NUM_LOCK_STATUS_COLUMNS);
+    desc.tdtypeid = RECORDOID;
+    desc.tdtypmod = -1;
     // C: BlessTupleDesc.
     ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
 
@@ -262,9 +285,16 @@ fn collect_lock_rows(mcx: Mcx<'_>, flinfo: &FmgrInfo) -> PgResult<LockRows> {
 pub fn fc_pg_lock_status(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let flinfo = flinfo.expect("pg_lock_status: resolved FmgrInfo required");
     if !flinfo.has_fn_extra() {
-        let rows = collect_lock_rows(fcinfo.result_mcx(), flinfo)?;
-        let fctx = funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
-        fctx.user_fctx = Some(Box::new(rows));
+        // lockfuncs.c:112: SRF_FIRSTCALL_INIT precedes the descriptor build.
+        funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
+        let rows = match collect_lock_rows(fcinfo.result_mcx()) {
+            Ok(rows) => rows,
+            Err(e) => {
+                funcapi::end_MultiFuncCall(flinfo);
+                return Err(e);
+            }
+        };
+        funcapi::per_MultiFuncCall(flinfo).user_fctx = Some(Box::new(rows));
     }
     let fctx = funcapi::per_MultiFuncCall(flinfo);
     let idx = fctx.call_cntr as usize;

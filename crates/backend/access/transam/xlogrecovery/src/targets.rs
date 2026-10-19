@@ -672,11 +672,14 @@ pub fn RecoveryRequiresIntParameter(param_name: &str, curr_value: i32, min_value
 // from the assign hooks; because the postmaster (and single-user startup) has
 // no exception stack, elog.c promotes it to FATAL and the server exits. These
 // are PGC_POSTMASTER variables, so those are the only contexts that ever
-// assign them; our assign hooks return `()` and cannot propagate an error, so
-// raise the promoted FATAL directly (never a raw thread panic, which unwound
-// the postmaster's main thread with no log line and no SQLSTATE). An empty
-// assign never guards: per-thread snapshot replay is unordered across
-// variables, and an empty value only unsets its own kind.
+// assign them in C; our assign hooks return `()` and cannot propagate an
+// error, so raise the promoted FATAL directly (never a raw thread panic,
+// which unwound the postmaster's main thread with no log line and no
+// SQLSTATE). C guards before it looks at the value, so an explicit empty
+// setting after a competing target is FATAL too — but only where C's hooks
+// run: a backend thread replays the GUC snapshot in an unordered variable
+// walk (IsUnderPostmaster), where an empty replay must only unset its own
+// kind.
 fn guard_target(kind: RecoveryTargetType) {
     let cur = recovery_target();
     if cur != RecoveryTargetType::Unset && cur != kind {
@@ -692,6 +695,9 @@ fn guard_target(kind: RecoveryTargetType) {
 }
 
 fn unset_target(kind: RecoveryTargetType) {
+    if !init_small::globals::IsUnderPostmaster() {
+        guard_target(kind);
+    }
     if recovery_target() == kind {
         set_recovery_target(RecoveryTargetType::Unset);
     }

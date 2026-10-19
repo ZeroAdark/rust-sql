@@ -329,11 +329,16 @@ fn ReleaseAllCachedPlansAtExit(_code: i32, _arg: usize) {
                 ctxs.push(src.source_ctx);
             }
         }
-        pc.plans.clear();
-        pc.plan_free.clear();
-        pc.sources.clear();
-        pc.source_free.clear();
-        pc.saved_plan_list.clear();
+        // Registry slabs die with the backend (C: CacheMemoryContext goes
+        // with the process). `clear()` keeps the capacity — 200 PREPAREs
+        // grow `sources`/`plans` to ~80 KiB each — and the ManuallyDrop TLS
+        // never frees it, so every session's registry stayed resident in
+        // the shared process. Hand the slabs back outright.
+        pc.plans = Vec::new();
+        pc.plan_free = Vec::new();
+        pc.sources = Vec::new();
+        pc.source_free = Vec::new();
+        pc.saved_plan_list = Vec::new();
         pc.torn_down = true;
         ctxs
     });
@@ -1175,6 +1180,9 @@ fn reanalyze_fixedparams(
     param_types: &'static [Oid],
     query_env: QueryEnvHandle,
 ) -> PgResult<PgVec<'static, Query<'static>>> {
+    if guc_tables::backing::log_parser_stats() {
+        postgres_seams::reset_usage::call();
+    }
     let query = analyze_seams::parse_analyze_fixedparams::call(
         qmcx,
         raw,
@@ -1182,6 +1190,9 @@ fn reanalyze_fixedparams(
         param_types,
         query_env,
     )?;
+    if guc_tables::backing::log_parser_stats() {
+        postgres_seams::show_usage::call("PARSE ANALYSIS STATISTICS")?;
+    }
     pg_rewrite_query(qmcx, query)
 }
 

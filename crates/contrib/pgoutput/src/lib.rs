@@ -481,6 +481,29 @@ fn parse_output_parameters(
     Ok(())
 }
 
+// pgoutput.c:493-506: %d renders the uint32 as a signed int.
+fn check_protocol_version(protocol_version: u32) -> PgResult<()> {
+    if protocol_version > LOGICALREP_PROTO_MAX_VERSION_NUM {
+        ereport(ERROR)
+            .errcode(ERRCODE_FEATURE_NOT_SUPPORTED)
+            .errmsg(format!(
+                "client sent proto_version={} but server only supports protocol {} or lower",
+                protocol_version as i32, LOGICALREP_PROTO_MAX_VERSION_NUM
+            ))
+            .finish(loc("pgoutput_startup"))?;
+    }
+    if protocol_version < LOGICALREP_PROTO_MIN_VERSION_NUM {
+        ereport(ERROR)
+            .errcode(ERRCODE_FEATURE_NOT_SUPPORTED)
+            .errmsg(format!(
+                "client sent proto_version={} but server only supports protocol {} or higher",
+                protocol_version as i32, LOGICALREP_PROTO_MIN_VERSION_NUM
+            ))
+            .finish(loc("pgoutput_startup"))?;
+    }
+    Ok(())
+}
+
 // pgoutput_startup (pgoutput.c:448).
 fn pgoutput_startup(opc: &mut OutputPluginContext, is_init: bool) -> PgResult<()> {
     let mut data = Box::new(PGOutputData {
@@ -503,24 +526,7 @@ fn pgoutput_startup(opc: &mut OutputPluginContext, is_init: bool) -> PgResult<()
         parse_output_parameters(&options, &mut data)?;
         opc.output_plugin_options = options;
 
-        if data.protocol_version > LOGICALREP_PROTO_MAX_VERSION_NUM {
-            ereport(ERROR)
-                .errcode(ERRCODE_FEATURE_NOT_SUPPORTED)
-                .errmsg(format!(
-                    "client sent proto_version={} but server only supports protocol {} or lower",
-                    data.protocol_version, LOGICALREP_PROTO_MAX_VERSION_NUM
-                ))
-                .finish(loc("pgoutput_startup"))?;
-        }
-        if data.protocol_version < LOGICALREP_PROTO_MIN_VERSION_NUM {
-            ereport(ERROR)
-                .errcode(ERRCODE_FEATURE_NOT_SUPPORTED)
-                .errmsg(format!(
-                    "client sent proto_version={} but server only supports protocol {} or higher",
-                    data.protocol_version, LOGICALREP_PROTO_MIN_VERSION_NUM
-                ))
-                .finish(loc("pgoutput_startup"))?;
-        }
+        check_protocol_version(data.protocol_version)?;
 
         // Check if we support the requested streaming mode (pgoutput.c:487).
         if data.streaming == LOGICALREP_STREAM_OFF {
@@ -2325,6 +2331,27 @@ mod tests {
     // strtoul (pgoutput.c:325): leading whitespace and a sign parse, the
     // empty string is protocol 0, a negated value is out of range, trailing
     // garbage and ERANGE are "invalid proto_version".
+    // pgoutput.c:496: %d on the uint32, so 4294967295 reads back as -1.
+    #[test]
+    fn proto_version_range_errors_render_signed() {
+        let err = check_protocol_version(4294967295).unwrap_err();
+        assert_eq!(
+            err.message,
+            "client sent proto_version=-1 but server only supports protocol 4 or lower"
+        );
+        let err = check_protocol_version(2147483648).unwrap_err();
+        assert_eq!(
+            err.message,
+            "client sent proto_version=-2147483648 but server only supports protocol 4 or lower"
+        );
+        let err = check_protocol_version(0).unwrap_err();
+        assert_eq!(
+            err.message,
+            "client sent proto_version=0 but server only supports protocol 1 or higher"
+        );
+        assert!(check_protocol_version(4).is_ok());
+    }
+
     #[test]
     fn proto_version_follows_strtoul() {
         for (raw, want) in [(" 1", 1), ("\t+2", 2), ("", 0), ("-0", 0), ("0004", 4)] {

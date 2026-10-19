@@ -46,7 +46,7 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    pub fn end_tup_output(tstate: TupOutputState)
+    pub fn end_tup_output(tstate: TupOutputState) -> ::types_error::PgResult<()>
 );
 
 seam_core::seam!(

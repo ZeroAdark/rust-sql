@@ -146,7 +146,7 @@ proofs::eq_gist_translate_cmptype_common         | GREEN      | per-commit   | $
 #   probe_gist_box_same_nan_plane + eq_gist_box_union_n2/n3 all VERIFY;
 #   kept as regression witnesses. No open divergences in this family.
 #
-# WALL / FLEET-BOUND (expected=unmeasured, run on the CI cluster tier):
+# WALL / CI-BOUND (expected=unmeasured, run on the CI cluster tier):
 #   eq_gist_box_consistent_leaf/_internal   wall(timeout-450s k+d, load 15-25) — superseded by cells, keep as union rows
 #   eq_gist_circle_consistent / eq_gist_poly_consistent (full-sym strategy) — same; superseded by cells + nulls
 #   eq_gcc_s3 (overlap) wall(k170+d450); eq_gcc_s6/s7/s8 wall(k170) — box_ov/box_contain_box over DERIVED bbox coords
@@ -169,7 +169,7 @@ proofs::eq_gist_translate_cmptype_common         | GREEN      | per-commit   | $
 #     (8 spot harnesses) or CI cluster high-mem tier.  probe_gist_box_penalty_full
 #     walled k120 as the float cost law predicts (sym x sym 53-bit multiply)
 #     — recorded honestly, do not chase.
-#   STILL FLEET-BOUND: eq_gist_circle_compress_leaf (k130+d300);
+#   STILL CI-BOUND: eq_gist_circle_compress_leaf (k130+d300);
 #     eq_gcc_s3/s6/s7/s8; full-sym union rows; both vertex grids;
 #     eq_gist_point_consistent_group0 full-sym row (superseded by cells).
 # FINAL LOCAL TALLY: 62 green harnesses (61 eq/grid/probe + 1 must-fail

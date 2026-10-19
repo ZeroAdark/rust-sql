@@ -3491,3 +3491,20 @@ fn scan_drop_drains_batched_pgstat_counters() {
     assert_eq!(counts(before), (3, 7), "heap_endscan drains once; the drop after it sees zeros");
     quiesced();
 }
+
+// datumIsEqual (datum.c:96/313): typlen -2 (a user base type declared
+// INTERNALLENGTH = -2) compares as NUL-terminated strings; the UPDATE
+// interesting-attrs walk used to panic on it.
+#[test]
+fn datum_is_equal_typlen_minus_two_compares_cstrings() {
+    let a = b"abc\0xx";
+    let b = b"abc\0yy";
+    let c = b"abcd\0";
+    let d = b"abd\0";
+    let dat = |s: &[u8]| Datum::from_usize(s.as_ptr() as usize);
+    assert!(crate::dml::datum_is_equal(dat(a), dat(b), false, -2));
+    assert!(!crate::dml::datum_is_equal(dat(a), dat(c), false, -2));
+    assert!(!crate::dml::datum_is_equal(dat(a), dat(d), false, -2));
+    assert!(crate::dml::datum_is_equal(dat(a), dat(a), false, 3));
+    assert!(!crate::dml::datum_is_equal(dat(a), dat(d), false, 3));
+}

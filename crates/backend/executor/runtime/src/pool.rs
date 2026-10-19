@@ -55,7 +55,7 @@ pub fn worker_loop(rt: &Arc<Runtime>, worker: usize) {
         // captured before the failing step, so the park is lost-wakeup-free).
         // `PGRUST_RUNTIME_STEP_V2=0` restores the loop below.
         let mut retries = 0u32;
-        // GL-STMTTASK-2 change 4 (PGRUST_POOL_WAKE_SPINNER, default OFF):
+        // regression change 4 (PGRUST_POOL_WAKE_SPINNER, default OFF):
         // this worker's directed-wake slot + search-phase accounting. The
         // spinner mark spans wake→claim (cleared at worker_step's claim
         // points, consumed by the directed park); submissions elide their

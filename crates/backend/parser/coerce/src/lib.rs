@@ -531,21 +531,22 @@ fn string_type_datum<'mcx>(
     let typioparam = lsyscache::getTypeIOParam(io);
     let mut flinfo = FmgrInfo::unresolved();
     fmgr_core::fmgr_info_into(io.typinput, &mut flinfo)?;
+    // C's InputFunctionCall: strict typinput short-circuits a NULL to a NULL
+    // datum; a non-strict one (the pseudo-type *_in family) is invoked with a
+    // NULL cstring and raises its own error (e.g. internal_in's "cannot
+    // accept a value of type internal") — SELECT NULL::internal. A NULL
+    // result for a non-NULL string is fmgr.c:1560 "input function %u
+    // returned NULL".
+    let s = if isnull {
+        None
+    } else {
+        // SAFETY: a non-NULL unknown-literal datum is a NUL-terminated cstring.
+        Some(unsafe { core::ffi::CStr::from_ptr((value.as_usize() as *const u8).cast()) })
+    };
+    let d = fmgr_core::input_function_call(&mut flinfo, s, typioparam, typmod, mcx)?;
     if isnull {
-        // C's InputFunctionCall: strict typinput short-circuits to a NULL
-        // datum; a non-strict one (the pseudo-type *_in family) is invoked
-        // with a NULL cstring and raises its own error (e.g. internal_in's
-        // "cannot accept a value of type internal") — SELECT NULL::internal.
-        return fmgr_core::input_function_call(&mut flinfo, None, typioparam, typmod, mcx);
+        return Ok(d);
     }
-    let d = fmgr_core::function_call3_coll_in(
-        &mut flinfo,
-        InvalidOid,
-        mcx,
-        value,
-        Datum::from_oid(typioparam),
-        Datum::from_i32(typmod),
-    )?;
     own_datum(mcx, d, io.typlen, io.typbyval)
 }
 

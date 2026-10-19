@@ -242,12 +242,12 @@ pub(crate) fn is_foreign_rel_updatable<'mcx>(mcx: Mcx<'mcx>, relid: Oid) -> PgRe
     let server = foreigncmds::foreign::GetForeignServer(mcx, table.serverid)?;
     for opt in server.options.iter() {
         if opt.name == "updatable" {
-            updatable = parse_bool(opt.require_value()?);
+            updatable = crate::option::def_get_boolean(opt.name, opt.value)?;
         }
     }
     for opt in table.options.iter() {
         if opt.name == "updatable" {
-            updatable = parse_bool(opt.require_value()?);
+            updatable = crate::option::def_get_boolean(opt.name, opt.value)?;
         }
     }
     Ok(if updatable {
@@ -259,35 +259,27 @@ pub(crate) fn is_foreign_rel_updatable<'mcx>(mcx: Mcx<'mcx>, relid: Oid) -> PgRe
     })
 }
 
-// get_batch_size_option: server option overridden by table option, default 1.
+// get_batch_size_option (postgres_fdw.c:7953): table option first, then
+// server option, through parse_int (octal / hex / whitespace / rounded
+// floats, like the validator); default 1 means "no batching".
 fn get_batch_size_option(mcx: Mcx<'_>, relid: Oid) -> PgResult<i32> {
-    let mut batch_size = 1i32;
     let table = foreigncmds::foreign::GetForeignTable(mcx, relid)?;
     let server = foreigncmds::foreign::GetForeignServer(mcx, table.serverid)?;
-    for opt in server.options.iter() {
+    for opt in table.options.iter().chain(server.options.iter()) {
         if opt.name == "batch_size" {
-            if let Ok(v) = opt.require_value()?.parse::<i32>() {
-                batch_size = v;
-            }
+            return Ok(parse_batch_size(opt.require_value()?));
         }
     }
-    for opt in table.options.iter() {
-        if opt.name == "batch_size" {
-            if let Ok(v) = opt.require_value()?.parse::<i32>() {
-                batch_size = v;
-            }
-        }
-    }
-    Ok(batch_size)
+    Ok(1)
 }
 
-pub(crate) fn parse_bool(value: &str) -> bool {
-    // defGetBoolean's accepted spellings; validator-checked upstream.
-    matches!(
-        value.to_ascii_lowercase().as_str(),
-        "true" | "t" | "on" | "1" | "yes" | "y"
-    )
+fn parse_batch_size(value: &str) -> i32 {
+    match guc::units::parse_int(value, 0) {
+        guc::units::ParseNum::Ok(v) => v,
+        _ => 0,
+    }
 }
+
 
 // ---------- executor half ----------
 
@@ -448,6 +440,9 @@ pub(crate) fn begin_foreign_modify<'mcx>(
             }
         }
     };
+    if operation == CmdType::CMD_INSERT {
+        estate.es_fdw_batch_sizes.push((rti, batch_size));
+    }
     let subplan_tlist = (operation == CmdType::CMD_UPDATE || operation == CmdType::CMD_DELETE)
         .then(|| {
             let subplan = node
@@ -663,7 +658,10 @@ pub(crate) fn output_to_string(
     // SAFETY: output functions return a NUL-terminated cstring datum; copied
     // out before the scratch context resets.
     let s = unsafe { CStr::from_ptr(d.as_usize() as *const core::ffi::c_char) };
-    Ok(s.to_string_lossy().into_owned())
+    match s.to_str() {
+        Ok(s) => Ok(s.to_owned()),
+        Err(_) => Err(crate::deparse::non_utf8_remote_value()),
+    }
 }
 
 pub(crate) fn exec_foreign_insert<'mcx>(
@@ -721,6 +719,9 @@ fn execute_foreign_modify<'mcx>(
     // nodeModifyTable.c:1027): the caller must not count it — the flush adds
     // the remote's own count (postgres_fdw.c:4212 atoi(PQcmdTuples)).
     if operation == CmdType::CMD_INSERT && st.batch_size > 1 {
+        if st.pending_rows >= st.batch_size {
+            flush_pending_inserts(st, estate)?;
+        }
         let nestlevel = crate::transmission::set_transmission_modes();
         let r = (|| -> PgResult<()> {
             let mut j = 0usize;
@@ -750,9 +751,6 @@ fn execute_foreign_modify<'mcx>(
         r?;
         st.pending_rows += 1;
         st.temp_mcx.reset();
-        if st.pending_rows >= st.batch_size {
-            flush_pending_inserts(st, estate)?;
-        }
         return Ok(false);
     }
 
@@ -964,7 +962,20 @@ fn store_returning_result<'mcx>(
 
 #[cfg(test)]
 mod tests {
-    use super::cmd_tuples;
+    use super::{cmd_tuples, parse_batch_size};
+
+    // postgres_fdw.c:7983 reads batch_size through parse_int: octal, hex,
+    // surrounding whitespace and rounded floats are all accepted, and an
+    // unparseable value leaves parse_int's zeroed output.
+    #[test]
+    fn batch_size_option_is_read_through_parse_int() {
+        assert_eq!(parse_batch_size("010"), 8);
+        assert_eq!(parse_batch_size("0x10"), 16);
+        assert_eq!(parse_batch_size(" 16.0 "), 16);
+        assert_eq!(parse_batch_size("16.6"), 17);
+        assert_eq!(parse_batch_size("7"), 7);
+        assert_eq!(parse_batch_size("abc"), 0);
+    }
 
     // PQcmdTuples shapes: INSERT carries an OID slot, UPDATE/DELETE don't.
     #[test]
@@ -1028,7 +1039,9 @@ pub(crate) fn explain_foreign_modify<'mcx>(
         // INSERT: report the effective batch size.
         let has_insert_row_triggers = relcache_seams::relation_get_trigger_desc::call(relid)?
             .is_some_and(|t| t.trig_insert_before_row || t.trig_insert_after_row);
-        let batch = if local_returning || has_wco || has_insert_row_triggers {
+        let batch = if let Some(executed) = flags.batch_size {
+            executed
+        } else if local_returning || has_wco || has_insert_row_triggers {
             1
         } else if flags.analyze && target_attrs.is_empty() {
             // fmstate && list_length(fmstate->target_attrs) == 0
@@ -1258,7 +1271,10 @@ struct PgFdwDirectModifyState {
     /// -1 = statement not executed yet.
     num_tuples: i64,
     next_tuple: usize,
-    rows: Vec<(Vec<Datum>, Vec<bool>, ItemPointerData)>,
+    /// The remote RETURNING rows, converted one at a time as the local
+    /// RETURNING projection consumes them (C get_returning_data converts
+    /// only the next row, postgres_fdw.c:4663).
+    result: Option<pgclient::QueryResult>,
     batch_mcx: mcx::MemoryContext,
     attin: Option<AttInMeta>,
 }
@@ -1320,8 +1336,12 @@ pub(crate) fn begin_direct_modify<'mcx>(
         .expect("fdw_private[4] is the local RETURNING flag")
         .boolval;
 
-    let attin =
-        if has_returning { Some(AttInMeta::build(rel.name(), &rel.rd_att)?) } else { None };
+    let attin = if has_returning {
+        let rte = estate.es_range_table[(fsplan.scan.scanrelid - 1) as usize];
+        Some(crate::exec::base_scan_attin(rel.name(), &rel.rd_att, rte)?)
+    } else {
+        None
+    };
 
     let (param_flinfo, param_exprs) =
         crate::exec::prepare_query_params(estate, &fsplan.fdw_exprs)?;
@@ -1339,7 +1359,7 @@ pub(crate) fn begin_direct_modify<'mcx>(
         param_exprs,
         num_tuples: -1,
         next_tuple: 0,
-        rows: Vec::new(),
+        result: None,
         batch_mcx: mcx::MemoryContext::new_bump("postgres_fdw direct modify data"),
         attin,
     }));
@@ -1373,18 +1393,8 @@ fn execute_dml_stmt<'mcx>(
     }
     if state.has_returning {
         state.num_tuples = res.rows.len() as i64;
-        state.rows.clear();
         state.batch_mcx.reset();
-        state.rows.reserve(res.rows.len());
-        for row in &res.rows {
-            let PgFdwDirectModifyState { attin, retrieved_attrs, batch_mcx, rows, .. } = state;
-            rows.push(convert_result_row(
-                attin.as_mut().expect("has_returning built attin"),
-                retrieved_attrs,
-                row,
-                batch_mcx.mcx(),
-            )?);
-        }
+        state.result = Some(res);
     } else {
         state.num_tuples = cmd_tuples(&res.cmd_tag);
     }
@@ -1449,10 +1459,16 @@ pub(crate) fn iterate_direct_modify<'mcx>(
         estate.es_direct_returning_slot = Some(scan_slot);
         return Ok(true);
     }
-    let (values, nulls, ctid) = &state.rows[state.next_tuple];
-    let ctid = *ctid;
-    let values = values.clone();
-    let nulls = nulls.clone();
+    let (values, nulls, ctid) = {
+        let PgFdwDirectModifyState { attin, retrieved_attrs, batch_mcx, result, next_tuple, .. } =
+            state;
+        convert_result_row(
+            attin.as_mut().expect("has_returning built attin"),
+            retrieved_attrs,
+            &result.as_ref().expect("execute_dml_stmt kept the result").rows[*next_tuple],
+            batch_mcx.mcx(),
+        )?
+    };
     state.next_tuple += 1;
     let slot = estate.slot_mut(scan_slot);
     exectuples::exec_clear_tuple(slot, qmcx);

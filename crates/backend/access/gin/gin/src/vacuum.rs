@@ -203,11 +203,12 @@ pub(crate) fn ginDeletePage(
     }
     let delete_xid = varsup_seams::read_next_transaction_id::call()?;
     {
-        // GinPageSetDeleted wipes the flags; GinPageSetDeleteXid = pd_prune_xid.
+        // GinPageSetDeleted ORs the flag in (ginblock.h:126), keeping the
+        // page's DATA/LEAF/COMPRESSED bits; GinPageSetDeleteXid = pd_prune_xid.
         // SAFETY: pin + exclusive lock held.
         let mut dpage = unsafe { page_mut(d_buffer) };
         let mut dopaque = page_opaque(&dpage.as_ref());
-        dopaque.flags = GIN_DELETED;
+        dopaque.flags |= GIN_DELETED;
         crate::write_opaque(&mut dpage, &dopaque);
         dpage.set_prune_xid(delete_xid);
     }

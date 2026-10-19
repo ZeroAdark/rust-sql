@@ -4,6 +4,7 @@ use types_core::{Oid, BOOLOID, INT8OID, RECORDOID};
 use types_error::{PgError, PgResult, ERRCODE_INSUFFICIENT_PRIVILEGE};
 use types_fmgr::{FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo};
 use types_rel::{AccessShareLock, NoLock, RELKIND_SEQUENCE};
+use types_tuple::TupleDescData;
 
 use adt_acl::{ACL_SELECT, ACL_UPDATE, ACL_USAGE};
 
@@ -81,8 +82,14 @@ fn fc_pg_sequence_parameters(
         return Err(permission_denied(relid)?);
     }
 
+    // sequence.c:1756 get_call_result_type(fcinfo, ...): a RETURNS record
+    // alias resolves through ReturnSetInfo.expectedDesc.
+    let expected_desc = fcinfo.rsinfo_mut().and_then(|rsi| rsi.expectedDesc);
+    // SAFETY: expectedDesc contract — the executor armed it with the scan
+    // tupdesc, live for the duration of this call.
+    let expected = expected_desc.map(|p| unsafe { p.cast::<TupleDescData<'_>>().as_ref() });
     let mcx = fcinfo.result_mcx();
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
+    let resolved = funcapi::get_call_result_type(mcx, flinfo, expected)?;
     if resolved.class != funcapi::TypeFuncClass::Composite {
         return Err(Box::new(PgError::error("return type must be a row type")));
     }

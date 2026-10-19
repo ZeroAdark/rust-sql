@@ -132,14 +132,8 @@ static WAIT_POINT: ConditionVariable = ConditionVariable::new();
 /// InjectionPointAttach + the module's action-name mapping
 /// (injection_points.c:351). `action` is one of "error", "notice", "wait".
 pub fn attach(name: &str, action: &str) -> PgResult<()> {
-    // injection_point.c:285: names live in fixed INJ_NAME_MAXLEN (64) byte
-    // shmem slots, so 64+ bytes is an error there and here.
-    if name.len() >= INJ_NAME_MAXLEN {
-        return Err(Box::new(PgError::error(format!(
-            "injection point name {name} too long (maximum of {} characters)",
-            INJ_NAME_MAXLEN - 1
-        ))));
-    }
+    // injection_points.c:350: the module maps the action before
+    // InjectionPointAttach sees the name.
     let action = match action {
         "error" => Action::Error,
         "notice" => Action::Notice,
@@ -150,6 +144,14 @@ pub fn attach(name: &str, action: &str) -> PgResult<()> {
             ))))
         }
     };
+    // injection_point.c:285: names live in fixed INJ_NAME_MAXLEN (64) byte
+    // shmem slots, so 64+ bytes is an error there and here.
+    if name.len() >= INJ_NAME_MAXLEN {
+        return Err(Box::new(PgError::error(format!(
+            "injection point name {name} too long (maximum of {} characters)",
+            INJ_NAME_MAXLEN - 1
+        ))));
+    }
     let mut reg = REGISTRY.lock().unwrap();
     if reg.iter().any(|e| e.name == name) {
         return Err(Box::new(PgError::error(format!(
@@ -461,6 +463,12 @@ mod tests {
     fn bad_action_rejected() {
         assert!(attach("crash-skips-bad-action", "explode").is_err());
         assert!(!is_attached("crash-skips-bad-action"));
+        // injection_points.c:350-357: the action is checked before the
+        // name-length check in InjectionPointAttach.
+        let long = "z".repeat(64);
+        let err = attach(&long, "explode").unwrap_err();
+        assert_eq!(err.message(), "incorrect action \"explode\" for injection point creation");
+        assert!(!is_attached(&long));
     }
 
     // injection_point.c:285-287. Audit

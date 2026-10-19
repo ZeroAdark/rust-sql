@@ -89,6 +89,89 @@ fn process_interrupts_statement_timeout_is_57014() {
     assert!(err.message.contains("statement timeout"));
 }
 
+// timeout.c:414: the SIGALRM handler runs before ProcessInterrupts clears
+// InterruptPending, never between the drain and the clear.
+#[test]
+fn process_interrupts_timer_post_after_drain_is_serviced() {
+    install_test_seams();
+    crate::session_tests::install_timeout_drain_stub();
+    let _serial = CANCEL_ARM.lock().unwrap();
+    *crate::session_tests::TIMER_ARMED_THREAD.lock().unwrap() = Some(std::thread::current().id());
+    crate::session_tests::TIMER_POST_ON_DRAIN.store(true, Ordering::SeqCst);
+    init_small::globals::SetInterruptPending(true);
+    let err = check_for_interrupts().unwrap_err();
+    *crate::session_tests::TIMER_ARMED_THREAD.lock().unwrap() = None;
+    assert_eq!(err.sqlstate, types_error::ERRCODE_QUERY_CANCELED);
+    assert!(err.message.contains("statement timeout"));
+    assert!(!crate::session_tests::TIMER_POSTED.load(Ordering::SeqCst));
+    assert!(!init_small::globals::QueryCancelPending());
+}
+
+// postgres.c:5052: Save_r/Save_t are zero until the first ResetUsage, so a
+// ShowUsage reached without one reports elapsed time since the epoch.
+#[test]
+fn show_usage_without_reset_subtracts_zero_baseline() {
+    let report = usage_report();
+    let line = report.lines().nth(1).expect("usage line");
+    let elapsed = line
+        .split("s system, ")
+        .nth(1)
+        .and_then(|s| s.split(" s elapsed").next())
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or_else(|| panic!("no elapsed in {line:?}"));
+    assert!(elapsed > 1.0e9, "{line}");
+}
+
+// postgres.c:312: -E echoes through printf's %s, so an embedded NUL ends
+// the echoed text.
+#[test]
+fn single_user_echo_writes_the_input_bytes_verbatim() {
+    let mut out = Vec::new();
+    crate::main_loop::write_echo(&mut out, b"select 1 as \"\xff\";\n\0").unwrap();
+    assert_eq!(out, b"statement: select 1 as \"\xff\";\n\n");
+}
+
+#[test]
+fn forbidden_in_wal_sender_reports_c_source_lines() {
+    let line = |firstchar| {
+        crate::main_loop::forbidden_in_wal_sender_error(firstchar)
+            .unwrap_err()
+            .location
+            .as_ref()
+            .map(|l| l.lineno)
+    };
+    assert_eq!(line(crate::main_loop::pqmsg::FUNCTION_CALL), Some(5043));
+    assert_eq!(line(crate::main_loop::pqmsg::PARSE), Some(5047));
+}
+
+#[test]
+fn single_user_startup_error_is_reported_as_fatal() {
+    install_test_seams();
+    static SEEN: Mutex<Vec<types_error::ErrorLevel>> = Mutex::new(Vec::new());
+    fn capture(e: &types_error::PgError, _output_to_server: &mut bool) {
+        SEEN.lock().unwrap().push(e.level);
+    }
+    let _serial = CANCEL_ARM.lock().unwrap();
+    SEEN.lock().unwrap().clear();
+    let saved = elog::config::where_to_send_output();
+    elog::config::set_where_to_send_output(types_dest::CommandDest::None);
+    let prev = elog::sink::set_emit_log_hook(Some(capture));
+    let err: types_error::PgError = elog::ereport(types_error::ERROR)
+        .errcode(types_error::ERRCODE_UNDEFINED_FILE)
+        .errmsg("could not access file \"nope\": No such file or directory")
+        .into_error();
+    crate::single_user::report_startup_error(&err);
+    elog::sink::set_emit_log_hook(prev);
+    elog::config::set_where_to_send_output(saved);
+    assert_eq!(*SEEN.lock().unwrap(), vec![types_error::FATAL]);
+}
+
+#[test]
+fn single_user_echo_stops_at_embedded_nul() {
+    assert_eq!(crate::main_loop::echoed_statement(b"select 1\n\0"), b"select 1\n");
+    assert_eq!(crate::main_loop::echoed_statement(b"select 1\0 junk\n\0"), b"select 1");
+}
+
 #[test]
 fn process_interrupts_held_off_is_deferred() {
     init_small::globals::HoldInterrupts();
@@ -188,6 +271,79 @@ fn recovery_conflict_logicalslot_is_error_40001_and_respects_holdoff() {
     );
     assert_eq!(RECOVERY_CONFLICT_PENDING_REASONS.with(std::cell::Cell::get), 0);
     assert!(!init_small::globals::InterruptPending());
+}
+
+// postgres.c:3271: the RecoveryConflictPending gate drops before the walk,
+// so a reason left behind by an earlier reason's ERROR is not revisited until
+// HandleRecoveryConflictInterrupt raises the gate again.
+#[test]
+fn recovery_conflict_gate_ignores_reasons_left_by_an_error() {
+    use types_storage::storage::ProcSignalReason::*;
+    let lock = PROCSIG_RECOVERY_CONFLICT_LOCK as u32;
+    let snapshot = PROCSIG_RECOVERY_CONFLICT_SNAPSHOT as u32;
+    RECOVERY_CONFLICT_PENDING_REASONS.with(|c| c.set(0));
+    HandleRecoveryConflictInterrupt(lock);
+    HandleRecoveryConflictInterrupt(snapshot);
+    assert!(recovery_conflict_interrupt_pending());
+    RECOVERY_CONFLICT_PENDING_REASONS.with(|c| c.set(c.get() & !RECOVERY_CONFLICT_PENDING));
+    assert!(take_recovery_conflict_reason(lock));
+    // LOCK raised ERROR: SNAPSHOT stays recorded but gated off.
+    assert!(!recovery_conflict_interrupt_pending());
+    assert_ne!(RECOVERY_CONFLICT_PENDING_REASONS.with(std::cell::Cell::get) & (1 << snapshot), 0);
+    HandleRecoveryConflictInterrupt(lock);
+    assert!(recovery_conflict_interrupt_pending());
+    RECOVERY_CONFLICT_PENDING_REASONS.with(|c| c.set(c.get() & !RECOVERY_CONFLICT_PENDING));
+    assert!(take_recovery_conflict_reason(lock));
+    assert!(take_recovery_conflict_reason(snapshot));
+    assert!(!take_recovery_conflict_reason(lock));
+    assert_eq!(RECOVERY_CONFLICT_PENDING_REASONS.with(std::cell::Cell::get), 0);
+    init_small::globals::SetInterruptPending(false);
+}
+
+// walsender.c:3677: a walsender keeps SignalHandlerForCrashExit for SIGQUIT,
+// so an immediate shutdown writes no WARNING onto the replication connection.
+#[test]
+fn walsender_sigquit_exits_without_a_client_warning() {
+    install_test_seams();
+    install_ipc_stubs();
+    let _serial = CANCEL_ARM.lock().unwrap();
+
+    static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    fn capture(e: &types_error::PgError, _output_to_server: &mut bool) {
+        SEEN.lock().unwrap().push(e.message.clone());
+    }
+    let run = |walsender: bool| -> i32 {
+        std::thread::spawn(move || {
+            use init_small::globals as g;
+            g::SetMyProcNumber(2);
+            g::SetMyProcPid(6262);
+            g::SetIsUnderPostmaster(true);
+            walsender_seams::set_am_walsender(walsender);
+            procsignal::ProcSignalInit(&[]).unwrap();
+            my_latch();
+            install_thread_signal_handlers();
+            let prev = elog::sink::set_emit_log_hook(Some(capture));
+            assert_eq!(procsignal::SendThreadSignal(6262, libc::SIGQUIT), 0);
+            let outcome = std::panic::catch_unwind(procsignal::DrainThreadSignals);
+            elog::sink::set_emit_log_hook(prev);
+            let payload = outcome.expect_err("SIGQUIT disposition exits the thread");
+            payload.downcast_ref::<ipc::ProcExitThread>().expect("exit_thread_raw").code
+        })
+        .join()
+        .unwrap()
+    };
+
+    SEEN.lock().unwrap().clear();
+    assert_eq!(run(true), 2);
+    assert!(
+        SEEN.lock().unwrap().is_empty(),
+        "walsender SIGQUIT must not ereport: {:?}",
+        SEEN.lock().unwrap()
+    );
+
+    SEEN.lock().unwrap().clear();
+    assert_eq!(run(false), 2);
+    assert!(SEEN.lock().unwrap().iter().any(|m| m.contains("terminating connection")));
 }
 
 #[test]
@@ -333,7 +489,7 @@ fn thread_signal_sigint_cancels_and_sigterm_terminates() {
     backend.join().unwrap();
 }
 
-// ---- check_log_duration sampling (GL-GUCBATCH-1; postgres.c:2427 parity) ----
+// ---- check_log_duration sampling (regression; postgres.c:2427 parity) ----
 
 fn sampling_gucs() -> simple_query::LogDurationGucs {
     simple_query::LogDurationGucs {
@@ -352,6 +508,18 @@ fn log_sampling_boot_defaults_return_zero_without_a_draw() {
         simple_query::check_log_duration_impl(false, 5_000_000, &g, || panic!("no draw"));
     assert_eq!(code, 0);
     assert!(msec.is_empty());
+}
+
+// postgres.c:2437 TimestampDifference clamps a backwards clock step to zero:
+// the logged duration is "0.000", never a negative rendering.
+#[test]
+fn log_duration_clamps_a_negative_elapsed_time_to_zero() {
+    let mut g = sampling_gucs();
+    g.log_min = 0;
+    let (code, msec) =
+        simple_query::check_log_duration_impl(false, -1_500, &g, || panic!("no draw"));
+    assert_eq!(code, 2);
+    assert_eq!(msec, "0.000");
 }
 
 #[test]

@@ -366,7 +366,7 @@ fn install() {
         });
         s::pg_class_relname::set(|relid| Ok((relid == REL_OID).then(|| name("t1"))));
         s::lookup_pg_class_relid_by_name::set(|relname, nsp| {
-            Ok(if relname == "t1" && nsp == 2200 { REL_OID } else { InvalidOid })
+            Ok(if relname == b"t1" && nsp == 2200 { REL_OID } else { InvalidOid })
         });
         s::lookup_pg_index_ls_shape::set(|index_oid| {
             Ok((index_oid == IDX_OID).then_some(PgIndexLsShape {

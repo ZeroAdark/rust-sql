@@ -1,0 +1,144 @@
+-- Two-binary differential corpus for the 2026-09-13 bug-inventory batch
+-- batch-88-backend-commands-analyze (C 18.6 oracle vs pgrust). Each leg is
+-- one row of the batch (scripts/analyze-b88-e2e.sh). Every table stays
+-- within the 300-row sample of statistics target 1 so the whole table is
+-- the sample and the catalog bytes are deterministic.
+CREATE DATABASE b88e2e TEMPLATE template0 ENCODING 'UTF8';
+\c b88e2e
+\set VERBOSITY verbose
+-- regression: the length histogram is sorted with C's
+-- qsort under float8_qsort_cmp, whose NaN arm is inconsistent: {NaN,1}.
+CREATE TABLE b88_rnan (r numrange);
+INSERT INTO b88_rnan VALUES ('[0,1)'), ('[0,NaN)');
+ANALYZE b88_rnan;
+SELECT stakind1, stavalues1, stakind2, stavalues2 FROM pg_statistic WHERE starelid = 'b88_rnan'::regclass AND staattnum = 1;
+ stakind1 |     stavalues1      | stakind2 | stavalues2 
+----------+---------------------+----------+------------
+        7 | {"[0,1)","[0,NaN)"} |        6 | {NaN,1}
+(1 row)
+
+-- regression: equal-frequency MCELEM candidates are truncated
+-- in dynahash bucket order + pg qsort order (11 candidates, 10 kept).
+CREATE TABLE b88_a1(v int[]);
+ALTER TABLE b88_a1 ALTER COLUMN v SET STATISTICS 1;
+INSERT INTO b88_a1 VALUES (ARRAY[1,2,3,4,5,6,7,8,9,10,11]);
+ANALYZE b88_a1;
+SELECT most_common_elems, most_common_elem_freqs FROM pg_stats WHERE tablename = 'b88_a1';
+    most_common_elems    |   most_common_elem_freqs    
+-------------------------+-----------------------------
+ {1,2,3,4,5,6,8,9,10,11} | {1,1,1,1,1,1,1,1,1,1,1,1,0}
+(1 row)
+
+CREATE TABLE b88_a2(v int[]);
+ALTER TABLE b88_a2 ALTER COLUMN v SET STATISTICS 1;
+INSERT INTO b88_a2 VALUES (ARRAY[11,10,9,8,7,6,5,4,3,2,1]);
+ANALYZE b88_a2;
+SELECT most_common_elems, most_common_elem_freqs FROM pg_stats WHERE tablename = 'b88_a2';
+    most_common_elems    |   most_common_elem_freqs    
+-------------------------+-----------------------------
+ {1,2,3,4,5,6,8,9,10,11} | {1,1,1,1,1,1,1,1,1,1,1,1,0}
+(1 row)
+
+CREATE TABLE b88_a3(v text[]);
+ALTER TABLE b88_a3 ALTER COLUMN v SET STATISTICS 1;
+INSERT INTO b88_a3 SELECT array_agg('e' || g) FROM generate_series(1,25) g;
+ANALYZE b88_a3;
+SELECT most_common_elems, most_common_elem_freqs FROM pg_stats WHERE tablename = 'b88_a3';
+           most_common_elems           |   most_common_elem_freqs    
+---------------------------------------+-----------------------------
+ {e1,e14,e16,e18,e20,e23,e24,e5,e6,e9} | {1,1,1,1,1,1,1,1,1,1,1,1,0}
+(1 row)
+
+-- regression: 3000 sampled elements at bucket width 1428
+-- prune twice (HASH_REMOVE + pfree) and split the table past 16 buckets.
+CREATE TABLE b88_a4(v int[]);
+ALTER TABLE b88_a4 ALTER COLUMN v SET STATISTICS 1;
+INSERT INTO b88_a4 SELECT ARRAY[g % 50, g % 7, 1000 + g, g % 3, g % 11, g % 13, g % 17, g % 19, g % 23, g % 29] FROM generate_series(1, 300) g;
+ANALYZE b88_a4;
+SELECT most_common_elems, most_common_elem_freqs, elem_count_histogram FROM pg_stats WHERE tablename = 'b88_a4';
+   most_common_elems    |                                             most_common_elem_freqs                                             | elem_count_histogram 
+------------------------+----------------------------------------------------------------------------------------------------------------+----------------------
+ {0,1,2,3,4,5,6,7,9,10} | {0.62,0.62,0.6166667,0.44,0.43666667,0.43666667,0.43666667,0.33666667,0.33666667,0.33666667,0.33666667,0.62,0} | {2,10,8.6}
+(1 row)
+
+-- regression: the same truncation for lexemes; the
+-- second table's per-row lexemes are pruned away at each bucket boundary.
+CREATE TABLE b88_ts1(v tsvector);
+ALTER TABLE b88_ts1 ALTER COLUMN v SET STATISTICS 1;
+INSERT INTO b88_ts1 SELECT (SELECT string_agg('lex' || g, ' ') FROM generate_series(1,100) g)::tsvector FROM generate_series(1,100);
+ANALYZE b88_ts1;
+SELECT most_common_elems, most_common_elem_freqs FROM pg_stats WHERE tablename = 'b88_ts1';
+                      most_common_elems                       |  most_common_elem_freqs   
+--------------------------------------------------------------+---------------------------
+ {lex6,lex10,lex11,lex13,lex29,lex35,lex68,lex82,lex88,lex98} | {1,1,1,1,1,1,1,1,1,1,1,1}
+(1 row)
+
+CREATE TABLE b88_ts2(v tsvector);
+ALTER TABLE b88_ts2 ALTER COLUMN v SET STATISTICS 1;
+INSERT INTO b88_ts2 SELECT ((SELECT string_agg('common' || c, ' ') FROM generate_series(1,20) c) || ' ' || (SELECT string_agg('row' || r || 'u' || u, ' ') FROM generate_series(1,30) u))::tsvector FROM generate_series(1,300) r;
+ANALYZE b88_ts2;
+SELECT most_common_elems, most_common_elem_freqs FROM pg_stats WHERE tablename = 'b88_ts2';
+                                   most_common_elems                                    |  most_common_elem_freqs   
+----------------------------------------------------------------------------------------+---------------------------
+ {common2,common3,common4,common7,common8,common10,common11,common16,common17,common18} | {1,1,1,1,1,1,1,1,1,1,1,1}
+(1 row)
+
+-- regression: 24 one-page children at targrows 300 get
+-- rint(12.5) = 12 rows each (288 total); the null child weighs 12/288.
+SET default_statistics_target = 1;
+CREATE TABLE b88_p(id int, v int) PARTITION BY LIST (id);
+DO $$ BEGIN FOR i IN 1..24 LOOP EXECUTE format('CREATE TABLE b88_p%s PARTITION OF b88_p FOR VALUES IN (%s)', i, i); EXECUTE format('INSERT INTO b88_p SELECT %s, CASE WHEN %s = 24 THEN NULL ELSE g END FROM generate_series(1,100) g', i, i); END LOOP; END $$;
+ANALYZE b88_p;
+SELECT null_frac FROM pg_stats WHERE tablename = 'b88_p' AND attname = 'v' AND inherited;
+  null_frac  
+-------------
+ 0.041666668
+(1 row)
+
+RESET default_statistics_target;
+-- regression / regression: an empty-only
+-- range column stores NULL stavalues (witness legs, same on both engines).
+CREATE TABLE b88_t2(r int4range);
+INSERT INTO b88_t2 VALUES ('empty');
+ANALYZE b88_t2;
+SELECT stakind1, stavalues1 IS NULL AS v1null, stanumbers1 FROM pg_statistic WHERE starelid = 'b88_t2'::regclass;
+ stakind1 | v1null | stanumbers1 
+----------+--------+-------------
+        6 | t      | {1}
+(1 row)
+
+CREATE TABLE b88_t3(a int);
+INSERT INTO b88_t3 VALUES (1),(2);
+CREATE STATISTICS b88_s3 ON (int4range(a,a)) FROM b88_t3;
+ANALYZE b88_t3;
+SELECT (stxdexpr[1]).stakind1, (stxdexpr[1]).stavalues1 IS NULL AS v1null FROM pg_statistic_ext_data WHERE stxoid = (SELECT oid FROM pg_statistic_ext WHERE stxname = 'b88_s3') AND NOT stxdinherit;
+ stakind1 | v1null 
+----------+--------
+        6 | t
+(1 row)
+
+-- regression: expression results now live in a
+-- per-expression context; the serialized stats are unchanged.
+CREATE TABLE b88_t4(a int);
+INSERT INTO b88_t4 SELECT g FROM generate_series(1, 200) g;
+CREATE STATISTICS b88_s4 ON (a % 10), (repeat(a::text, 3)) FROM b88_t4;
+ANALYZE b88_t4;
+SELECT expr, n_distinct, most_common_vals, histogram_bounds FROM pg_stats_ext_exprs WHERE statistics_name = 'b88_s4' ORDER BY expr;
+         expr         | n_distinct |   most_common_vals    |                                                                                                                                                                                                                                                                                                                                                                                                                                       histogram_bounds                                                                                                                                                                                                                                                                                                                                                                                                                                        
+----------------------+------------+-----------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ (a % 10)             |         10 | {0,1,2,3,4,5,6,7,8,9} | 
+ repeat((a)::text, 3) |         -1 |                       | {100100100,101010,102102102,104104104,106106106,108108108,110110110,111111,112112112,114114114,116116116,118118118,120120120,121212,123123123,125125125,127127127,129129129,131131131,132132132,134134134,136136136,138138138,140140140,141414,143143143,145145145,147147147,149149149,151151151,152152152,154154154,156156156,158158158,160160160,161616,163163163,165165165,167167167,169169169,171171171,172172172,174174174,176176176,178178178,180180180,181818,183183183,185185185,187187187,189189189,191191191,192192192,194194194,196196196,198198198,200200200,212121,222222,242424,262626,282828,303030,323232,333333,353535,373737,393939,414141,434343,444444,464646,484848,505050,525252,545454,555555,575757,595959,616161,636363,656565,666666,686868,707070,727272,747474,767676,777777,797979,818181,838383,858585,878787,888888,909090,929292,949494,969696,989898,999999}
+(2 rows)
+
+-- regression: ANALYZE runs with cost accounting armed.
+SET vacuum_cost_delay = 1;
+SET vacuum_cost_limit = 1;
+ANALYZE b88_t4;
+SELECT n_distinct FROM pg_stats WHERE tablename = 'b88_t4' AND attname = 'a';
+ n_distinct 
+------------
+         -1
+(1 row)
+
+RESET vacuum_cost_delay;
+RESET vacuum_cost_limit;

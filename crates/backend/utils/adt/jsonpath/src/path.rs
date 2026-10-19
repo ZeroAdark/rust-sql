@@ -139,6 +139,19 @@ fn intalign(len: usize) -> usize {
     (len + 3) & !3usize
 }
 
+// jsonpath.c:189 initStringInfo + enlargeStringInfo(&buf, 4 * len): the
+// estimate is an int product, bounded and rounded like any StringInfo growth
+// (stringinfo.c:348-372).
+pub(crate) fn flatten_reserve(len: usize) -> PgResult<usize> {
+    let needed = (len as i32).wrapping_mul(4);
+    if needed < 0 {
+        return Err(Box::new(PgError::error(format!(
+            "invalid string enlargement request size: {needed}"
+        ))));
+    }
+    ::stringinfo::enlarge_target(0, 1024, needed as usize)
+}
+
 fn buf_zeros(buf: &mut PgVec<'_, u8>, count: usize) -> PgResult<()> {
     static ZEROS: [u8; 8] = [0; 8];
     let mut left = count;
@@ -471,7 +484,7 @@ pub fn json_path_from_cstring<'mcx>(
         return invalid_input_syntax(escontext.as_deref_mut(), input).map(|()| None);
     };
 
-    let mut buf: PgVec<'mcx, u8> = vec_with_capacity_in(mcx, 4 * input.len() + JSONPATH_HDRSZ)?;
+    let mut buf: PgVec<'mcx, u8> = vec_with_capacity_in(mcx, flatten_reserve(input.len())?)?;
     buf_zeros(&mut buf, JSONPATH_HDRSZ)?;
 
     let mut esc = escontext;

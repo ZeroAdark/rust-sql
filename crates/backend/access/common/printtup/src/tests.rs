@@ -19,6 +19,8 @@ const INT4SEND: Oid = 2407;
 const INT4OID: Oid = 23;
 const TEXTOID: Oid = 25;
 const DOMAINOID: Oid = 99923;
+const FLIPOID: Oid = 99925;
+const FLIPSEND: Oid = 99926;
 
 thread_local! {
     static SENT: RefCell<Vec<(u8, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
@@ -58,6 +60,15 @@ fn int4send_fn(
     ))
 }
 
+// Test send fn that flips client_encoding (CONVERT) as a side effect.
+fn flipsend_fn(
+    flinfo: Option<&mut FmgrInfo>,
+    fcinfo: &mut FunctionCallInfoBaseData,
+) -> PgResult<Datum> {
+    CONVERT.with(|c| c.set(true));
+    int4send_fn(flinfo, fcinfo)
+}
+
 fn install_fixtures() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
@@ -85,6 +96,7 @@ fn install_fixtures() {
         });
         lsyscache_seams::get_type_binary_output_info::set(|oid| match oid {
             INT4OID => Ok((INT4SEND, false)),
+            FLIPOID => Ok((FLIPSEND, false)),
             _ => panic!("get_type_binary_output_info: unexpected oid {oid}"),
         });
         lsyscache_seams::get_base_type_and_typmod::set(|typid, typmod| match typid {
@@ -97,6 +109,7 @@ fn install_fixtures() {
                 INT4OUT => Ok(FmgrInfo::new(int4out_fn, INT4OUT, 1, true, false)),
                 TEXTOUT => Ok(FmgrInfo::new(textout_fn, TEXTOUT, 1, true, false)),
                 INT4SEND => Ok(FmgrInfo::new(int4send_fn, INT4SEND, 1, true, false)),
+                FLIPSEND => Ok(FmgrInfo::new(flipsend_fn, FLIPSEND, 1, true, false)),
                 _ => panic!("fmgr_info: unexpected oid {oid}"),
             }
         });
@@ -546,6 +559,41 @@ fn text_output_reconverts_when_client_encoding_changes_mid_query() {
     raw3.extend_from_slice(&counted(b"hello"));
     assert_eq!(sent()[2], (b'D', raw3));
     assert_eq!(CONVERT_CALLS.with(|c| c.get()), 1);
+}
+
+// printtup.c:362 — pq_sendcountedtext consults the client encoding per
+// column, so a send function that changes client_encoding mid-row (a
+// user-defined type's volatile send fn) converts the text columns after it.
+#[test]
+fn text_output_reconverts_when_send_function_changes_client_encoding_mid_row() {
+    let ctx = setup();
+    let mut flip = int4_attr(0);
+    flip.atttypid = FLIPOID;
+    let mut text_att = int4_attr(1);
+    text_att.atttypid = TEXTOID;
+    text_att.attlen = -1;
+    text_att.attbyval = false;
+    let desc = make_desc(ctx.mcx(), vec![flip, text_att]);
+
+    let text = b"hello\0";
+    let mut slot = make_slot(
+        ctx.mcx(),
+        Rc::clone(&desc),
+        &[
+            (Datum::from_i32(7), false),
+            (Datum::from_usize(text.as_ptr() as usize), false),
+        ],
+    );
+    let mut dr = remote_receiver(ctx.mcx(), &[1, 0]);
+    dr.startup(1, &desc).unwrap();
+    let calls_after_startup = CONVERT_CALLS.with(|c| c.get());
+    dr.receive_slot(&mut slot).unwrap();
+
+    let mut expect = 2u16.to_be_bytes().to_vec();
+    expect.extend_from_slice(&counted(&[0, 0, 0, 7]));
+    expect.extend_from_slice(&counted(b"HELLO"));
+    assert_eq!(sent()[1], (b'D', expect));
+    assert_eq!(CONVERT_CALLS.with(|c| c.get()), calls_after_startup + 1);
 }
 
 // printtup.c:427 — printatt printf's the attribute name and the output

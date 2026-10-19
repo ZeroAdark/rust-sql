@@ -96,6 +96,16 @@ pub(crate) fn aborted_xact_error(funcname: &'static str) -> Box<types_error::PgE
 // statement logging — governed by log_parameter_max_length, not the
 // on-error variant; BuildParamLogString (params.c:352) yields nothing under
 // a param fetch hook or in an aborted transaction.
+// ParamsErrorCallback on error_context_stack: non-ERROR reports emitted
+// while it is installed carry the parameter context too (C's errfinish walks
+// the stack for every elevel); the ERROR path attaches on propagation.
+fn push_params_error_callback(portal_name: &str, params: ParamListHandle) -> u64 {
+    let name = portal_name.to_owned();
+    elog::push_emit_context_callback(Box::new(move |e| {
+        nodes_params::params_error_callback(e, &name, params)
+    }))
+}
+
 fn errdetail_params(mcx: Mcx<'_>, params: ParamListHandle) -> PgResult<Option<String>> {
     let maxlen = guc_tables::backing::log_parameter_max_length();
     if types_portal::params::num_params(params) == 0
@@ -559,6 +569,7 @@ pub fn exec_bind_message<'mcx>(
     };
 
     let pmcx = portal_mcx(&portal);
+    let ctx_name = portal.borrow().name.as_str().to_owned();
 
     let mut snapshot_set = false;
     if num_params > 0 || plancache::CachedPlanRequiresSnapshot(psrc) {
@@ -581,7 +592,7 @@ pub fn exec_bind_message<'mcx>(
             // emitted inside input functions do not attach it (the propagation
             // pattern covers the ERROR path only).
             let pctx = |e: Box<types_error::PgError>| {
-                bind_param_error_context(e, portal_name.as_str(), paramno, None)
+                bind_param_error_context(e, ctx_name.as_str(), paramno, None)
             };
             let ptype = param_types[paramno];
             let plength =
@@ -613,8 +624,25 @@ pub fn exec_bind_message<'mcx>(
                         None => None,
                         Some(raw) => Some(client_to_server_cstring(pmcx, raw).map_err(pctx)?),
                     };
+                    let cstr = pstring.as_ref().map(|v| {
+                        CStr::from_bytes_with_nul(v)
+                            .expect("client_to_server_cstring NUL-terminates")
+                    });
+                    let mut finfo = fmgr_seams::fmgr_info::call(typinput).map_err(pctx)?;
+                    let v = types_fmgr::input_function_call(&mut finfo, cstr, typioparam, -1, pmcx)
+                        .map_err(|e| {
+                            let val = cstr.map(|c| String::from_utf8_lossy(c.to_bytes()).into_owned());
+                            bind_param_error_context(
+                                e,
+                                ctx_name.as_str(),
+                                paramno,
+                                val.as_deref(),
+                            )
+                        })?;
                     // If we might need to log parameters later, save a copy
-                    // of the converted string (exec_bind_message). C trims
+                    // of the converted string (postgres.c:1879: decided
+                    // AFTER the input call, which may itself have changed
+                    // the GUC). C trims
                     // to maxlen + 2*MAX_MULTIBYTE_CHAR_LEN so
                     // BuildParamLogString can still include the ellipsis.
                     let maxlen = guc_tables::backing::log_parameter_max_length_on_error();
@@ -635,21 +663,6 @@ pub fn exec_bind_message<'mcx>(
                                 [paramno] = Some(kept);
                         }
                     }
-                    let cstr = pstring.as_ref().map(|v| {
-                        CStr::from_bytes_with_nul(v)
-                            .expect("client_to_server_cstring NUL-terminates")
-                    });
-                    let mut finfo = fmgr_seams::fmgr_info::call(typinput).map_err(pctx)?;
-                    let v = types_fmgr::input_function_call(&mut finfo, cstr, typioparam, -1, pmcx)
-                        .map_err(|e| {
-                            let val = cstr.map(|c| String::from_utf8_lossy(c.to_bytes()).into_owned());
-                            bind_param_error_context(
-                                e,
-                                portal_name.as_str(),
-                                paramno,
-                                val.as_deref(),
-                            )
-                        })?;
                     // The result may alias finfo's scratch (fc_textin's
                     // OutBuf), which dies with this arm — datumCopy into the
                     // portal context (C pallocs there directly).
@@ -823,8 +836,10 @@ pub fn exec_bind_message<'mcx>(
         pquery::PortalSetResultFormat(&portal, &rformats)?;
         Ok(())
     };
-    bind_tail()
-        .map_err(|e| nodes_params::params_error_context(e, portal_name.as_str(), params))?;
+    let params_cb = push_params_error_callback(ctx_name.as_str(), params);
+    let bound = bind_tail();
+    elog::pop_emit_context_callback(params_cb);
+    bound.map_err(|e| nodes_params::params_error_context(e, ctx_name.as_str(), params))?;
 
     if elog::config::where_to_send_output() == CommandDest::Remote {
         pqformat::pq_putemptymessage(pqmsg::BIND_COMPLETE)?;
@@ -925,7 +940,7 @@ pub fn exec_execute_message<'mcx>(
         let is_xact = !stmts.is_null()
             && pquery::stmt_list::with(stmts, IsTransactionStmtList);
         let src = PgString::from_str_in(
-            p.sourceText.as_ref().map(|s| s.as_str()).unwrap_or(""),
+            p.sourceText.unwrap_or(""),
             mcx,
         )?;
         let prep = PgString::from_str_in(
@@ -952,7 +967,9 @@ pub fn exec_execute_message<'mcx>(
     // pg_stat_activity as active on MaxActiveQueries), before the
     // transaction/snapshot/locks (everything above is session-local portal
     // bookkeeping); the guard's drop releases on every exit path.
-    let _admission = crate::admission::acquire_for_statement()?;
+    let _admission = crate::admission::acquire_for_statement(|| {
+        crate::admission::finishes_prepared(portal.borrow().commandTag)
+    })?;
 
     {
         let stmts = portal.borrow().stmts;
@@ -989,7 +1006,8 @@ pub fn exec_execute_message<'mcx>(
 
     let execute_is_fetch = !portal.borrow().atStart;
 
-    let portal_params = portal.borrow().portalParams;
+    let mut portal_params = portal.borrow().portalParams;
+    let ctx_name = portal.borrow().name.as_str().to_owned();
 
     let mut was_logged = false;
     if check_log_statement_planned(&portal)? {
@@ -1022,6 +1040,7 @@ pub fn exec_execute_message<'mcx>(
     // Okay to run the portal. Set the error callback so that parameters are
     // logged; they must have been saved during the bind phase (C pushes
     // ParamsErrorCallback around PortalRun).
+    let params_cb = push_params_error_callback(ctx_name.as_str(), portal_params);
     let completed = pquery::PortalRun(
         &portal,
         max_rows,
@@ -1029,8 +1048,10 @@ pub fn exec_execute_message<'mcx>(
         &mut receiver,
         None, /* altdest aliases dest, as in C */
         Some(&mut qc),
-    )
-    .map_err(|e| nodes_params::params_error_context(e, portal_name, portal_params))?;
+    );
+    elog::pop_emit_context_callback(params_cb);
+    let completed = completed
+        .map_err(|e| nodes_params::params_error_context(e, ctx_name.as_str(), portal_params))?;
     crate::stmt_trace::probe("e.run");
 
     receiver.destroy();
@@ -1040,6 +1061,10 @@ pub fn exec_execute_message<'mcx>(
             || (xact::MyXactFlags() & types_core::xact::XACT_FLAGS_NEEDIMMEDIATECOMMIT) != 0
         {
             finish_xact_command()?;
+
+            // postgres.c:2304: the portal's storage went away with the
+            // commit, so pretend there were no parameters.
+            portal_params = types_portal::ParamListHandle::NULL;
         } else {
             xact::CommandCounterIncrement()?;
 

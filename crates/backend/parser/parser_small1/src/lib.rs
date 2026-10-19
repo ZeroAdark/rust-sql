@@ -163,7 +163,7 @@ pub use parse_param::{
     setup_parse_sql_fn_parameters, setup_parse_variable_parameters, sql_fn_make_param,
     sql_fn_paramref_hook, sql_fn_resolve_param_name, variable_coerce_param_hook,
     variable_paramref_hook, FixedParamState, ParseRefHookState, PlpgsqlHookState,
-    PlpgsqlNameEntry, PlpgsqlResolveOption, SqlFnParamState, VarParamState,
+    PlpgsqlNameEntry, PlpgsqlResolveOption, SqlFnParamState, VarParamState, WHOLE_ROW_FIELD,
 };
 
 #[cfg(test)]

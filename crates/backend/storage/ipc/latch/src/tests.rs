@@ -267,7 +267,7 @@ fn wait_latch_parks_until_cross_thread_set_latch() {
 
 #[test]
 fn wait_latch_timed_recovers_lost_wake_within_cadence() {
-    // GL-RECWAKE-1 (the recovery-boot wedge, chaos seed 45101 round 14): the
+    // regression (the recovery-boot wedge, chaos seed 45101 round 14): the
     // lost-wake shape is "flag stored, wake dropped" — is_set lands but no
     // unpark is ever delivered. A timed WaitLatch whose caller deadline is
     // long (checkpointer main lap = checkpoint_timeout ~300s) must still
@@ -552,7 +552,7 @@ fn wait_latch_runs_thread_signal_drain() {
 // (checkpointer.c:400-410). C's handler stores the flag at delivery; the
 // thread-model handler runs at a drain, so a signal delivered before the
 // ResetLatch must be drained at WaitLatch entry or the reset swallows the
-// only wake and the thread parks forever (P001, PM_WAIT_CHECKPOINTER wedge).
+// only wake and the thread parks forever (XAAB, PM_WAIT_CHECKPOINTER wedge).
 #[test]
 fn wait_latch_drains_signal_delivered_before_reset_latch() {
     let _g = TEST_LOCK.lock().unwrap();
@@ -602,4 +602,113 @@ fn local_latch_slab_scales_with_configured_backends() {
     }
     assert!(outcome.is_ok(), "allocating {want} local latches panicked");
     assert!(high > LOCAL_LATCH_CAP, "high water {high} never left the boot slab");
+}
+
+// -- mailbox_send_on_my_latch (regression) ----------------------------------
+//
+// pqmq.c:184-187: a worker whose leader queue is full waits on MyLatch and
+// runs CHECK_FOR_INTERRUPTS after every wake, so a cancel/terminate aimed at
+// it (pending bits + SetLatch) ends the wait and raises. The sender thread
+// below is that worker; the main thread plays the leader (pop) and the
+// signal sender (SetLatch on the worker's latch).
+mod mailbox_send {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{mpsc, Arc};
+    use std::time::Duration;
+    use types_error::{ERRCODE_QUERY_CANCELED, ERROR};
+
+    const WAIT_EVENT: u32 = 0x0800_0000 + 34; // MessageQueuePutMessage
+
+    struct Worker {
+        latch: LatchHandle,
+        done: mpsc::Receiver<PgResult<Result<(), u32>>>,
+        parked: Arc<AtomicBool>,
+    }
+
+    fn spawn_worker(
+        tx: pgsync::MailboxSender<u32>,
+        cancel: Arc<AtomicBool>,
+    ) -> Worker {
+        let (latch_tx, latch_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let parked = Arc::new(AtomicBool::new(false));
+        let parked2 = Arc::clone(&parked);
+        std::thread::spawn(move || {
+            SetMyProcPid(4242);
+            let h = fresh_latch();
+            InitLatch(h);
+            SetMyLatch(Some(h));
+            latch_tx.send(h).unwrap();
+            // CHECK_FOR_INTERRUPTS: the pending cancel becomes 57014 here.
+            let r = mailbox_send_on_my_latch(&tx, 2, WAIT_EVENT, || {
+                parked2.store(true, SeqCst);
+                if cancel.load(SeqCst) {
+                    let mut e = PgError::new(ERROR, "canceling statement due to user request");
+                    e.sqlstate = ERRCODE_QUERY_CANCELED;
+                    return Err(Box::new(e));
+                }
+                Ok(())
+            });
+            SetMyLatch(None);
+            done_tx.send(r).unwrap();
+        });
+        Worker { latch: latch_rx.recv().unwrap(), done: done_rx, parked }
+    }
+
+    #[test]
+    fn cancel_unparks_the_sender_and_raises_57014() {
+        let _g = TEST_LOCK.lock().unwrap();
+        install_mock();
+        let (tx, rx) = pgsync::mailbox::<u32>(Some(1));
+        tx.send(1).unwrap(); // the leader queue is full
+        let cancel = Arc::new(AtomicBool::new(false));
+        let w = spawn_worker(tx, Arc::clone(&cancel));
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(w.done.try_recv().is_err(), "sender must be parked on the full queue");
+
+        // Signal delivery (procsignal's deliver_thread_signal shape):
+        // pending bit, then SetLatch on the target's latch.
+        cancel.store(true, SeqCst);
+        SetLatch(w.latch);
+        let r = w.done.recv_timeout(Duration::from_secs(2)).expect("sender never unparked");
+        let e = r.expect_err("the pending cancel must be raised");
+        assert_eq!(e.sqlstate, ERRCODE_QUERY_CANCELED);
+        assert!(w.parked.load(SeqCst));
+        assert_eq!(rx.recv(), Some(1));
+        assert!(matches!(rx.try_recv(), pgsync::TryRecv::Disconnected), "abandoned send must not enqueue");
+    }
+
+    #[test]
+    fn leader_pop_wakes_the_sender_through_its_latch() {
+        let _g = TEST_LOCK.lock().unwrap();
+        install_mock();
+        let (tx, rx) = pgsync::mailbox::<u32>(Some(1));
+        tx.send(1).unwrap();
+        let w = spawn_worker(tx, Arc::new(AtomicBool::new(false)));
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(w.done.try_recv().is_err());
+
+        let start = std::time::Instant::now();
+        assert_eq!(rx.recv(), Some(1)); // pop -> sender_wake -> SetLatch(worker)
+        let r = w.done.recv_timeout(Duration::from_secs(2)).expect("sender never unparked");
+        assert!(matches!(r, Ok(Ok(()))), "send must complete after the pop");
+        // Well inside the 1s waiter recheck cadence: the latch wake, not the
+        // backstop, ended the park.
+        assert!(start.elapsed() < Duration::from_millis(500), "woken only by the cadence");
+        assert_eq!(rx.recv(), Some(2));
+    }
+
+    #[test]
+    fn receiver_gone_returns_the_value() {
+        let _g = TEST_LOCK.lock().unwrap();
+        install_mock();
+        let (tx, rx) = pgsync::mailbox::<u32>(Some(1));
+        tx.send(1).unwrap();
+        let w = spawn_worker(tx, Arc::new(AtomicBool::new(false)));
+        std::thread::sleep(Duration::from_millis(30));
+        drop(rx);
+        let r = w.done.recv_timeout(Duration::from_secs(2)).expect("sender never unparked");
+        assert!(matches!(r, Ok(Err(2))), "detached receiver must hand the value back");
+    }
 }

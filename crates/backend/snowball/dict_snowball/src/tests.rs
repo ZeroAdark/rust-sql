@@ -1,17 +1,20 @@
 use ::mcx::{Mcx, PgVec};
 use ::ts_locale::dict_api::DictInitData;
-use ::wchar::{pg_enc, PG_KOI8R, PG_LATIN1, PG_LATIN2, PG_UTF8};
+use ::wchar::{pg_enc, PG_KOI8R, PG_LATIN1, PG_LATIN2, PG_SQL_ASCII, PG_UTF8};
 
-use crate::dict::{dsnowball_init, dsnowball_lexize, DictSnowball};
+use crate::dict::{dsnowball_init, dsnowball_lexize, locate_stem_module, DictSnowball};
 
-fn opts<'m>(mcx: Mcx<'m>, pairs: &[(&str, &str)]) -> PgVec<'m, (PgVec<'m, u8>, PgVec<'m, u8>)> {
+fn opts<'m>(
+    mcx: Mcx<'m>,
+    pairs: &[(&str, &str)],
+) -> PgVec<'m, (PgVec<'m, u8>, Option<PgVec<'m, u8>>)> {
     let mut v = PgVec::new_in(mcx);
     for (k, val) in pairs {
         let mut kb = PgVec::new_in(mcx);
         kb.extend_from_slice(k.as_bytes());
         let mut vb = PgVec::new_in(mcx);
         vb.extend_from_slice(val.as_bytes());
-        v.push((kb, vb));
+        v.push((kb, Some(vb)));
     }
     v
 }
@@ -324,4 +327,17 @@ fn failed_init_closes_located_stemmer() {
     let Err(err) = dsnowball_init(&init) else { panic!("init with a bogus option succeeded") };
     assert_eq!(err.message(), "unrecognized Snowball parameter: \"bogus\"");
     assert!(crate::dict::STEMMERS_CLOSED.load(SeqCst) > before);
+}
+
+// dict_snowball.c:220 interpolates the language bytes with %s: under
+// SQL_ASCII a high byte reaches the client as itself.
+#[test]
+fn unknown_language_error_carries_the_raw_language_bytes() {
+    ::mbutils::SetDatabaseEncoding(PG_SQL_ASCII).unwrap();
+    let err = locate_stem_module(b"x\xff").err().unwrap();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"no Snowball stemmer available for language \"x\xff\" and encoding \"SQL_ASCII\"".as_slice())
+    );
+    assert_eq!(err.sqlstate(), ::types_error::ERRCODE_UNDEFINED_OBJECT);
 }

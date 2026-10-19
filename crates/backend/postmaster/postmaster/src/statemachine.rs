@@ -20,12 +20,12 @@ pub fn UpdatePMState(new_state: PMState) {
     report_internal(
         DEBUG1,
         format!("updating PMState from {} to {}", pmstate_name(old), pmstate_name(new_state)),
-        3277,
+        3254,
         "UpdatePMState",
     );
     with_pm(|pm| {
         pm.pm_state = new_state;
-        // GL-GANGWEDGE-1: the shutdown-stall watchdog's progress stamp. Any
+        // regression: the shutdown-stall watchdog's progress stamp. Any
         // state change is progress, so re-stamping here (rather than on entry
         // to one named state) is what makes the watchdog measure "stuck"
         // instead of "slow".
@@ -35,38 +35,30 @@ pub fn UpdatePMState(new_state: PMState) {
     });
 }
 
-fn pm_signame(signal: i32) -> &'static str {
-    match signal {
-        procsignal::signums::SIGABRT => "SIGABRT",
-        procsignal::signums::SIGCHLD => "SIGCHLD",
-        procsignal::signums::SIGHUP => "SIGHUP",
-        procsignal::signums::SIGINT => "SIGINT",
-        procsignal::signums::SIGKILL => "SIGKILL",
-        procsignal::signums::SIGQUIT => "SIGQUIT",
-        procsignal::signums::SIGTERM => "SIGTERM",
-        procsignal::signums::SIGUSR1 => "SIGUSR1",
-        procsignal::signums::SIGUSR2 => "SIGUSR2",
-        _ => "(unknown)",
-    }
-}
-
 /// signal_child for the postmaster-tracked aux singletons; per-child signal
 /// delivery to backend threads is the pmchild redesign.
 pub fn signal_child(pmchild: &PmChild, signal: i32) {
+    log_signal_child(pmchild, signal);
+    // kill(pid, signal)'s thread rendering; C ignores kill() failures here.
+    let _ = procsignal::SendThreadSignal(pmchild.pid, signal);
+}
+
+/// signal_child's DEBUG3 line alone, for the logger (postmaster.c:3435):
+/// the slotless collector thread is poked directly, not through a ProcSignal
+/// slot.
+pub(crate) fn log_signal_child(pmchild: &PmChild, signal: i32) {
     report_internal(
         DEBUG3,
         format!(
             "sending signal {}/{} to {} process with pid {}",
             signal,
-            pm_signame(signal),
+            launch_backend::pm_signame(signal),
             miscinit::GetBackendTypeDesc(pmchild.bkend_type),
             pmchild.pid
         ),
-        3455,
+        3439,
         "signal_child",
     );
-    // kill(pid, signal)'s thread rendering; C ignores kill() failures here.
-    let _ = procsignal::SendThreadSignal(pmchild.pid, signal);
 }
 
 pub fn SignalChildren(signal: i32, target_mask: BackendTypeMask) -> bool {
@@ -447,6 +439,15 @@ pub(crate) fn log_fork_failure(child_type: BackendType, save_errno: i32) {
         .finish(loc(3968, "StartChildProcess"));
 }
 
+/// StartBackgroundWorker's "fork failed" report (postmaster.c:4162):
+/// `could not fork background worker process: %m`.
+pub(crate) fn log_bgworker_fork_failure(save_errno: i32) {
+    let _ = elog::ereport(LOG)
+        .with_saved_errno(save_errno)
+        .errmsg("could not fork background worker process: %m")
+        .finish(loc(4162, "StartBackgroundWorker"));
+}
+
 pub fn StartSysLogger() {
     debug_assert!(with_pm(|pm| pm.syslogger.is_none()));
     let Some(child_slot) = pmchild_seams::assign_postmaster_child_slot::call(BackendType::Logger)
@@ -505,7 +506,7 @@ fn StartBackgroundWorker(idx: usize) -> bool {
         None,
     );
     if pid < 0 {
-        report(LOG, "could not fork background worker process".into(), 4162, "StartBackgroundWorker");
+        log_bgworker_fork_failure(elog::errno::current_errno());
         pmchild_seams::release_postmaster_child_slot::call(child_slot);
         bgworker::set_rw_crashed_at(idx, timestamp_seams::get_current_timestamp::call());
         return false;

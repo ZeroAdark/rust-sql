@@ -289,3 +289,23 @@ fn empty_input_is_error() {
     assert!(parse(vec![Token::Eof]).is_err());
     assert!(parse(vec![Token::Ident(String::from("x")), Token::Eof]).is_err());
 }
+
+// repl_scanner.l:220 / repl_gram.y:319: the scanner's yyerror reaches the
+// client only when bison pulls that token; an earlier reduction's error
+// ("invalid timeline 0") or an earlier syntax error is reported instead.
+#[test]
+fn scanner_errors_surface_in_parse_order() {
+    for (input, expected) in [
+        ("TIMELINE_HISTORY 0 'x", "invalid timeline 0"),
+        ("TIMELINE_HISTORY 0 \"x", "invalid timeline 0"),
+        ("TIMELINE_HISTORY 0 'x' 'y", "invalid timeline 0"),
+        ("IDENTIFY_SYSTEM foo 'x", "syntax error"),
+        ("IDENTIFY_SYSTEM 'x", "unterminated quoted string"),
+        ("TIMELINE_HISTORY 5 'x", "unterminated quoted string"),
+        ("START_REPLICATION SLOT 'x", "unterminated quoted string"),
+    ] {
+        let err = replication_parse(input).unwrap_err();
+        assert_eq!(err.message(), expected, "{input:?}");
+        assert_eq!(err.sqlstate(), types_error::ERRCODE_SYNTAX_ERROR, "{input:?}");
+    }
+}

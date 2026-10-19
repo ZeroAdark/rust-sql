@@ -996,7 +996,8 @@ fn external_toast_pointer_const_writes_varsize_external_bytes() {
 // C datum.c datumGetSize (called by outDatum before anything is written):
 // typlen outside {>0, -1, -2} (or a by-value length that is not 1/2/4/8) is
 // elog(ERROR, "invalid typLen: %d"); a NULL by-reference pointer for a
-// varlena/cstring is elog(ERROR, "invalid Datum pointer"). Both XX000.
+// varlena/cstring is ereport(ERROR, ERRCODE_DATA_EXCEPTION, "invalid Datum
+// pointer") (datum.c:88): XX000 and 22000 respectively.
 #[test]
 fn invalid_typlen_and_null_varlena_pointer_are_c_elog_errors_not_panics() {
     let ctx = MemoryContext::new("t");
@@ -1019,7 +1020,7 @@ fn invalid_typlen_and_null_varlena_pointer_are_c_elog_errors_not_panics() {
         let c = byref_const(typlen, Datum::null());
         let err = nodeToString(mcx, Node::mk(mcx, c).unwrap()).unwrap_err();
         assert_eq!(err.message(), "invalid Datum pointer");
-        assert_eq!(err.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+        assert_eq!(err.sqlstate(), types_error::ERRCODE_DATA_EXCEPTION);
     }
     // Fixed-length by-reference with a NULL pointer is the one "0 [ ]" case.
     let c = byref_const(16, Datum::null());
@@ -1360,4 +1361,23 @@ fn a_expr_and_a_const_round_trip_through_readfuncs() {
             .unwrap_or_else(|e| panic!("{text:?}: {}", e.message()));
         assert_eq!(nodeToString(mcx, n).unwrap().as_str(), text);
     }
+}
+
+// _outWindowAgg over make_windowagg's palloc'd zero-length column arrays
+// (createplan.c:2647/2664): "()" like C, not the NULL-pointer "<>".
+#[test]
+fn window_agg_empty_column_arrays_print_as_allocated() {
+    use types_nodes::plannodes::WindowAgg;
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let node = Node::build::<WindowAgg>(mcx).unwrap().seal();
+    let s = nodeToString(mcx, node).unwrap();
+    assert!(
+        s.as_str().contains(
+            ":partNumCols 0 :partColIdx () :partOperators () :partCollations () \
+             :ordNumCols 0 :ordColIdx () :ordOperators () :ordCollations ()"
+        ),
+        "{}",
+        s.as_str()
+    );
 }

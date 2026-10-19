@@ -330,3 +330,21 @@ fn bit_cmp_payload_returns_memcmp_difference() {
     assert_eq!(bit_cmp_payload(&e[4..], &f[4..]), -1);
     assert_eq!(bit_cmp_payload(&f[4..], &e[4..]), 1);
 }
+
+// regression: varbit.c:235 formats the bad digit with pg_mblen_cstr,
+// whose terminator scan (mbutils.c:1052-1054) raises the invalid-byte-sequence
+// error for a lead byte whose character would run past the end of the string.
+#[test]
+fn truncated_multibyte_digit_is_invalid_byte_sequence() {
+    const PG_UTF8: i32 = 6;
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    mbutils::SetDatabaseEncoding(PG_UTF8).unwrap();
+    let e = bit_in_cstr(mcx, b"\xe9").unwrap_err();
+    assert_eq!(e.message(), "invalid byte sequence for encoding \"UTF8\": 0xe9");
+    assert_eq!(e.sqlstate(), ::types_error::ERRCODE_CHARACTER_NOT_IN_REPERTOIRE);
+    let e = bit_in_cstr(mcx, b"x1\xe9").unwrap_err();
+    assert_eq!(e.message(), "invalid byte sequence for encoding \"UTF8\": 0xe9");
+    let e = bit_in_cstr(mcx, b"1\xc3\xa9").unwrap_err();
+    assert_eq!(e.message(), "\"é\" is not a valid binary digit");
+}

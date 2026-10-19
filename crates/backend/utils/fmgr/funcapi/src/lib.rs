@@ -18,8 +18,8 @@ mod srf_mat;
 
 pub use attinmeta::AttInMetadata;
 pub use funcapi_srf::{
-    end_MultiFuncCall, init_MultiFuncCall, per_MultiFuncCall, srf_return_done, srf_return_next,
-    srf_return_next_null, FuncCallContext,
+    end_MultiFuncCall, init_MultiFuncCall, per_MultiFuncCall, srf_context_error, srf_return_done,
+    srf_return_next, srf_return_next_null, FuncCallContext,
 };
 pub use srf_mat::{InitMaterializedSRF, MaterializedSRF, MAT_SRF_BLESS, MAT_SRF_USE_EXPECTED_DESC};
 
@@ -768,13 +768,10 @@ pub fn resolve_polymorphic_tupdesc(
     Ok(true)
 }
 
-// C: exprInputCollation (nodeFuncs.c) over the call-expression families.
+// exprInputCollation (nodeFuncs.c:1088): the canonical port covers every
+// call family (Aggref, WindowFunc, ... MinMaxExpr), not only FuncExpr/OpExpr.
 fn expr_input_collation(node: Node<'_>) -> Oid {
-    match node.node_tag() {
-        NodeTag::T_FuncExpr => node.as_func_expr().unwrap().inputcollid,
-        NodeTag::T_OpExpr => node.as_op_expr().unwrap().inputcollid,
-        _ => InvalidOid,
-    }
+    ::nodes_core::node_funcs::expr_input_collation(node)
 }
 
 #[derive(Default)]

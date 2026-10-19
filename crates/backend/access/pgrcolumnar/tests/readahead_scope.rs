@@ -420,7 +420,7 @@ fn serial_kill_switch_covers_claim_channel() {
 }
 
 // ---------------------------------------------------------------------------
-// GL-Q4142: the morsel-range tripwire's pgrcolumnar leg.
+// regression: the morsel-range tripwire's pgrcolumnar leg.
 //
 // `heapam::heap_set_block_range` refuses block-range positioning on a scan
 // that carries a shared parallel scan descriptor: a private range drive
@@ -474,7 +474,7 @@ fn granule_range_refuses_a_parallel_scan() {
     std::fs::remove_file(&path).unwrap();
 }
 
-// GL-Q4142 granule-sum witness: the invariant the tripwire above protects.
+// regression granule-sum witness: the invariant the tripwire above protects.
 //
 // Two participants sharing ONE parallel scan descriptor claim row groups
 // through `phs_nallocated`, so their staged rows SUM to the part exactly —

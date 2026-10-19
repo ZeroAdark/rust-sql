@@ -108,6 +108,18 @@ static EXTRA_ERR: &[(&str, &str)] = &[
     ("\"abc\\", "unexpected end after backslash at or near \"\\\" of jsonpath input"),
     ("\"a\\\nb\"", "unexpected end after backslash at or near \"\\\" of jsonpath input"),
     ("1 2 \"x", "syntax error at or near \"2\" of jsonpath input"),
+    // expr never starts with EXISTS_P: bison rejects the keyword lookahead
+    // before the operand is parsed (its numeric never reaches numeric_in).
+    ("$[exists(1)]", "syntax error at end of jsonpath input"),
+    ("$[exists (1)]", "syntax error at or near \" \" of jsonpath input"),
+    ("$[exists(1e1000000)]", "syntax error at end of jsonpath input"),
+    ("$[1 to exists(1e1000000)]", "syntax error at end of jsonpath input"),
+    ("$ + exists(1e1000000)", "syntax error at end of jsonpath input"),
+    ("$ ? (1 * exists(1e1000000))", "syntax error at end of jsonpath input"),
+    ("$ == exists(1e1000000)", "syntax error at end of jsonpath input"),
+    ("$ ? (@ == exists (1))", "syntax error at or near \" \" of jsonpath input"),
+    ("-exists(1e1000000)", "syntax error at end of jsonpath input"),
+    ("exists(exists(1e1000000))", "syntax error at end of jsonpath input"),
 ];
 
 #[test]
@@ -349,4 +361,27 @@ fn parse_flatten_and_print_poll_for_interrupts() {
     let err = jsonpath_out(cx.mcx(), &image).unwrap_err();
     assert_eq!(err.sqlstate(), ERRCODE_QUERY_CANCELED);
     assert!(ARMED.lock().unwrap().is_empty());
+}
+
+// jsonpath.c:189 reserves 4 * len through enlargeStringInfo: the estimate is
+// what is bounded (>= MaxAllocSize is 54000, a negative int product XX000),
+// never the estimate plus the header.
+#[test]
+fn flatten_reserve_bounds_match_enlarge_string_info() {
+    assert_eq!(crate::path::flatten_reserve(10).unwrap(), 1024);
+    assert_eq!(crate::path::flatten_reserve(1000).unwrap(), 4096);
+    assert_eq!(crate::path::flatten_reserve(268_435_454).unwrap(), 1_073_741_823);
+    assert_eq!(crate::path::flatten_reserve(268_435_455).unwrap(), 1_073_741_823);
+    let err = crate::path::flatten_reserve(268_435_456).unwrap_err();
+    assert_eq!(
+        err.message(),
+        "string buffer exceeds maximum allowed length (1073741823 bytes)"
+    );
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_PROGRAM_LIMIT_EXCEEDED);
+    assert_eq!(
+        err.detail(),
+        Some("Cannot enlarge string buffer containing 0 bytes by 1073741824 more bytes.")
+    );
+    let err = crate::path::flatten_reserve(536_870_912).unwrap_err();
+    assert_eq!(err.message(), "invalid string enlargement request size: -2147483648");
 }

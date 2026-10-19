@@ -417,7 +417,7 @@ impl<T: Send + 'static> RowFunnel<T> {
         FunnelProducer { funnel: Arc::clone(self), ring: Arc::clone(&self.rings[w]), w }
     }
 
-    /// GL-STMTTASK-2 change 1 (standing-engagement reuse): reset a QUIESCED
+    /// regression change 1 (standing-engagement reuse): reset a QUIESCED
     /// funnel for the next statement — the per-session persistent funnel
     /// replaces the per-statement ring allocation. CALLER CONTRACT: no live
     /// producer and no live drain exist (the leader joined its board —

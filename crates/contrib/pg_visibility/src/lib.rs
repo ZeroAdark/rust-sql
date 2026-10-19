@@ -16,7 +16,10 @@ use types_core::{
     xact::{TransactionIdIsValid, TransactionIdPrecedes},
     BlockNumber, ForkNumber, InvalidBlockNumber, MaxBlockNumber, TransactionId,
 };
-use types_error::{PgError, PgResult, ERRCODE_INVALID_PARAMETER_VALUE, ERRCODE_WRONG_OBJECT_TYPE};
+use types_error::{
+    PgError, PgResult, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_INVALID_PARAMETER_VALUE,
+    ERRCODE_WRONG_OBJECT_TYPE,
+};
 use types_fmgr::{byref_result, FmgrInfo, FunctionCallInfoBaseData as Fcinfo, PGFunction};
 use types_rel::pg_class::RELKIND_HAS_TABLE_AM;
 use types_snapshot::HTSV_Result;
@@ -51,6 +54,18 @@ fn check_relation_relkind(rel: &types_rel::RelationData<'_>) -> PgResult<()> {
             ))
             .with_sqlstate(ERRCODE_WRONG_OBJECT_TYPE)
             .with_detail(detail),
+        ));
+    }
+    Ok(())
+}
+
+// read_stream_begin_impl (read_stream.c:563-566): the stream rejects another
+// session's temp relation before any block is read.
+fn check_not_other_temp(rel: &types_rel::RelationData<'_>) -> PgResult<()> {
+    if rel.rd_rel.relpersistence == types_core::catalog::RELPERSISTENCE_TEMP && !rel.rd_islocaltemp {
+        return Err(Box::new(
+            PgError::error("cannot access temporary tables of other sessions")
+                .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
         ));
     }
     Ok(())
@@ -209,6 +224,9 @@ fn collect_visibility_data(
 
     let nblocks = bufmgr::RelationGetNumberOfBlocksInFork(&rel, ForkNumber::MAIN_FORKNUM)?;
     let mut info = VBits { bits: vec![0u8; nblocks as usize] };
+    if include_pd {
+        check_not_other_temp(&rel)?;
+    }
     let mut vmbuffer = VmBuffer::new();
 
     for blkno in 0..nblocks {
@@ -318,6 +336,7 @@ fn collect_corrupt_items(
     if all_visible {
         oldest_xmin = strict_oldest_nonremovable_xid(&rel)?;
     }
+    check_not_other_temp(&rel)?;
 
     let mut items: Vec<Vec<u8>> = Vec::with_capacity(64);
     let nblocks = bufmgr::RelationGetNumberOfBlocksInFork(&rel, ForkNumber::MAIN_FORKNUM)?;
@@ -677,6 +696,9 @@ fn fc_pg_truncate_visibility_map(
         Ok(())
     })();
 
+    if let Err(err) = &crit {
+        elog::panic_on_crit_section_escape(err);
+    }
     init_small::globals::EndCriticalSection();
     my_proc
         .delayChkptFlags

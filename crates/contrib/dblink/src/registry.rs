@@ -26,10 +26,98 @@ impl RemoteConn {
     }
 }
 
+// remoteConnHash: hash_create("Remote Con hash", NUMCONN, HASH_ELEM |
+// HASH_STRINGS). dblink_get_connections walks it in dynahash scan order, so
+// the map carries a shadow of C's linear-hashing bucket layout (init_htab,
+// expand_table, calc_bucket; HASH_ENTER appends to the chain tail) keyed by
+// string_hash over the NAMEDATALEN-truncated name.
+const NUMCONN: usize = 16;
+
+struct NamedConns {
+    map: HashMap<Vec<u8>, Option<RemoteConn>, FxBuildHasher>,
+    buckets: Vec<Vec<Vec<u8>>>,
+    nentries: usize,
+    max_bucket: u32,
+    low_mask: u32,
+    high_mask: u32,
+}
+
+impl NamedConns {
+    fn new() -> NamedConns {
+        NamedConns {
+            map: HashMap::with_hasher(FxBuildHasher),
+            buckets: vec![Vec::new(); NUMCONN],
+            nentries: 0,
+            max_bucket: NUMCONN as u32 - 1,
+            low_mask: NUMCONN as u32 - 1,
+            high_mask: (NUMCONN as u32) * 2 - 1,
+        }
+    }
+
+    fn hash(key: &[u8]) -> u32 {
+        hashfn::string_hash(key, NAMEDATALEN as usize)
+    }
+
+    fn calc_bucket(&self, hash: u32) -> usize {
+        let mut bucket = hash & self.high_mask;
+        if bucket > self.max_bucket {
+            bucket &= self.low_mask;
+        }
+        bucket as usize
+    }
+
+    fn expand_table(&mut self) {
+        let new_bucket = self.max_bucket + 1;
+        self.buckets.push(Vec::new());
+        self.max_bucket = new_bucket;
+        let old_bucket = (new_bucket & self.low_mask) as usize;
+        if new_bucket > self.high_mask {
+            self.low_mask = self.high_mask;
+            self.high_mask = new_bucket | self.low_mask;
+        }
+        let chain = core::mem::take(&mut self.buckets[old_bucket]);
+        for key in chain {
+            let bucket = self.calc_bucket(Self::hash(&key));
+            self.buckets[bucket].push(key);
+        }
+    }
+
+    // HASH_ENTER: the split check precedes the lookup (even a duplicate
+    // name has already split the table); a new key joins its chain's tail.
+    fn enter(&mut self, key: &[u8]) -> bool {
+        if self.nentries > self.max_bucket as usize {
+            self.expand_table();
+        }
+        let bucket = self.calc_bucket(Self::hash(key));
+        if self.buckets[bucket].iter().any(|k| k == key) {
+            return false;
+        }
+        self.buckets[bucket].push(key.to_vec());
+        self.nentries += 1;
+        true
+    }
+
+    fn remove(&mut self, key: &[u8]) -> bool {
+        let bucket = self.calc_bucket(Self::hash(key));
+        match self.buckets[bucket].iter().position(|k| k == key) {
+            Some(pos) => {
+                self.buckets[bucket].remove(pos);
+                self.nentries -= 1;
+                true
+            }
+            None => false,
+        }
+    }
+
+    // hash_seq_search order: bucket 0..=max_bucket, each chain head to tail.
+    fn scan_order(&self) -> Vec<Vec<u8>> {
+        self.buckets.iter().flatten().cloned().collect()
+    }
+}
+
 thread_local! {
     static PCONN: RefCell<Option<RemoteConn>> = const { RefCell::new(None) };
-    static NAMED: RefCell<HashMap<Vec<u8>, Option<RemoteConn>, FxBuildHasher>> =
-        RefCell::new(HashMap::with_hasher(FxBuildHasher));
+    static NAMED: RefCell<NamedConns> = RefCell::new(NamedConns::new());
     static WE_CONNECT: Cell<u32> = const { Cell::new(0) };
     static WE_GET_CONN: Cell<u32> = const { Cell::new(0) };
     static WE_GET_RESULT: Cell<u32> = const { Cell::new(0) };
@@ -63,6 +151,12 @@ pub fn we_get_conn() -> PgResult<WaitEvents> {
 
 pub fn we_get_result() -> PgResult<u32> {
     we_lazy(&WE_GET_RESULT, "DblinkGetResult")
+}
+
+// dblink_init (dblink.c:268): the first call of any dblink function registers
+// DblinkGetResult, before the connection lookup can fail.
+pub fn init() -> PgResult<()> {
+    we_get_result().map(drop)
 }
 
 // truncate_identifier to NAMEDATALEN (C keys the hash by the truncated name's
@@ -109,18 +203,18 @@ pub fn unnamed_present() -> bool {
 
 pub fn named_present(name: &str) -> PgResult<bool> {
     let key = conn_key(name, false)?;
-    Ok(NAMED.with(|m| m.borrow().contains_key(&key)))
+    Ok(NAMED.with(|m| m.borrow().map.contains_key(&key)))
 }
 
 // C keeps the hash readable while a connection is in use: lift the entry out.
 pub fn with_named<R>(name: &str, f: impl FnOnce(Option<&mut RemoteConn>) -> R) -> PgResult<R> {
     let key = conn_key(name, false)?;
-    let taken = NAMED.with(|m| m.borrow_mut().get_mut(&key).and_then(Option::take));
+    let taken = NAMED.with(|m| m.borrow_mut().map.get_mut(&key).and_then(Option::take));
     match taken {
         Some(mut rc) => {
             let r = f(Some(&mut rc));
             NAMED.with(|m| {
-                if let Some(slot) = m.borrow_mut().get_mut(&key) {
+                if let Some(slot) = m.borrow_mut().map.get_mut(&key) {
                     *slot = Some(rc);
                 }
             });
@@ -143,11 +237,12 @@ pub fn with_named_present<R>(name: &str, f: impl FnOnce(&mut RemoteConn) -> R) -
 // "duplicate connection name" 42710 must precede any network traffic. The
 // entry itself only becomes visible via `store_named` once the connection
 // is up (C's rconn->conn stays NULL until then; a failed connect
-// deleteConnection()s it), so nothing is reserved in the map here.
+// deleteConnection()s it — `unreserve_named`), so only the hash-order
+// shadow takes the key here.
 pub fn reserve_named(name: &str) -> PgResult<()> {
     let key = conn_key(name, true)?;
     NAMED.with(|m| {
-        if m.borrow().contains_key(&key) {
+        if !m.borrow_mut().enter(&key) {
             return Err(Box::new(
                 PgError::error("duplicate connection name").with_sqlstate(ERRCODE_DUPLICATE_OBJECT),
             ));
@@ -156,12 +251,19 @@ pub fn reserve_named(name: &str) -> PgResult<()> {
     })
 }
 
+// deleteConnection after a failed libpqsrv_connect / dblink_security_check.
+pub fn unreserve_named(name: &str) -> PgResult<()> {
+    let key = conn_key(name, false)?;
+    NAMED.with(|m| m.borrow_mut().remove(&key));
+    Ok(())
+}
+
 // dblink_connect's "all OK, save away the conn" (rconn->conn = conn) after a
 // `reserve_named` on the same name; the NOTICE was already emitted there.
 pub fn store_named(name: &str, conn: PgConn) -> PgResult<()> {
     let key = conn_key(name, false)?;
     NAMED.with(|m| {
-        let prev = m.borrow_mut().insert(key, Some(RemoteConn::new(conn)));
+        let prev = m.borrow_mut().map.insert(key, Some(RemoteConn::new(conn)));
         debug_assert!(prev.is_none(), "store_named without reserve_named");
         Ok(())
     })
@@ -170,7 +272,9 @@ pub fn store_named(name: &str, conn: PgConn) -> PgResult<()> {
 pub fn delete_named(name: &str) -> PgResult<()> {
     let key = conn_key(name, false)?;
     NAMED.with(|m| {
-        if m.borrow_mut().remove(&key).is_some() {
+        let mut m = m.borrow_mut();
+        if m.map.remove(&key).is_some() {
+            m.remove(&key);
             Ok(())
         } else {
             Err(Box::new(
@@ -180,8 +284,12 @@ pub fn delete_named(name: &str) -> PgResult<()> {
     })
 }
 
+// dblink_get_connections: hash_seq_search order over the live entries.
 pub fn all_named_names() -> Vec<Vec<u8>> {
-    NAMED.with(|m| m.borrow().keys().cloned().collect())
+    NAMED.with(|m| {
+        let m = m.borrow();
+        m.scan_order().into_iter().filter(|k| m.map.contains_key(k)).collect()
+    })
 }
 
 #[cold]
@@ -418,6 +526,54 @@ pub fn escape_param_str(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Scan orders captured from C 18.6 dblink_get_connections(): five names
+    // within the initial 16 buckets, then 22 names across four bucket splits
+    // (expand_table at the 17th..20th insert) with removals in between.
+    #[test]
+    fn named_scan_order_follows_dynahash() {
+        let mut h = NamedConns::new();
+        let names: Vec<Vec<u8>> = ["alpha", "beta", "gamma", "delta", "dtest1"]
+            .iter()
+            .map(|n| n.as_bytes().to_vec())
+            .collect();
+        for n in &names {
+            assert!(h.enter(n));
+        }
+        assert!(!h.enter(b"beta"));
+        let order = |h: &NamedConns| -> Vec<String> {
+            h.scan_order().into_iter().map(|k| String::from_utf8(k).unwrap()).collect()
+        };
+        assert_eq!(order(&h), ["alpha", "delta", "dtest1", "gamma", "beta"]);
+        assert!(h.remove(b"beta"));
+        assert!(!h.remove(b"beta"));
+        assert!(h.enter(b"epsilon"));
+        assert_eq!(order(&h), ["epsilon", "alpha", "delta", "dtest1", "gamma"]);
+
+        let mut h = NamedConns::new();
+        for i in 1..=20 {
+            assert!(h.enter(format!("n{i:02}").as_bytes()));
+        }
+        assert_eq!(h.max_bucket, 19);
+        assert_eq!(
+            order(&h),
+            [
+                "n19", "n15", "n10", "n06", "n01", "n04", "n09", "n20", "n11", "n07", "n08", "n12",
+                "n03", "n14", "n05", "n13", "n16", "n17", "n18", "n02"
+            ]
+        );
+        assert!(h.remove(b"n03"));
+        assert!(h.remove(b"n07"));
+        assert!(h.enter(b"n21"));
+        assert!(h.enter(b"n22"));
+        assert_eq!(
+            order(&h),
+            [
+                "n19", "n15", "n10", "n06", "n01", "n04", "n09", "n20", "n11", "n08", "n12", "n21",
+                "n14", "n05", "n13", "n16", "n17", "n18", "n02", "n22"
+            ]
+        );
+    }
 
     #[test]
     fn connstr_pw_detection() {

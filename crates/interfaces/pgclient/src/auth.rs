@@ -313,7 +313,7 @@ pub(crate) struct AuthOptions<'a> {
 // An ErrorResponse during the ladder: conn->last_sqlstate plus the message.
 fn server_error(conn: &mut PgConn, mbody: &[u8]) -> String {
     conn.last_sqlstate = parse_diag(mbody).sqlstate;
-    parse_error_fields(mbody)
+    parse_error_fields(mbody, None)
 }
 
 // pgpassfileWarning (fe-connect.c): an invalid password that came from the
@@ -376,12 +376,21 @@ pub(crate) fn handshake(
     // done (password sent, SCRAM server signature verified); AuthenticationOk
     // under require_auth demands it (fe-auth.c:955).
     let mut client_finished_auth = false;
+    // PQconnectPoll's CONNECTION_AWAITING_RESPONSE arm (fe-connect.c:4010)
+    // admits only an authentication request, an error or a protocol
+    // negotiation until AuthenticationOk moves it to CONNECTION_AUTH_OK.
+    let mut auth_ok = false;
     loop {
         let (t, mbody) = match conn.read_message(conn.we.connect)? {
             Ok(m) => m,
             Err(e) => return Ok(Err(e)),
         };
         match t {
+            b'R' if auth_ok => {
+                return Ok(Err(
+                    "unexpected response from server; first received character was \"R\"".into(),
+                ))
+            }
             b'R' => {
                 let authtype = match auth_req_code(&mbody) {
                     Ok(v) => v,
@@ -393,7 +402,7 @@ pub(crate) fn handshake(
                     return Ok(Err(e));
                 }
                 match authtype {
-                    AUTH_REQ_OK => {}
+                    AUTH_REQ_OK => auth_ok = true,
                     AUTH_REQ_PASSWORD => {
                         conn.used_password = true;
                         let Some(pw) = password else {
@@ -471,18 +480,24 @@ pub(crate) fn handshake(
                     }
                 }
             }
-            b'S' | b'K' | b'N' | b'A' => conn.note_async(t, &mbody),
+            b'S' | b'K' | b'N' | b'A' if auth_ok => conn.note_async(t, &mbody),
             b'E' => {
                 let e = server_error(conn, &mbody);
                 return Ok(Err(pgpassfile_warning(conn, auth, e)));
             }
-            b'Z' => {
+            b'Z' if auth_ok => {
                 conn.txn_status = mbody.first().copied().unwrap_or(b'I');
                 return Ok(Ok(()));
             }
+            other if !auth_ok => {
+                return Ok(Err(format!(
+                    "expected authentication request from server, but received {}",
+                    other as char
+                )))
+            }
             other => {
                 return Ok(Err(format!(
-                    "unexpected message type \"{}\" during connection startup",
+                    "unexpected response from server; first received character was \"{}\"",
                     other as char
                 )))
             }
@@ -531,14 +546,15 @@ struct ServerFirst {
 
 /// Parse and validate the server-first-message payload (the bytes after the
 /// SASLContinue request code). `client_nonce` is ours: the server's nonce
-/// must strictly extend it — an echo with no server contribution is rejected.
+/// must start with it (fe-auth-scram.c:633 — a shorter nonce or an unequal
+/// prefix is the mismatch; an exact echo passes).
 fn parse_server_first(payload: &[u8], client_nonce: &str) -> Result<ServerFirst, String> {
     let server_first = String::from_utf8_lossy(payload).into_owned();
     let fields: Vec<&str> = server_first.split(',').collect();
     let server_nonce = scram_attr(&fields, 'r')?.to_string();
     // upstream d93ef413174d (18.4): Apply timingsafe_bcmp() in authentication paths
     let n = client_nonce.len();
-    if server_nonce.len() <= n
+    if server_nonce.len() < n
         || timingsafe_bcmp(&server_nonce.as_bytes()[..n], client_nonce.as_bytes()) != 0
     {
         return Err("invalid SCRAM response (nonce mismatch)".into());
@@ -668,20 +684,48 @@ fn scram_exchange(
         Ok(v) => v,
         Err(e) => return Ok(Err(e)),
     };
+    // read_server_final_message (fe-auth-scram.c:743): the signature is
+    // decoded and must be exactly key_length bytes.
+    let server_sig = match decode_server_signature(&server_sig_b64) {
+        Some(v) => v,
+        None => return Ok(Err("malformed SCRAM message (malformed server signature)".into())),
+    };
     let server_key = match keys.server {
         Some(k) => k,
         None => scram_common::scram_server_key(&salted),
     };
-    let expected = b64(&pg_hmac::hmac_sha256(&server_key, auth_message.as_bytes()));
+    let expected = pg_hmac::hmac_sha256(&server_key, auth_message.as_bytes());
     // upstream d93ef413174d (18.4): Apply timingsafe_bcmp() in authentication paths
-    if timingsafe_bcmp(server_sig_b64.as_bytes(), expected.as_bytes()) != 0 {
+    if timingsafe_bcmp(&server_sig, &expected) != 0 {
         return Ok(Err("incorrect server signature in SCRAM exchange".into()));
     }
     Ok(Ok(()))
 }
 
+fn decode_server_signature(encoded: &str) -> Option<[u8; SCRAM_MAX_KEY_LEN]> {
+    let mut dst = vec![0u8; pg_b64::pg_b64_dec_len(encoded.len() as i32).max(0) as usize];
+    let dstlen = dst.len() as i32;
+    let n = pg_b64::pg_b64_decode(encoded.as_bytes(), encoded.len() as i32, &mut dst, dstlen);
+    if n != SCRAM_MAX_KEY_LEN as i32 {
+        return None;
+    }
+    let mut out = [0u8; SCRAM_MAX_KEY_LEN];
+    out.copy_from_slice(&dst[..SCRAM_MAX_KEY_LEN]);
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn server_nonce_may_echo_the_client_nonce_exactly() {
+        let ok = super::parse_server_first(b"r=abc,s=c2FsdA==,i=4096", "abc").unwrap();
+        assert_eq!(ok.server_nonce, "abc");
+        assert!(super::parse_server_first(b"r=abcd,s=c2FsdA==,i=4096", "abc").is_ok());
+        let err = super::parse_server_first(b"r=ab,s=c2FsdA==,i=4096", "abc").err();
+        assert_eq!(err.as_deref(), Some("invalid SCRAM response (nonce mismatch)"));
+        assert!(super::parse_server_first(b"r=abx,s=c2FsdA==,i=4096", "abc").is_err());
+    }
+
     use super::*;
 
     #[test]
@@ -753,9 +797,9 @@ mod tests {
     }
 
     #[test]
-    fn server_first_nonce_must_extend_client_nonce() {
-        // Exact echo of the client nonce: no server contribution — reject.
-        assert!(parse_server_first(b"r=clientXYZ,s=c2FsdA==,i=4096", "clientXYZ").is_err());
+    fn server_first_nonce_must_start_with_client_nonce() {
+        // Exact echo of the client nonce: fe-auth-scram.c:633 accepts it.
+        assert!(parse_server_first(b"r=clientXYZ,s=c2FsdA==,i=4096", "clientXYZ").is_ok());
         // Wrong prefix.
         assert!(parse_server_first(b"r=evilnonceZZ,s=c2FsdA==,i=4096", "clientXYZ").is_err());
         // Shorter than the client nonce.
@@ -979,5 +1023,29 @@ mod tests {
         assert!(parse_server_final(b"e=other-error").is_err());
         // Bare attribute name with no '=' payload.
         assert!(parse_server_final(b"v").is_err());
+    }
+
+    // read_server_final_message (fe-auth-scram.c:743) decodes v= and compares
+    // key_length bytes, so a base64 spelling that differs only in its unused
+    // padding bits names the same signature; a wrong length is malformed.
+    #[test]
+    fn server_signature_is_compared_decoded() {
+        let sig = [0xA5u8; SCRAM_MAX_KEY_LEN];
+        let canonical = b64(&sig);
+        let mut bytes = canonical.clone().into_bytes();
+        assert_eq!(bytes.last(), Some(&b'='));
+        let last = bytes.len() - 2;
+        let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let idx = alphabet.iter().position(|&c| c == bytes[last]).unwrap();
+        assert_eq!(idx % 4, 0);
+        bytes[last] = alphabet[idx + 1];
+        let variant = String::from_utf8(bytes).unwrap();
+        assert_ne!(variant, canonical);
+        assert_eq!(decode_server_signature(&canonical), Some(sig));
+        assert_eq!(decode_server_signature(&variant), Some(sig));
+        assert_eq!(decode_server_signature(&b64(&[1u8; SCRAM_MAX_KEY_LEN - 1])), None);
+        assert_eq!(decode_server_signature(&b64(&[1u8; SCRAM_MAX_KEY_LEN + 1])), None);
+        assert_eq!(decode_server_signature("not base64!"), None);
+        assert_eq!(decode_server_signature(""), None);
     }
 }

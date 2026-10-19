@@ -22,6 +22,8 @@ postmaster_startup = { path = "../../../postmaster/startup" }
 archive = { path = "../../../../common/archive" }
 percentrepl = { path = "../../../../common/percentrepl" }
 wait_error = { path = "../../../../common/wait_error" }
+latch = { path = "../../../storage/ipc/latch" }
+types_storage = { path = "../../../../_support/types/types_storage" }
 transam_xlog = { path = "../transam_xlog" }
 waitevent_seams = { path = "../../../utils/activity/waitevent_seams" }
 xlogarchive_seams = { path = "../xlogarchive_seams" }

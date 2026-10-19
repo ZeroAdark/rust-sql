@@ -393,15 +393,18 @@ fn OpenTableList<'mcx>(
                 // publicationcmds.c:1745: same cancel point per partition child
                 check_for_interrupts()?;
                 if relids.contains(&childrelid) {
+                    // publicationcmds.c:1763/1775 name `rel`: the relation
+                    // opened most recently, the parent or a prior child.
+                    let last_opened = rels.last().map_or(relname.as_str(), |r| r.relation.name());
                     if childrelid != myrelid
                         && (t.whereClause.is_some() || relids_with_rf.contains(&childrelid))
                     {
-                        return Err(conflicting_rf(&relname));
+                        return Err(conflicting_rf(last_opened));
                     }
                     if childrelid != myrelid
                         && (!t.columns.is_nil() || relids_with_collist.contains(&childrelid))
                     {
-                        return Err(conflicting_collist(&relname));
+                        return Err(conflicting_collist(last_opened));
                     }
                     continue;
                 }
@@ -1446,8 +1449,15 @@ pub fn AlterPublication<'mcx>(
     } else {
         let (relations, schemaidlist) = ObjectsInPublicationToOids(mcx, &stmt.pubobjects)?;
 
-        let fields = fetch_pub_fields_by_oid(mcx, &rel, pubid)?
-            .expect("publication row visible under RowExclusiveLock");
+        // The name lookup and this fetch may straddle a committed DROP
+        // PUBLICATION (the object lock comes later): report it as C does at
+        // publicationcmds.c:1532 rather than unwrapping a vanished row.
+        let Some(fields) = fetch_pub_fields_by_oid(mcx, &rel, pubid)? else {
+            return Err(simple_err(
+                ERRCODE_UNDEFINED_OBJECT,
+                format!("publication \"{pubname}\" does not exist"),
+            ));
+        };
         CheckAlterPublication(stmt, fields.puballtables, !relations.is_empty(), !schemaidlist.is_empty())?;
 
         lmgr::LockDatabaseObject(PublicationRelationId, pubid, 0, AccessExclusiveLock)?;

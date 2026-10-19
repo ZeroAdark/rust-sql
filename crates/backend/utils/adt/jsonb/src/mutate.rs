@@ -427,11 +427,11 @@ fn null_path_elem(level: usize) -> Box<PgError> {
 fn path_elem_as_index(elem: &[u8], level: usize) -> PgResult<i32> {
     let bad = || -> Box<PgError> {
         Box::new(
-            PgError::error(alloc::format!(
-                "path element at position {} is not an integer: \"{}\"",
-                level + 1,
-                String::from_utf8_lossy(elem)
-            ))
+            PgError::error_bytes(
+                &alloc::format!("path element at position {} is not an integer: \"", level + 1),
+                elem,
+                "\"",
+            )
             .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION),
         )
     };

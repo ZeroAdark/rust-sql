@@ -151,3 +151,9 @@ fn oidparse_rejects_other_nodes_with_c_elog() {
     );
     assert_eq!(e.sqlstate, types_error::ERRCODE_INTERNAL_ERROR);
 }
+
+#[test]
+fn lo_ownercheck_missing_tuple_names_metadata_class() {
+    let e = crate::lo::lo_metadata_missing(16385);
+    assert_eq!(e.message(), "could not find tuple for large object metadata 16385");
+}

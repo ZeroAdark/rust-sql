@@ -31,18 +31,17 @@ pub struct DistanceValue {
 #[inline]
 pub fn call_bool(
     mcx: Mcx<'_>,
-    finfo: &FmgrInfo,
+    finfo: &mut FmgrInfo,
     colloid: Oid,
     a: Datum,
     b: Datum,
 ) -> PgResult<bool> {
-    let mut f = finfo.clone();
-    Ok(function_call2_coll_in(&mut f, colloid, mcx, a, b)?.as_bool())
+    Ok(function_call2_coll_in(finfo, colloid, mcx, a, b)?.as_bool())
 }
 
 pub fn compare_values(
     mcx: Mcx<'_>,
-    cmp: &FmgrInfo,
+    cmp: &mut FmgrInfo,
     colloid: Oid,
     a: Datum,
     b: Datum,
@@ -58,7 +57,7 @@ pub fn compare_values(
 
 pub fn compare_expanded_ranges(
     mcx: Mcx<'_>,
-    cmp: &FmgrInfo,
+    cmp: &mut FmgrInfo,
     colloid: Oid,
     ra: &ExpandedRange,
     rb: &ExpandedRange,
@@ -100,19 +99,19 @@ pub fn range_deduplicate_values(mcx: Mcx<'_>, range: &mut MinMaxMultiRanges) -> 
     }
 
     let colloid = range.colloid;
-    let cmp = range.cmp.clone();
+    let mut cmp = range.cmp.clone();
     let start = (2 * range.nranges) as usize;
 
     pg_qsort_arg(
         &mut range.values[start..start + range.nvalues as usize],
-        |a, b| compare_values(mcx, &cmp, colloid, *a, *b),
+        |a, b| compare_values(mcx, &mut cmp, colloid, *a, *b),
     )?;
 
     let mut n = 1usize;
     for i in 1..range.nvalues as usize {
         if compare_values(
             mcx,
-            &cmp,
+            &mut cmp,
             colloid,
             range.values[start + i - 1],
             range.values[start + i],
@@ -127,7 +126,7 @@ pub fn range_deduplicate_values(mcx: Mcx<'_>, range: &mut MinMaxMultiRanges) -> 
     range.nvalues = n as i32;
     range.nsorted = n as i32;
 
-    assert_check_ranges(mcx, &cmp, colloid, range)?;
+    assert_check_ranges(mcx, &mut cmp, colloid, range)?;
     Ok(())
 }
 
@@ -407,13 +406,13 @@ pub fn has_matching_range(
     let minvalue = ranges.values[0];
     let maxvalue = ranges.values[(2 * ranges.nranges - 1) as usize];
 
-    let lt = minmax_multi_get_strategy_procinfo(bdesc, attno, typid, BTLessStrategyNumber)?;
-    if call_bool(mcx, &lt, colloid, newval, minvalue)? {
+    let mut lt = minmax_multi_get_strategy_procinfo(bdesc, attno, typid, BTLessStrategyNumber)?;
+    if call_bool(mcx, &mut lt, colloid, newval, minvalue)? {
         return Ok(false);
     }
 
-    let gt = minmax_multi_get_strategy_procinfo(bdesc, attno, typid, BTGreaterStrategyNumber)?;
-    if call_bool(mcx, &gt, colloid, newval, maxvalue)? {
+    let mut gt = minmax_multi_get_strategy_procinfo(bdesc, attno, typid, BTGreaterStrategyNumber)?;
+    if call_bool(mcx, &mut gt, colloid, newval, maxvalue)? {
         return Ok(false);
     }
 
@@ -428,11 +427,11 @@ pub fn has_matching_range(
         let minvalue = ranges.values[(2 * midpoint) as usize];
         let maxvalue = ranges.values[(2 * midpoint + 1) as usize];
 
-        if call_bool(mcx, &lt, colloid, newval, minvalue)? {
+        if call_bool(mcx, &mut lt, colloid, newval, minvalue)? {
             end = midpoint - 1;
             continue;
         }
-        if call_bool(mcx, &gt, colloid, newval, maxvalue)? {
+        if call_bool(mcx, &mut gt, colloid, newval, maxvalue)? {
             start = midpoint + 1;
             continue;
         }
@@ -446,7 +445,7 @@ pub fn range_contains_value(
     colloid: Oid,
     attno: u16,
     typid: Oid,
-    ranges: &MinMaxMultiRanges,
+    ranges: &mut MinMaxMultiRanges,
     newval: Datum,
     full: bool,
 ) -> PgResult<bool> {
@@ -454,20 +453,19 @@ pub fn range_contains_value(
         return Ok(true);
     }
 
-    let eq = minmax_multi_get_strategy_procinfo(bdesc, attno, typid, BTEqualStrategyNumber)?;
+    let mut eq = minmax_multi_get_strategy_procinfo(bdesc, attno, typid, BTEqualStrategyNumber)?;
 
     if ranges.nsorted >= 16 {
         let base = (2 * ranges.nranges) as usize;
-        let cmp = ranges.cmp.clone();
         let sorted = &ranges.values[base..base + ranges.nsorted as usize];
-        if bsearch_values(mcx, &cmp, ranges.colloid, sorted, newval)? {
+        if bsearch_values(mcx, &mut ranges.cmp, ranges.colloid, sorted, newval)? {
             return Ok(true);
         }
     } else {
         for i in
             (2 * ranges.nranges) as usize..(2 * ranges.nranges + ranges.nsorted) as usize
         {
-            if call_bool(mcx, &eq, colloid, newval, ranges.values[i])? {
+            if call_bool(mcx, &mut eq, colloid, newval, ranges.values[i])? {
                 return Ok(true);
             }
         }
@@ -480,7 +478,7 @@ pub fn range_contains_value(
     for i in (2 * ranges.nranges + ranges.nsorted) as usize
         ..(2 * ranges.nranges + ranges.nvalues) as usize
     {
-        if call_bool(mcx, &eq, colloid, newval, ranges.values[i])? {
+        if call_bool(mcx, &mut eq, colloid, newval, ranges.values[i])? {
             return Ok(true);
         }
     }
@@ -490,25 +488,36 @@ pub fn range_contains_value(
 
 fn bsearch_values(
     mcx: Mcx<'_>,
-    cmp: &FmgrInfo,
+    cmp: &mut FmgrInfo,
     colloid: Oid,
     sorted: &[Datum],
     key: Datum,
 ) -> PgResult<bool> {
-    let mut lo: isize = 0;
-    let mut hi: isize = sorted.len() as isize - 1;
-    while lo <= hi {
-        let mid = (lo + hi) / 2;
-        let c = compare_values(mcx, cmp, colloid, key, sorted[mid as usize])?;
-        if c < 0 {
-            hi = mid - 1;
-        } else if c > 0 {
-            lo = mid + 1;
-        } else {
-            return Ok(true);
+    Ok(bsearch_arg(sorted.len(), |i| compare_values(mcx, cmp, colloid, key, sorted[i]))?.is_some())
+}
+
+/// src/port/bsearch_arg.c: the probe order (hence the comparator's call
+/// sequence, observable through a side-effecting operator) is C's, not a
+/// lo/hi midpoint search.
+pub(crate) fn bsearch_arg(
+    nmemb: usize,
+    mut compar: impl FnMut(usize) -> PgResult<i32>,
+) -> PgResult<Option<usize>> {
+    let mut base = 0usize;
+    let mut lim = nmemb;
+    while lim != 0 {
+        let p = base + (lim >> 1);
+        let c = compar(p)?;
+        if c == 0 {
+            return Ok(Some(p));
         }
+        if c > 0 {
+            base = p + 1;
+            lim -= 1;
+        }
+        lim >>= 1;
     }
-    Ok(false)
+    Ok(None)
 }
 
 pub fn fill_expanded_ranges(
@@ -537,7 +546,7 @@ pub fn fill_expanded_ranges(
 
 pub fn sort_expanded_ranges(
     mcx: Mcx<'_>,
-    cmp: &FmgrInfo,
+    cmp: &mut FmgrInfo,
     colloid: Oid,
     eranges: &mut [ExpandedRange],
 ) -> PgResult<usize> {
@@ -564,7 +573,7 @@ pub fn sort_expanded_ranges(
 
 pub fn merge_overlapping_ranges(
     mcx: Mcx<'_>,
-    cmp: &FmgrInfo,
+    cmp: &mut FmgrInfo,
     colloid: Oid,
     eranges: &mut [ExpandedRange],
     mut neranges: usize,
@@ -589,7 +598,7 @@ pub fn merge_overlapping_ranges(
 
 pub fn build_distances<'mcx>(
     mcx: Mcx<'mcx>,
-    distance_fn: &FmgrInfo,
+    distance_fn: &mut FmgrInfo,
     colloid: Oid,
     eranges: &[ExpandedRange],
 ) -> PgResult<Option<PgVec<'mcx, DistanceValue>>> {
@@ -602,9 +611,8 @@ pub fn build_distances<'mcx>(
     let ndistances = neranges - 1;
     let mut distances: PgVec<'mcx, DistanceValue> = vec_with_capacity_in(mcx, ndistances)?;
     for i in 0..ndistances {
-        let mut f = distance_fn.clone();
         let r = function_call2_coll_in(
-            &mut f,
+            distance_fn,
             colloid,
             mcx,
             eranges[i].maxval,
@@ -631,7 +639,7 @@ pub fn build_distances<'mcx>(
 
 pub fn build_expanded_ranges<'mcx>(
     mcx: Mcx<'mcx>,
-    cmp: &FmgrInfo,
+    cmp: &mut FmgrInfo,
     colloid: Oid,
     ranges: &MinMaxMultiRanges,
 ) -> PgResult<(PgVec<'mcx, ExpandedRange>, usize)> {
@@ -660,7 +668,7 @@ pub fn reduce_expanded_ranges<'mcx>(
     neranges: usize,
     distances: Option<&[DistanceValue]>,
     max_values: i32,
-    cmp: &FmgrInfo,
+    cmp: &mut FmgrInfo,
     colloid: Oid,
 ) -> PgResult<usize> {
     let ndistances = neranges as i32 - 1;
@@ -743,7 +751,7 @@ pub fn ensure_free_space_in_buffer(
         return Ok(false);
     }
 
-    let cmp = minmax_multi_get_strategy_procinfo(bdesc, attno, typid, BTLessStrategyNumber)?;
+    let mut cmp = minmax_multi_get_strategy_procinfo(bdesc, attno, typid, BTLessStrategyNumber)?;
 
     range_deduplicate_values(mcx, range)?;
 
@@ -759,11 +767,11 @@ pub fn ensure_free_space_in_buffer(
         let ctx = ::mcx::MemoryContext::new_bump("minmax-multi context");
         let cmcx = ctx.mcx();
 
-        let (mut eranges, mut neranges) = build_expanded_ranges(cmcx, &cmp, colloid, range)?;
+        let (mut eranges, mut neranges) = build_expanded_ranges(cmcx, &mut cmp, colloid, range)?;
         assert_check_expanded_ranges(cmcx, bdesc, colloid, attno, typid, &eranges[..neranges])?;
 
-        let distance_fn = minmax_multi_get_procinfo(bdesc, attno, PROCNUM_DISTANCE)?;
-        let distances = build_distances(cmcx, &distance_fn, colloid, &eranges[..neranges])?;
+        let mut distance_fn = minmax_multi_get_procinfo(bdesc, attno, PROCNUM_DISTANCE)?;
+        let distances = build_distances(cmcx, &mut distance_fn, colloid, &eranges[..neranges])?;
 
         neranges = reduce_expanded_ranges(
             cmcx,
@@ -771,7 +779,7 @@ pub fn ensure_free_space_in_buffer(
             neranges,
             distances.as_deref(),
             (range.maxvalues as f64 * MINMAX_BUFFER_LOAD_FACTOR) as i32,
-            &cmp,
+            &mut cmp,
             colloid,
         )?;
         assert_check_expanded_ranges(cmcx, bdesc, colloid, attno, typid, &eranges[..neranges])?;
@@ -783,7 +791,7 @@ pub fn ensure_free_space_in_buffer(
 
         store_expanded_ranges(range, &eranges[..neranges]);
     }
-    assert_check_ranges(mcx, &cmp, colloid, range)?;
+    assert_check_ranges(mcx, &mut cmp, colloid, range)?;
 
     Ok(true)
 }
@@ -799,9 +807,9 @@ pub fn range_add_value(
     ranges: &mut MinMaxMultiRanges,
     newval: Datum,
 ) -> PgResult<bool> {
-    let cmp = minmax_multi_get_strategy_procinfo(bdesc, attno, typid, BTLessStrategyNumber)?;
+    let mut cmp = minmax_multi_get_strategy_procinfo(bdesc, attno, typid, BTLessStrategyNumber)?;
 
-    assert_check_ranges(mcx, &cmp, colloid, ranges)?;
+    assert_check_ranges(mcx, &mut cmp, colloid, ranges)?;
 
     let modified = ensure_free_space_in_buffer(mcx, bdesc, colloid, attno, typid, ranges)?;
 
@@ -818,7 +826,7 @@ pub fn range_add_value(
         ranges.nsorted = 1;
     }
 
-    assert_check_ranges(mcx, &cmp, colloid, ranges)?;
+    assert_check_ranges(mcx, &mut cmp, colloid, ranges)?;
     debug_assert!(range_contains_value(
         mcx, bdesc, colloid, attno, typid, ranges, newval, true
     )?);
@@ -837,20 +845,20 @@ pub fn compactify_ranges(
     }
 
     let colloid = ranges.colloid;
-    let cmp = minmax_multi_get_strategy_procinfo(
+    let mut cmp = minmax_multi_get_strategy_procinfo(
         bdesc,
         ranges.attno,
         ranges.typid,
         BTLessStrategyNumber,
     )?;
-    let distance_fn = minmax_multi_get_procinfo(bdesc, ranges.attno, PROCNUM_DISTANCE)?;
+    let mut distance_fn = minmax_multi_get_procinfo(bdesc, ranges.attno, PROCNUM_DISTANCE)?;
 
     {
         let ctx = ::mcx::MemoryContext::new_bump("minmax-multi context");
         let cmcx = ctx.mcx();
 
-        let (mut eranges, mut neranges) = build_expanded_ranges(cmcx, &cmp, colloid, ranges)?;
-        let distances = build_distances(cmcx, &distance_fn, colloid, &eranges[..neranges])?;
+        let (mut eranges, mut neranges) = build_expanded_ranges(cmcx, &mut cmp, colloid, ranges)?;
+        let distances = build_distances(cmcx, &mut distance_fn, colloid, &eranges[..neranges])?;
 
         neranges = reduce_expanded_ranges(
             cmcx,
@@ -858,7 +866,7 @@ pub fn compactify_ranges(
             neranges,
             distances.as_deref(),
             max_values,
-            &cmp,
+            &mut cmp,
             colloid,
         )?;
 
@@ -866,13 +874,13 @@ pub fn compactify_ranges(
 
         store_expanded_ranges(ranges, &eranges[..neranges]);
     }
-    assert_check_ranges(mcx, &cmp, colloid, ranges)?;
+    assert_check_ranges(mcx, &mut cmp, colloid, ranges)?;
     Ok(())
 }
 
 fn assert_array_order(
     mcx: Mcx<'_>,
-    cmp: &FmgrInfo,
+    cmp: &mut FmgrInfo,
     colloid: Oid,
     values: &[Datum],
 ) -> PgResult<()> {
@@ -884,7 +892,7 @@ fn assert_array_order(
 
 pub fn assert_check_ranges(
     mcx: Mcx<'_>,
-    cmp: &FmgrInfo,
+    cmp: &mut FmgrInfo,
     colloid: Oid,
     ranges: &MinMaxMultiRanges,
 ) -> PgResult<()> {
@@ -938,7 +946,7 @@ pub fn assert_check_ranges(
         for i in ranges.nsorted as usize..ranges.nvalues as usize {
             debug_assert!(!bsearch_values(
                 mcx,
-                &ranges.cmp,
+                &mut ranges.cmp.clone(),
                 ranges.colloid,
                 sorted,
                 ranges.values[base + i]
@@ -959,19 +967,19 @@ pub fn assert_check_expanded_ranges(
     if !cfg!(debug_assertions) {
         return Ok(());
     }
-    let eq = minmax_multi_get_strategy_procinfo(bdesc, attno, typid, BTEqualStrategyNumber)?;
-    let lt = minmax_multi_get_strategy_procinfo(bdesc, attno, typid, BTLessStrategyNumber)?;
+    let mut eq = minmax_multi_get_strategy_procinfo(bdesc, attno, typid, BTEqualStrategyNumber)?;
+    let mut lt = minmax_multi_get_strategy_procinfo(bdesc, attno, typid, BTLessStrategyNumber)?;
 
     for r in eranges {
         let ok = if r.collapsed {
-            call_bool(mcx, &eq, colloid, r.minval, r.maxval)?
+            call_bool(mcx, &mut eq, colloid, r.minval, r.maxval)?
         } else {
-            call_bool(mcx, &lt, colloid, r.minval, r.maxval)?
+            call_bool(mcx, &mut lt, colloid, r.minval, r.maxval)?
         };
         debug_assert!(ok);
     }
     for i in 1..eranges.len() {
-        debug_assert!(call_bool(mcx, &lt, colloid, eranges[i - 1].maxval, eranges[i].minval)?);
+        debug_assert!(call_bool(mcx, &mut lt, colloid, eranges[i - 1].maxval, eranges[i].minval)?);
     }
     Ok(())
 }
@@ -1052,5 +1060,34 @@ mod deserialize_tests {
         assert_eq!(err.message, "unsupported byval length: 3");
         assert_eq!(err.sqlstate(), ::types_error::ERRCODE_INTERNAL_ERROR);
         assert_eq!(super::fetch_byval(&bytes, 4).unwrap().as_i32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod bsearch_tests {
+    use super::bsearch_arg;
+
+    // sorted[i] == i + 1; returns (hit, probe sequence).
+    fn probes(n: usize, key: i32) -> (Option<usize>, Vec<usize>) {
+        let mut seen = Vec::new();
+        let hit = bsearch_arg(n, |i| {
+            seen.push(i);
+            Ok(key.cmp(&(i as i32 + 1)) as i32)
+        })
+        .unwrap();
+        (hit, seen)
+    }
+
+    // bsearch_arg.c probes index lim>>1 from the current base: with 16 sorted
+    // points and key 9 C compares once at index 8 (the audit's midpoint search
+    // probed 7, 11, 9, 8).
+    #[test]
+    fn probe_order_matches_c_bsearch_arg() {
+        assert_eq!(probes(16, 9), (Some(8), vec![8]));
+        assert_eq!(probes(16, 1), (Some(0), vec![8, 4, 2, 1, 0]));
+        assert_eq!(probes(16, 16), (Some(15), vec![8, 12, 14, 15]));
+        assert_eq!(probes(16, 17), (None, vec![8, 12, 14, 15]));
+        assert_eq!(probes(16, 0), (None, vec![8, 4, 2, 1, 0]));
+        assert_eq!(probes(0, 1), (None, vec![]));
     }
 }

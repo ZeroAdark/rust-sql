@@ -15,13 +15,19 @@ use types_storage::waiteventset::{
 };
 
 pub mod conninfo;
-pub use conninfo::{opt, parse_conninfo, resolve_conninfo, ConnOption, CONNINFO_OPTIONS};
+mod errmsg;
+pub use conninfo::{lookup_option, opt, parse_conninfo, resolve_conninfo, ConnOption, CONNINFO_OPTIONS};
 
 mod auth;
 #[cfg(test)]
 mod conninfo_uri_tests;
 
 pub const PG_PROTOCOL_3_0: u32 = 3 << 16;
+const PG_PROTOCOL_3_2: u32 = (3 << 16) | 2;
+// PQ_QUERY_PARAM_MAX_LIMIT (libpq-fe.h).
+const PQ_QUERY_PARAM_MAX_LIMIT: usize = 65535;
+// wait_classes.h; libpqsrv_cancel's socket wait reports PG_WAIT_CLIENT.
+const PG_WAIT_CLIENT: u32 = 0x0600_0000;
 const CANCEL_REQUEST_CODE: u32 = (1234 << 16) | 5678;
 
 // Largest message length we accept from the server (the wire length is a
@@ -51,16 +57,56 @@ enum DialTarget {
     Unix(String),
 }
 
+// PQfinish -> closePGconn -> sendTerminateConn (fe-connect.c): a connection
+// that reached CONNECTION_OK says goodbye with Terminate, so the server's
+// read sees 'X' rather than EOF (walsender.c:2289 logs the latter).
+impl Drop for PgConn {
+    fn drop(&mut self) {
+        if self.conn_ok && !self.terminate_sent {
+            let _ = self.send_all(&msg(b'X', &[]));
+        }
+        if self.external_fd {
+            file_seams::release_external_fd::call();
+        }
+    }
+}
+
+// libpq-be-fe-helpers.h:131 libpqsrv_connect_prepare: a PGconn counts as one
+// long-lived FD against fd.c's limit; not installed = no backend fd layer.
+fn reserve_external_fd() -> PgResult<bool> {
+    if !file_seams::acquire_external_fd::is_installed() {
+        return Ok(false);
+    }
+    if file_seams::acquire_external_fd::call()? {
+        return Ok(true);
+    }
+    Err(Box::new(
+        types_error::PgError::error("could not establish connection")
+            .with_sqlstate(types_error::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION)
+            .with_detail("There are too many open files on the local server.")
+            .with_hint("Raise the server's \"max_files_per_process\" and/or \"ulimit -n\" limits."),
+    ))
+}
+
 pub struct PgConn {
     _stream: Stream,
     fd: RawFd,
+    external_fd: bool,
     target: DialTarget,
     inbuf: Vec<u8>,
     inpos: usize,
     conn_ok: bool,
+    terminate_sent: bool,
     in_copy: bool,
     copy_server_done: bool,
     copy_client_done: bool,
+    // conn->raddr: the address the connection was made to; a cancel request
+    // (PQcancelCreate, fe-cancel.c:170) goes there, never through a fresh
+    // name lookup.
+    peer: Option<std::net::SocketAddr>,
+    // ErrorResponse text already appended by is_busy's parse (PQisBusy's
+    // parseInput), not to be appended again when the result is collected.
+    err_prescanned: bool,
     // A query was sent and ReadyForQuery not yet consumed (libpq asyncStatus
     // != IDLE); get_result on an idle connection returns None immediately.
     pending_results: bool,
@@ -79,6 +125,9 @@ pub struct PgConn {
     last_sqlstate: String,
     params: Vec<(String, String)>,
     notifies: std::collections::VecDeque<Notify>,
+    // cmd_queue_head->query: the text of the command in flight, for the
+    // error-cursor display (None for PQsendQueryPrepared).
+    last_query: Option<String>,
     we: WaitEvents,
 }
 
@@ -102,6 +151,9 @@ pub struct ErrorFields {
     pub detail: String,
     pub hint: String,
     pub context: String,
+    pub position: String,
+    pub internal_position: String,
+    pub internal_query: String,
 }
 
 pub struct QueryResult {
@@ -176,6 +228,10 @@ pub(crate) fn msg(t: u8, body: &[u8]) -> Vec<u8> {
     m
 }
 
+pub(crate) const SERVER_CLOSED_MSG: &str = "server closed the connection unexpectedly\n\
+    \tThis probably means the server terminated abnormally\n\
+    \tbefore or while processing the request.";
+
 pub(crate) fn be_i32(b: &[u8]) -> i32 {
     i32::from_be_bytes([b[0], b[1], b[2], b[3]])
 }
@@ -202,6 +258,9 @@ pub(crate) fn parse_diag(body: &[u8]) -> ErrorFields {
             b'D' => f.detail = val,
             b'H' => f.hint = val,
             b'W' => f.context = val,
+            b'P' => f.position = val,
+            b'p' => f.internal_position = val,
+            b'q' => f.internal_query = val,
             _ => {}
         }
         i = next;
@@ -209,21 +268,15 @@ pub(crate) fn parse_diag(body: &[u8]) -> ErrorFields {
     f
 }
 
-// ErrorResponse/NoticeResponse body -> libpq default-verbosity message
-// (pqBuildErrorMessage3): "SEVERITY:  message" plus DETAIL/HINT/CONTEXT
-// lines. The walreceiver relays the whole thing into the local log —
-// 019_replslot_limit greps the standby log for the primary's DETAIL line.
-pub(crate) fn parse_error_fields(body: &[u8]) -> String {
-    let f = parse_diag(body);
-    let mut out = format!("{}:  {}", f.severity, f.primary);
-    if !f.detail.is_empty() {
-        out.push_str(&format!("\nDETAIL:  {}", f.detail));
-    }
-    if !f.hint.is_empty() {
-        out.push_str(&format!("\nHINT:  {}", f.hint));
-    }
-    if !f.context.is_empty() {
-        out.push_str(&format!("\nCONTEXT:  {}", f.context));
+// ErrorResponse body -> libpq's PQerrorMessage text (pqBuildErrorMessage3,
+// trailing newline dropped; callers pchomp anyway). `query` is the command
+// in flight for the LINE/caret display. The walreceiver relays the whole
+// thing into the local log — 019_replslot_limit greps the standby log for
+// the primary's DETAIL line.
+pub(crate) fn parse_error_fields(body: &[u8], query: Option<&str>) -> String {
+    let mut out = errmsg::build_message(&parse_diag(body), query, true);
+    while out.ends_with('\n') {
+        out.pop();
     }
     out
 }
@@ -361,15 +414,229 @@ fn check_requirepeer(_sock: RawFd, _want: &str) -> Result<(), String> {
     Err("requirepeer is not supported on this platform".into())
 }
 
+fn is_unixsock_path(path: &str) -> bool {
+    path.starts_with('/') || path.starts_with('@')
+}
+
+// getaddrinfo_unix (ip.c:215) turns a leading '@' into an abstract-namespace
+// address; std's UnixStream::connect only knows filesystem paths.
+#[cfg(not(target_family = "wasm"))]
+fn unix_stream_connect(path: &str) -> Result<std::os::unix::net::UnixStream, String> {
+    use std::os::fd::FromRawFd;
+    if !path.starts_with('@') {
+        return std::os::unix::net::UnixStream::connect(path).map_err(|e| match e.raw_os_error() {
+            Some(errno) => connect_failure_message(errno, true),
+            None => e.to_string(),
+        });
+    }
+    let hint = ip::AddrInfoHint { flags: 0, family: libc::AF_UNIX, socktype: libc::SOCK_STREAM };
+    let mut addrs = Vec::new();
+    let rc = ip::pg_getaddrinfo_all(None, Some(path), &hint, &mut addrs);
+    let Some(ai) = addrs.first().filter(|_| rc == 0) else {
+        // SAFETY: gai_strerror returns a static NUL-terminated string.
+        let why = unsafe { std::ffi::CStr::from_ptr(ip::sys::gai_strerror(rc)) }.to_string_lossy();
+        return Err(format!("could not translate Unix-domain socket path \"{path}\" to address: {why}"));
+    };
+    // SAFETY: socket syscalls on a descriptor this function owns until it is
+    // wrapped or closed.
+    unsafe {
+        let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+        if fd < 0 {
+            return Err(strerror(last_errno()));
+        }
+        if libc::connect(fd, ai.addr.addr.as_ptr().cast::<libc::sockaddr>(), ai.addr.salen as libc::socklen_t) < 0 {
+            let e = last_errno();
+            libc::close(fd);
+            return Err(connect_failure_message(e, true));
+        }
+        Ok(std::os::unix::net::UnixStream::from_raw_fd(fd))
+    }
+}
+
 #[cfg(not(target_family = "wasm"))]
 fn unix_connect(path: &str) -> Result<(Stream, RawFd), String> {
     use std::os::fd::AsRawFd;
-    match std::os::unix::net::UnixStream::connect(path) {
+    match unix_stream_connect(path) {
         Ok(s) => {
             let fd = s.as_raw_fd();
             Ok((Stream::Unix(s), fd))
         }
         Err(e) => Err(format!("connection to server on socket \"{path}\" failed: {e}")),
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn strerror(errno: i32) -> String {
+    // SAFETY: strerror returns a NUL-terminated string valid until the next
+    // call on this thread; it is copied out at once.
+    unsafe { std::ffi::CStr::from_ptr(libc::strerror(errno)) }.to_string_lossy().into_owned()
+}
+
+#[cfg(target_family = "wasm")]
+fn strerror(errno: i32) -> String {
+    std::io::Error::from_raw_os_error(errno).to_string()
+}
+
+// connectFailureMessage (fe-connect.c:2681): the OS error and libpq's hint.
+fn connect_failure_message(errno: i32, unix: bool) -> String {
+    let hint = if unix {
+        "Is the server running locally and accepting connections on that socket?"
+    } else {
+        "Is the server running on that host and accepting TCP/IP connections?"
+    };
+    format!("{}\n\t{hint}", strerror(errno))
+}
+
+// getHostaddr (fe-connect.c:2386): pg_inet_net_ntop over the address bytes,
+// so a scoped IPv6 address prints without its %scope suffix.
+#[cfg(not(target_family = "wasm"))]
+fn host_addr_text(addr: &ip::SockAddr) -> String {
+    match ip::sockaddr_family(addr) {
+        libc::AF_INET => {
+            // SAFETY: the buffer is sockaddr_storage-sized; a family of AF_INET
+            // means it holds a sockaddr_in.
+            let sin: libc::sockaddr_in = unsafe { std::ptr::read_unaligned(addr.addr.as_ptr().cast()) };
+            std::net::Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr)).to_string()
+        }
+        libc::AF_INET6 => {
+            // SAFETY: as above, for sockaddr_in6.
+            let sin6: libc::sockaddr_in6 = unsafe { std::ptr::read_unaligned(addr.addr.as_ptr().cast()) };
+            std::net::Ipv6Addr::from(sin6.sin6_addr.s6_addr).to_string()
+        }
+        _ => String::new(),
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn last_errno() -> i32 {
+    std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+}
+
+// PQconnectPoll's CONNECTION_NEEDED / CONNECTION_STARTED arms (fe-connect.c
+// :3055, :3480) as libpqsrv_connect_params drives them (libpq-be-fe-helpers.h
+// :193): every resolved address gets a nonblocking connect() whose
+// EINPROGRESS wait rides WaitLatchOrSocket, so a cancel or shutdown ends a
+// black-holed SYN instead of the OS connect timeout. Each failed address
+// appends its own host-identified message.
+#[cfg(not(target_family = "wasm"))]
+fn tcp_dial(
+    ch: &ConnHost,
+    port: u16,
+    prng: Option<&mut pg_prng::PgPrng>,
+    wait_event: u32,
+) -> PgResult<Result<(Stream, RawFd, DialTarget), String>> {
+    use std::os::fd::FromRawFd;
+    let numeric = !ch.hostaddr.is_empty();
+    let name = if numeric { ch.hostaddr.as_str() } else { ch.host.as_str() };
+    let hint = ip::AddrInfoHint {
+        flags: if numeric { ip::sys::AI_NUMERICHOST } else { 0 },
+        family: ip::sys::AF_UNSPEC,
+        socktype: ip::sys::SOCK_STREAM,
+    };
+    let mut addrs = Vec::new();
+    let rc = ip::pg_getaddrinfo_all(Some(name), Some(&port.to_string()), &hint, &mut addrs);
+    if rc != 0 || addrs.is_empty() {
+        // SAFETY: gai_strerror returns a static NUL-terminated string.
+        let why = unsafe { std::ffi::CStr::from_ptr(ip::sys::gai_strerror(rc)) }.to_string_lossy();
+        return Ok(Err(if numeric {
+            format!("could not parse network address \"{name}\": {why}")
+        } else {
+            format!("could not translate host name \"{name}\" to address: {why}")
+        }));
+    }
+    if let Some(p) = prng {
+        shuffle(&mut addrs, p);
+    }
+    let mut errs = String::new();
+    for ai in &addrs {
+        let host_addr = host_addr_text(&ai.addr);
+        // emitHostIdentityInfo (fe-connect.c:2620).
+        let identity = if numeric || host_addr == name {
+            format!("connection to server at \"{name}\", port {port} failed: ")
+        } else {
+            format!("connection to server at \"{name}\" ({host_addr}), port {port} failed: ")
+        };
+        match tcp_connect_addr(ai, wait_event)? {
+            Ok(fd) => {
+                // SAFETY: a connected socket this function owns.
+                let s = unsafe { std::net::TcpStream::from_raw_fd(fd) };
+                let _ = s.set_nodelay(true);
+                return Ok(Ok((Stream::Tcp(s), fd, DialTarget::Tcp(name.to_string(), port))));
+            }
+            Err(e) => append_conn_error(&mut errs, &format!("{identity}{e}")),
+        }
+    }
+    Ok(Err(errs))
+}
+
+// A bare client context (no backend latch, e.g. the crate's own tests) has
+// no interrupts to serve: a plain poll stands in for WaitLatchOrSocket.
+#[cfg(not(target_family = "wasm"))]
+fn wait_writable(fd: RawFd, wait_event: u32) -> PgResult<()> {
+    if init_small::globals::MyLatch().is_some() {
+        return wait_socket(fd, WL_SOCKET_WRITEABLE, wait_event);
+    }
+    let mut pfd = libc::pollfd { fd, events: libc::POLLOUT, revents: 0 };
+    // SAFETY: pfd is a valid pollfd for the duration of the call.
+    while unsafe { libc::poll(&mut pfd, 1, -1) } < 0 && last_errno() == libc::EINTR {}
+    Ok(())
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn tcp_connect_addr(ai: &ip::PgAddrInfo, wait_event: u32) -> PgResult<Result<RawFd, String>> {
+    // SAFETY: socket syscalls on a descriptor this function owns until it is
+    // returned or closed on the failure paths.
+    unsafe {
+        let fd = libc::socket(ai.family, libc::SOCK_STREAM, ai.protocol);
+        if fd < 0 {
+            return Ok(Err(format!("could not create socket: {}", strerror(last_errno()))));
+        }
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags < 0 || libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+            let e = last_errno();
+            libc::close(fd);
+            return Ok(Err(format!("could not set socket to nonblocking mode: {}", strerror(e))));
+        }
+        if libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) < 0 {
+            let e = last_errno();
+            libc::close(fd);
+            return Ok(Err(format!("could not set socket to close-on-exec mode: {}", strerror(e))));
+        }
+        let rc = libc::connect(
+            fd,
+            ai.addr.addr.as_ptr() as *const libc::sockaddr,
+            ai.addr.salen as libc::socklen_t,
+        );
+        if rc < 0 {
+            let e = last_errno();
+            if e != libc::EINPROGRESS && e != libc::EWOULDBLOCK && e != libc::EINTR {
+                libc::close(fd);
+                return Ok(Err(connect_failure_message(e, false)));
+            }
+            if let Err(pe) = wait_writable(fd, wait_event) {
+                libc::close(fd);
+                return Err(pe);
+            }
+            let mut optval: libc::c_int = 0;
+            let mut optlen = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+            if libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_ERROR,
+                &mut optval as *mut libc::c_int as *mut libc::c_void,
+                &mut optlen,
+            ) < 0
+            {
+                let e = last_errno();
+                libc::close(fd);
+                return Ok(Err(format!("could not get socket error status: {}", strerror(e))));
+            }
+            if optval != 0 {
+                libc::close(fd);
+                return Ok(Err(connect_failure_message(optval, false)));
+            }
+        }
+        Ok(Ok(fd))
     }
 }
 
@@ -392,6 +659,166 @@ pub fn validate_port(opts: &[(String, String)]) -> Result<u16, String> {
 // validated BEFORE address resolution or any socket attempt. Regress
 // relies on this ordering — CREATE SUBSCRIPTION ... 'port=-1' must fail
 // "invalid port number: \"-1\"" WITHOUT a connection ever being tried.
+// pqSaveParameterStatus (fe-exec.c:1158): sscanf("%d.%d.%d") on the
+// server_version text.
+fn parse_server_version(value: &str) -> i32 {
+    let mut parts = [0i32; 3];
+    let mut cnt = 0;
+    let mut rest = value;
+    while cnt < 3 {
+        let t = if cnt == 0 {
+            rest.trim_start_matches(|c: char| c.is_ascii() && pg_string::isspace_c_locale(c as u8))
+        } else {
+            match rest.strip_prefix('.') {
+                Some(r) => r,
+                None => break,
+            }
+        };
+        let (neg, digits) = match t.strip_prefix('-') {
+            Some(r) => (true, r),
+            None => (false, t.strip_prefix('+').unwrap_or(t)),
+        };
+        let end = digits.bytes().position(|b| !b.is_ascii_digit()).unwrap_or(digits.len());
+        if end == 0 {
+            break;
+        }
+        let v: i64 = digits[..end].parse().unwrap_or(0);
+        parts[cnt] = (if neg { -v } else { v }) as i32;
+        cnt += 1;
+        rest = &digits[end..];
+    }
+    let (vmaj, vmin, vrev) = (parts[0], parts[1], parts[2]);
+    match cnt {
+        3 => (100 * vmaj + vmin) * 100 + vrev,
+        2 if vmaj >= 10 => 100 * 100 * vmaj + vmin,
+        2 => (100 * vmaj + vmin) * 100,
+        1 => 100 * 100 * vmaj,
+        _ => 0,
+    }
+}
+
+// pqParseIntParam (fe-connect.c:8196): strtol with nothing but whitespace
+// allowed around the number.
+fn parse_int_param(value: &str, context: &str) -> Result<i32, String> {
+    let err = || format!("invalid integer value \"{value}\" for connection option \"{context}\"");
+    let sp = |c: char| c.is_ascii() && pg_string::isspace_c_locale(c as u8);
+    let t = value.trim_start_matches(sp);
+    let (neg, digits) = match t.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, t.strip_prefix('+').unwrap_or(t)),
+    };
+    let end = digits.bytes().position(|b| !b.is_ascii_digit()).unwrap_or(digits.len());
+    if end == 0 || !digits[end..].trim_start_matches(sp).is_empty() {
+        return Err(err());
+    }
+    let v: i64 = digits[..end].parse().map_err(|_| err())?;
+    let v = if neg { -v } else { v };
+    i32::try_from(v).map_err(|_| err())
+}
+
+// pqParseProtocolVersion (fe-connect.c:8241).
+fn parse_protocol_version(value: &str, context: &str) -> Result<u32, String> {
+    match value {
+        "latest" | "3.2" => Ok(PG_PROTOCOL_3_2),
+        "3.0" => Ok(PG_PROTOCOL_3_0),
+        _ => Err(format!("invalid {context} value: \"{value}\"")),
+    }
+}
+
+// pqConnectOptions2 (fe-connect.c:2107): both bounds must parse and the
+// range must not be inverted. The startup packet still asks for 3.0.
+fn check_protocol_versions(opts: &[(String, String)]) -> Result<(), String> {
+    let min = match opt(opts, "min_protocol_version").filter(|v| !v.is_empty()) {
+        Some(v) => parse_protocol_version(v, "min_protocol_version")?,
+        None => PG_PROTOCOL_3_0,
+    };
+    let max = match opt(opts, "max_protocol_version").filter(|v| !v.is_empty()) {
+        Some(v) => parse_protocol_version(v, "max_protocol_version")?,
+        None if min > PG_PROTOCOL_3_0 => PG_PROTOCOL_3_2,
+        None => PG_PROTOCOL_3_0,
+    };
+    if min > max {
+        return Err("\"min_protocol_version\" is greater than \"max_protocol_version\"".into());
+    }
+    Ok(())
+}
+
+// PQconnectPoll's TCP socket setup (fe-connect.c:3394-3428): SO_KEEPALIVE
+// unless keepalives=0, then the timer options and tcp_user_timeout; every
+// value is validated even where the platform has no such option.
+#[cfg(not(target_family = "wasm"))]
+fn setup_tcp_socket(fd: RawFd, opts: &[(String, String)]) -> Result<(), String> {
+    fn setopt(fd: RawFd, level: i32, name: i32, name_str: &str, val: i32) -> Result<(), String> {
+        // SAFETY: fd is an open socket; val outlives the call.
+        let rc = unsafe {
+            libc::setsockopt(
+                fd,
+                level,
+                name,
+                (&val as *const i32).cast(),
+                std::mem::size_of::<i32>() as libc::socklen_t,
+            )
+        };
+        if rc < 0 {
+            return Err(format!(
+                "setsockopt({name_str}) failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+    let int_opt = |key: &str| -> Result<Option<i32>, String> {
+        match opt(opts, key) {
+            Some(v) => Ok(Some(parse_int_param(v, key)?.max(0))),
+            None => Ok(None),
+        }
+    };
+    let use_keepalives = match opt(opts, "keepalives") {
+        Some(v) => parse_int_param(v, "keepalives")? != 0,
+        None => true,
+    };
+    if use_keepalives {
+        setopt(fd, libc::SOL_SOCKET, libc::SO_KEEPALIVE, "SO_KEEPALIVE", 1)?;
+        if let Some(idle) = int_opt("keepalives_idle")? {
+            #[cfg(target_os = "linux")]
+            setopt(fd, libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, "TCP_KEEPIDLE", idle)?;
+            #[cfg(target_os = "macos")]
+            setopt(fd, libc::IPPROTO_TCP, libc::TCP_KEEPALIVE, "TCP_KEEPALIVE", idle)?;
+        }
+        if let Some(interval) = int_opt("keepalives_interval")? {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            setopt(fd, libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, "TCP_KEEPINTVL", interval)?;
+        }
+        if let Some(count) = int_opt("keepalives_count")? {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            setopt(fd, libc::IPPROTO_TCP, libc::TCP_KEEPCNT, "TCP_KEEPCNT", count)?;
+        }
+    }
+    if let Some(timeout) = int_opt("tcp_user_timeout")? {
+        #[cfg(target_os = "linux")]
+        setopt(fd, libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT, "TCP_USER_TIMEOUT", timeout)?;
+        let _ = timeout;
+    }
+    Ok(())
+}
+
+#[cfg(target_family = "wasm")]
+fn setup_tcp_socket(_fd: RawFd, _opts: &[(String, String)]) -> Result<(), String> {
+    Ok(())
+}
+
+// PQhost (fe-connect.c:7516): the host as given, else hostaddr, else the
+// default socket directory pqConnectOptions2 filled in.
+fn pq_host(ch: &ConnHost) -> String {
+    if !ch.host.is_empty() {
+        ch.host.clone()
+    } else if !ch.hostaddr.is_empty() {
+        ch.hostaddr.clone()
+    } else {
+        conninfo::DEFAULT_PGSOCKET_DIR.to_string()
+    }
+}
+
 fn parse_port(port_s: &str) -> Result<u16, String> {
     if port_s.is_empty() {
         return Ok(5432); // DEF_PGPORT
@@ -469,6 +896,12 @@ fn conn_hosts(opts: &[(String, String)]) -> Result<Vec<ConnHost>, String> {
     Ok(hosts)
 }
 
+// pqParseInput3 (fe-protocol3.c:220): a RowDescription makes the result
+// PGRES_TUPLES_OK whatever its column count (a zero-column SELECT included).
+fn tuples_status(saw_row_description: bool) -> ExecStatus {
+    if saw_row_description { ExecStatus::TuplesOk } else { ExecStatus::CommandOk }
+}
+
 // libpq_append_conn_error: every attempt's message stays in the buffer.
 fn append_conn_error(errs: &mut String, msg: &str) {
     if !errs.is_empty() {
@@ -479,51 +912,93 @@ fn append_conn_error(errs: &mut String, msg: &str) {
 
 // One connhost's socket. Err((message, terminal)): a terminal failure
 // (requirepeer, C's error_return) ends the host walk.
+// pqConnectOptions2 (fe-connect.c:1323): a nonempty hostaddr is dialed
+// as such whatever host says; else host, a Unix-socket directory when it
+// starts with '/'; else DEFAULT_PGSOCKET_DIR.
 fn dial(
     ch: &ConnHost,
     port: u16,
     opts: &[(String, String)],
-) -> Result<(Stream, RawFd, DialTarget, String), (String, bool)> {
-    if ch.host.starts_with('/') {
-        let path = format!("{}/.s.PGSQL.{port}", ch.host);
-        let (s, fd) = unix_connect(&path).map_err(|e| (e, false))?;
+    prng: Option<&mut pg_prng::PgPrng>,
+    wait_event: u32,
+) -> PgResult<Result<(Stream, RawFd, DialTarget), (String, bool)>> {
+    let host = if ch.host.is_empty() && ch.hostaddr.is_empty() {
+        conninfo::DEFAULT_PGSOCKET_DIR
+    } else {
+        ch.host.as_str()
+    };
+    if ch.hostaddr.is_empty() && is_unixsock_path(host) {
+        let path = format!("{host}/.s.PGSQL.{port}");
+        let (s, fd) = match unix_connect(&path) {
+            Ok(d) => d,
+            Err(e) => return Ok(Err((e, false))),
+        };
         // fe-connect.c PQconnectPoll: requirepeer verifies the socket peer's
         // OS identity before the startup packet (and any credential) is
         // sent — the only server authentication available on a Unix socket
         // in a world-writable directory.
         if let Some(want) = opt(opts, "requirepeer").filter(|s| !s.is_empty()) {
-            check_requirepeer(fd, want).map_err(|e| (e, true))?;
+            if let Err(e) = check_requirepeer(fd, want) {
+                return Ok(Err((e, true)));
+            }
         }
-        return Ok((s, fd, DialTarget::Unix(path), ch.host.clone()));
+        return Ok(Ok((s, fd, DialTarget::Unix(path))));
     }
-    let target = if !ch.hostaddr.is_empty() { ch.hostaddr.clone() } else { ch.host.clone() };
-    let target = if target.is_empty() { "localhost".to_string() } else { target };
-    match std::net::TcpStream::connect((target.as_str(), port)) {
-        Ok(s) => {
-            use std::os::fd::AsRawFd;
-            let _ = s.set_nodelay(true);
-            let fd = s.as_raw_fd();
-            Ok((Stream::Tcp(s), fd, DialTarget::Tcp(target.clone(), port), target))
+    #[cfg(not(target_family = "wasm"))]
+    {
+        Ok(tcp_dial(ch, port, prng, wait_event)?.map_err(|e| (e, false)))
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = (wait_event, prng);
+        let target = if !ch.hostaddr.is_empty() { ch.hostaddr.clone() } else { host.to_string() };
+        match std::net::TcpStream::connect((target.as_str(), port)) {
+            Ok(s) => {
+                use std::os::fd::AsRawFd;
+                let _ = s.set_nodelay(true);
+                let fd = s.as_raw_fd();
+                Ok(Ok((Stream::Tcp(s), fd, DialTarget::Tcp(target, port))))
+            }
+            Err(e) => Ok(Err((
+                format!("connection to server at \"{target}\", port {port} failed: {e}"),
+                false,
+            ))),
         }
-        Err(e) => Err((
-            format!("connection to server at \"{target}\", port {port} failed: {e}"),
-            false,
-        )),
     }
 }
 
 // The cancel connection's dial under libpqsrv_cancel's endtime: each
 // resolved address gets the time left; nothing blocks past the deadline.
+#[cfg(test)]
 fn tcp_connect_deadline(
     host: &str,
     port: u16,
     deadline_ns: u64,
 ) -> Result<std::net::TcpStream, String> {
+    tcp_connect_addrs_deadline(host, port, cancel_addrs(host, port, None)?, deadline_ns)
+}
+
+fn cancel_addrs(
+    host: &str,
+    port: u16,
+    peer: Option<std::net::SocketAddr>,
+) -> Result<Vec<std::net::SocketAddr>, String> {
     use std::net::ToSocketAddrs;
-    let addrs: Vec<std::net::SocketAddr> = match (host, port).to_socket_addrs() {
-        Ok(a) => a.collect(),
-        Err(e) => return Err(format!("could not translate host name \"{host}\" to address: {e}")),
-    };
+    if let Some(a) = peer {
+        return Ok(vec![a]);
+    }
+    match (host, port).to_socket_addrs() {
+        Ok(a) => Ok(a.collect()),
+        Err(e) => Err(format!("could not translate host name \"{host}\" to address: {e}")),
+    }
+}
+
+fn tcp_connect_addrs_deadline(
+    host: &str,
+    port: u16,
+    addrs: Vec<std::net::SocketAddr>,
+    deadline_ns: u64,
+) -> Result<std::net::TcpStream, String> {
     let mut last = format!("could not translate host name \"{host}\" to address: no address");
     for addr in addrs {
         let left = deadline_ns.saturating_sub(pg_clock::mono_ns());
@@ -557,7 +1032,7 @@ fn tcp_connect_deadline(
 // caller that asked for a TLS-required connection.
 fn check_sslmode(opts: &[(String, String)]) -> Result<(), String> {
     match opt(opts, "sslmode") {
-        None | Some("disable") | Some("allow") | Some("prefer") | Some("") => Ok(()),
+        None | Some("disable") | Some("allow") | Some("prefer") => Ok(()),
         Some(m @ ("require" | "verify-ca" | "verify-full")) => Err(format!(
             "sslmode value \"{m}\" invalid when SSL support is not compiled in"
         )),
@@ -570,7 +1045,7 @@ fn check_sslmode(opts: &[(String, String)]) -> Result<(), String> {
 // handshake, where libpq refuses every non-channel-bound exchange.
 fn check_channel_binding(opts: &[(String, String)]) -> Result<bool, String> {
     match opt(opts, "channel_binding") {
-        None | Some("") | Some("disable") | Some("prefer") => Ok(false),
+        None | Some("disable") | Some("prefer") => Ok(false),
         Some("require") => Ok(true),
         Some(other) => Err(format!("invalid channel_binding value: \"{other}\"")),
     }
@@ -589,7 +1064,7 @@ fn check_sslrootcert(opts: &[(String, String)]) -> Result<(), String> {
 
 fn check_sslnegotiation(opts: &[(String, String)]) -> Result<(), String> {
     match opt(opts, "sslnegotiation") {
-        None | Some("") | Some("postgres") => Ok(()),
+        None | Some("postgres") => Ok(()),
         Some("direct") => Err(
             "sslnegotiation value \"direct\" invalid when SSL support is not compiled in".into(),
         ),
@@ -597,9 +1072,39 @@ fn check_sslnegotiation(opts: &[(String, String)]) -> Result<(), String> {
     }
 }
 
+// sslVerifyProtocolVersion / sslVerifyProtocolRange (fe-connect.c:7620): the
+// bounds are checked on their text, independently of any TLS implementation.
+fn ssl_protocol_version_ok(v: &str) -> bool {
+    v.is_empty() || ["TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3"].iter().any(|k| k.eq_ignore_ascii_case(v))
+}
+
+fn ssl_protocol_range_ok(min: &str, max: &str) -> bool {
+    if min.is_empty() || max.is_empty() || min.eq_ignore_ascii_case("TLSv1") {
+        return true;
+    }
+    if max.eq_ignore_ascii_case("TLSv1") {
+        return false;
+    }
+    min.to_ascii_lowercase() <= max.to_ascii_lowercase()
+}
+
+fn check_ssl_protocol_versions(opts: &[(String, String)]) -> Result<(), String> {
+    let min = opt(opts, "ssl_min_protocol_version").unwrap_or("");
+    let max = opt(opts, "ssl_max_protocol_version").unwrap_or("");
+    for (name, v) in [("ssl_min_protocol_version", min), ("ssl_max_protocol_version", max)] {
+        if !ssl_protocol_version_ok(v) {
+            return Err(format!("invalid \"{name}\" value: \"{v}\""));
+        }
+    }
+    if !ssl_protocol_range_ok(min, max) {
+        return Err("invalid SSL protocol version range".into());
+    }
+    Ok(())
+}
+
 fn check_sslcertmode(opts: &[(String, String)]) -> Result<(), String> {
     match opt(opts, "sslcertmode") {
-        None | Some("") | Some("disable") | Some("allow") => Ok(()),
+        None | Some("disable") | Some("allow") => Ok(()),
         Some("require") => {
             Err("sslcertmode value \"require\" invalid when SSL support is not compiled in".into())
         }
@@ -610,7 +1115,7 @@ fn check_sslcertmode(opts: &[(String, String)]) -> Result<(), String> {
 // The #ifndef ENABLE_GSS arm: this client has no GSSAPI transport either.
 fn check_gssencmode(opts: &[(String, String)]) -> Result<(), String> {
     match opt(opts, "gssencmode") {
-        None | Some("") | Some("disable") | Some("prefer") => Ok(()),
+        None | Some("disable") | Some("prefer") => Ok(()),
         Some("require") => Err(
             "gssencmode value \"require\" invalid when GSSAPI support is not compiled in".into(),
         ),
@@ -628,12 +1133,65 @@ fn check_transport_options(opts: &[(String, String)]) -> Result<bool, String> {
     check_sslrootcert(opts)?;
     check_sslmode(opts)?;
     check_sslnegotiation(opts)?;
+    check_ssl_protocol_versions(opts)?;
     check_sslcertmode(opts)?;
     check_gssencmode(opts)?;
     Ok(channel_binding_require)
 }
 
+// pqConnectOptions2 (fe-connect.c:2065): load_balance_hosts is validated and,
+// for random, the connhost list is shuffled; PQconnectPoll (:3116) shuffles
+// each host's resolved addresses with the same generator.
+fn load_balance_random(opts: &[(String, String)]) -> Result<bool, String> {
+    match opt(opts, "load_balance_hosts") {
+        None | Some("disable") => Ok(false),
+        Some("random") => Ok(true),
+        Some(other) => Err(format!("invalid load_balance_hosts value: \"{other}\"")),
+    }
+}
+
+// libpq_prng_init (fe-connect.c:1169): strong random bits, else a time/pid seed.
+fn libpq_prng_init() -> pg_prng::PgPrng {
+    let mut seed = [0u8; 16];
+    if pg_strong_random::pg_strong_random(&mut seed) {
+        let s0 = u64::from_ne_bytes(seed[..8].try_into().unwrap());
+        let s1 = u64::from_ne_bytes(seed[8..].try_into().unwrap());
+        let mut prng = pg_prng::PgPrng::from_raw(s0, s1);
+        prng.ensure_seeded();
+        return prng;
+    }
+    pg_prng::PgPrng::seeded(pg_clock::mono_ns() ^ u64::from(std::process::id()))
+}
+
+// The inside-out Fisher-Yates walk libpq uses for both lists.
+fn shuffle<T>(items: &mut [T], prng: &mut pg_prng::PgPrng) {
+    for i in 1..items.len() {
+        let j = prng.u64_range(0, i as u64) as usize;
+        items.swap(i, j);
+    }
+}
+
 pub fn connect(
+    opts: Vec<(String, String)>,
+    startup_params: &[(&str, &str)],
+    we: WaitEvents,
+) -> PgResult<Result<PgConn, String>> {
+    let reserved = reserve_external_fd()?;
+    match connect_unreserved(opts, startup_params, we) {
+        Ok(Ok(mut conn)) => {
+            conn.external_fd = reserved;
+            Ok(Ok(conn))
+        }
+        other => {
+            if reserved {
+                file_seams::release_external_fd::call();
+            }
+            other
+        }
+    }
+}
+
+fn connect_unreserved(
     opts: Vec<(String, String)>,
     startup_params: &[(&str, &str)],
     we: WaitEvents,
@@ -658,6 +1216,10 @@ pub fn connect(
         Ok(cb) => policy.with_channel_binding_required(cb),
         Err(e) => return Ok(Err(e)),
     };
+    let mut server_type = match TargetServerType::parse(opt(&opts, "target_session_attrs")) {
+        Ok(t) => t,
+        Err(e) => return Ok(Err(e)),
+    };
     let keys = match auth::ScramKeys::parse(
         opt(&opts, "scram_client_key"),
         opt(&opts, "scram_server_key"),
@@ -665,10 +1227,21 @@ pub fn connect(
         Ok(k) => k,
         Err(e) => return Ok(Err(e)),
     };
-    let hosts = match conn_hosts(&opts) {
+    let mut hosts = match conn_hosts(&opts) {
         Ok(h) => h,
         Err(e) => return Ok(Err(e)),
     };
+    let mut prng = match load_balance_random(&opts) {
+        Ok(true) => Some(libpq_prng_init()),
+        Ok(false) => None,
+        Err(e) => return Ok(Err(e)),
+    };
+    if let Some(p) = prng.as_mut() {
+        shuffle(&mut hosts, p);
+    }
+    if let Err(e) = check_protocol_versions(&opts) {
+        return Ok(Err(e));
+    }
     // md5/SCRAM hash the user the server was told about — the startup
     // packet's, not a re-derivation from the options.
     let user = startup_params
@@ -686,136 +1259,179 @@ pub fn connect(
         .map(|(_, v)| v.to_string())
         .or_else(|| opt(&opts, "dbname").filter(|s| !s.is_empty()).map(|s| s.to_string()))
         .unwrap_or_else(|| user.clone());
+    // pqConnectOptions2 (fe-connect.c:1429): the password file path is
+    // always resolved into the options (PQconninfo shows it).
+    let mut opts = opts;
+    if opt(&opts, "passfile").is_none_or(str::is_empty) {
+        if let Some(f) = conninfo::passfile_path(&opts) {
+            opts.retain(|(k, _)| k != "passfile");
+            opts.push(("passfile".to_string(), f));
+        }
+    }
     let passfile = if explicit_password.is_none() { conninfo::passfile_path(&opts) } else { None };
 
     // PQconnectPoll's host walk: a failed attempt appends its message and
     // the next host is tried; a server error other than "cannot connect
     // now" ends the walk.
     let mut errs = String::new();
-    for ch in &hosts {
-        let port = match parse_port(&ch.port) {
-            Ok(p) => p,
-            Err(e) => {
-                append_conn_error(&mut errs, &e);
-                continue;
-            }
-        };
-        let mut from_file = None;
-        let password = match &explicit_password {
-            Some(p) => Some(p.clone()),
-            None => passfile.as_deref().and_then(|f| {
-                let pwhost = if ch.host.is_empty() { &ch.hostaddr } else { &ch.host };
-                let p = conninfo::password_from_file(pwhost, &ch.port, &pw_dbname, &user, f)?;
-                from_file = Some(f);
-                Some(p)
-            }),
-        };
-        let (stream, fd, target, display_host) = match dial(ch, port, &opts) {
-            Ok(d) => d,
-            Err((e, terminal)) => {
-                append_conn_error(&mut errs, &e);
-                if terminal {
-                    return Ok(Err(errs));
+    loop {
+        for ch in &hosts {
+            let port = match parse_port(&ch.port) {
+                Ok(p) => p,
+                Err(e) => {
+                    append_conn_error(&mut errs, &e);
+                    continue;
                 }
-                continue;
-            }
-        };
-
-        match &stream {
-            Stream::Tcp(s) => s.set_nonblocking(true).expect("set_nonblocking"),
-            #[cfg(not(target_family = "wasm"))]
-            Stream::Unix(s) => s.set_nonblocking(true).expect("set_nonblocking"),
-        }
-
-        // libpq's emitHostIdentityInfo (fe-connect.c), emitted SPECULATIVELY
-        // into conn->errorMessage the moment the target address is
-        // identified: every later failure of this attempt — the
-        // startup-packet send, a server-sent FATAL during auth, fe_sendauth,
-        // a SCRAM failure — carries the prefix. Dial failures above already
-        // build it inline.
-        let host_identity = match &target {
-            DialTarget::Unix(path) => {
-                format!("connection to server on socket \"{path}\" failed: ")
-            }
-            DialTarget::Tcp(disp_host, disp_port) => {
-                // C: a CHT_HOST_ADDRESS target (hostaddr=) displays bare; a
-                // host NAME whose looked-up address differs textually
-                // displays "name" (addr) (emitHostIdentityInfo's strcmp arm).
-                let peer_ip = match &stream {
-                    Stream::Tcp(s) => {
-                        s.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default()
+            };
+            let mut from_file = None;
+            let password = match &explicit_password {
+                Some(p) => Some(p.clone()),
+                None => passfile.as_deref().and_then(|f| {
+                    let pwhost = if ch.host.is_empty() { &ch.hostaddr } else { &ch.host };
+                    let p = conninfo::password_from_file(pwhost, &ch.port, &pw_dbname, &user, f)?;
+                    from_file = Some(f);
+                    Some(p)
+                }),
+            };
+            let display_host = pq_host(ch);
+            let (stream, fd, target) = match dial(ch, port, &opts, prng.as_mut(), we.connect)? {
+                Ok(d) => d,
+                Err((e, terminal)) => {
+                    append_conn_error(&mut errs, &e);
+                    if terminal {
+                        return Ok(Err(errs));
                     }
-                    #[cfg(not(target_family = "wasm"))]
-                    Stream::Unix(_) => String::new(),
-                };
-                if !ch.hostaddr.is_empty() || peer_ip.is_empty() || peer_ip == *disp_host {
-                    format!("connection to server at \"{disp_host}\", port {disp_port} failed: ")
-                } else {
-                    format!(
-                        "connection to server at \"{disp_host}\" ({peer_ip}), port {disp_port} failed: "
-                    )
+                    continue;
+                }
+            };
+
+            match &stream {
+                Stream::Tcp(s) => s.set_nonblocking(true).expect("set_nonblocking"),
+                #[cfg(not(target_family = "wasm"))]
+                Stream::Unix(s) => s.set_nonblocking(true).expect("set_nonblocking"),
+            }
+
+            // libpq's emitHostIdentityInfo (fe-connect.c), emitted SPECULATIVELY
+            // into conn->errorMessage the moment the target address is
+            // identified: every later failure of this attempt — the
+            // startup-packet send, a server-sent FATAL during auth, fe_sendauth,
+            // a SCRAM failure — carries the prefix. Dial failures above already
+            // build it inline.
+            let host_identity = match &target {
+                DialTarget::Unix(path) => {
+                    format!("connection to server on socket \"{path}\" failed: ")
+                }
+                DialTarget::Tcp(disp_host, disp_port) => {
+                    // C: a CHT_HOST_ADDRESS target (hostaddr=) displays bare; a
+                    // host NAME whose looked-up address differs textually
+                    // displays "name" (addr) (emitHostIdentityInfo's strcmp arm).
+                    let peer_ip = match &stream {
+                        Stream::Tcp(s) => {
+                            s.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default()
+                        }
+                        #[cfg(not(target_family = "wasm"))]
+                        Stream::Unix(_) => String::new(),
+                    };
+                    if !ch.hostaddr.is_empty() || peer_ip.is_empty() || peer_ip == *disp_host {
+                        format!("connection to server at \"{disp_host}\", port {disp_port} failed: ")
+                    } else {
+                        format!(
+                            "connection to server at \"{disp_host}\" ({peer_ip}), port {disp_port} failed: "
+                        )
+                    }
+                }
+            };
+
+            if let Stream::Tcp(_) = &stream {
+                if let Err(e) = setup_tcp_socket(fd, &opts) {
+                    append_conn_error(&mut errs, &format!("{host_identity}{e}"));
+                    continue;
                 }
             }
-        };
 
-        let mut conn = PgConn {
-            _stream: stream,
-            fd,
-            target,
-            inbuf: Vec::new(),
-            inpos: 0,
-            conn_ok: true,
-            in_copy: false,
-            copy_server_done: false,
-            copy_client_done: false,
-            pending_results: false,
-            txn_status: b'I',
-            err: String::new(),
-            opts: opts.clone(),
-            display_host,
-            display_port: port as i32,
-            be_pid: 0,
-            be_key: Vec::new(),
-            server_version: 0,
-            used_password: false,
-            last_sqlstate: String::new(),
-            params: Vec::new(),
-            notifies: std::collections::VecDeque::new(),
-            we,
-        };
+            let peer = match &stream {
+                Stream::Tcp(s) => s.peer_addr().ok(),
+                #[cfg(not(target_family = "wasm"))]
+                Stream::Unix(_) => None,
+            };
+            let mut conn = PgConn {
+                _stream: stream,
+                fd,
+                external_fd: false,
+                target,
+                inbuf: Vec::new(),
+                inpos: 0,
+                conn_ok: true,
+                terminate_sent: false,
+                in_copy: false,
+                copy_server_done: false,
+                copy_client_done: false,
+                peer,
+                err_prescanned: false,
+                pending_results: false,
+                txn_status: b'I',
+                err: String::new(),
+                opts: opts.clone(),
+                display_host,
+                display_port: port as i32,
+                be_pid: 0,
+                be_key: Vec::new(),
+                server_version: 0,
+                used_password: false,
+                last_sqlstate: String::new(),
+                params: Vec::new(),
+                notifies: std::collections::VecDeque::new(),
+                last_query: None,
+                we,
+            };
 
-        let mut body = Vec::new();
-        body.extend_from_slice(&PG_PROTOCOL_3_0.to_be_bytes());
-        for (k, v) in startup_params {
-            body.extend_from_slice(k.as_bytes());
+            let mut body = Vec::new();
+            body.extend_from_slice(&PG_PROTOCOL_3_0.to_be_bytes());
+            for (k, v) in startup_params {
+                body.extend_from_slice(k.as_bytes());
+                body.push(0);
+                body.extend_from_slice(v.as_bytes());
+                body.push(0);
+            }
             body.push(0);
-            body.extend_from_slice(v.as_bytes());
-            body.push(0);
+            let mut pkt = Vec::with_capacity(4 + body.len());
+            pkt.extend_from_slice(&((body.len() as u32 + 4).to_be_bytes()));
+            pkt.extend_from_slice(&body);
+            if let Err(e) = conn.send_all(&pkt) {
+                append_conn_error(&mut errs, &format!("{host_identity}{e}"));
+                continue;
+            }
+
+            let auth_opts = auth::AuthOptions {
+                password: password.as_deref(),
+                keys: keys.clone(),
+                policy: policy.clone(),
+                passfile: from_file,
+            };
+            match auth::handshake(&mut conn, &user, &auth_opts)? {
+                Ok(()) => match conn.check_target(server_type, &host_identity)? {
+                    TargetCheck::Ok => return Ok(Ok(conn)),
+                    TargetCheck::NextHost(e) => append_conn_error(&mut errs, &e),
+                    TargetCheck::Fail(e) => {
+                        append_conn_error(&mut errs, &e);
+                        return Ok(Err(errs));
+                    }
+                },
+                Err(e) => {
+                    append_conn_error(&mut errs, &format!("{host_identity}{e}"));
+                    if conn.last_sqlstate != "57P03" {
+                        return Ok(Err(errs));
+                    }
+                }
+            }
         }
-        body.push(0);
-        let mut pkt = Vec::with_capacity(4 + body.len());
-        pkt.extend_from_slice(&((body.len() as u32 + 4).to_be_bytes()));
-        pkt.extend_from_slice(&body);
-        if let Err(e) = conn.send_all(&pkt) {
-            append_conn_error(&mut errs, &format!("{host_identity}{e}"));
+        // PQconnectPoll (fe-connect.c:3010): prefer-standby found no standby;
+        // drop the requirement and walk the hosts again.
+        if server_type == TargetServerType::PreferStandby && !hosts.is_empty() {
+            server_type = TargetServerType::Any;
             continue;
         }
-
-        let auth_opts = auth::AuthOptions {
-            password: password.as_deref(),
-            keys: keys.clone(),
-            policy: policy.clone(),
-            passfile: from_file,
-        };
-        match auth::handshake(&mut conn, &user, &auth_opts)? {
-            Ok(()) => return Ok(Ok(conn)),
-            Err(e) => {
-                append_conn_error(&mut errs, &format!("{host_identity}{e}"));
-                if conn.last_sqlstate != "57P03" {
-                    return Ok(Err(errs));
-                }
-            }
-        }
+        break;
     }
     Ok(Err(errs))
 }
@@ -833,27 +1449,36 @@ pub fn connect_db(
         Ok(o) => o,
         Err(e) => return Ok(Err(e)),
     };
-    let user = resolve_user(&opts);
-    let dbname = opt(&opts, "dbname").filter(|s| !s.is_empty()).unwrap_or(&user).to_string();
-    let appname = opt(&opts, "application_name").unwrap_or("").to_string();
-    let options = opt(&opts, "options").unwrap_or("").to_string();
-    let enc = encoding
-        .map(|s| s.to_string())
-        .or_else(|| opt(&opts, "client_encoding").map(|s| s.to_string()));
+    let params = db_startup_params(&opts, encoding);
+    let params: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    connect(opts, &params, we)
+}
 
-    let mut params: Vec<(&str, &str)> = vec![("user", user.as_str()), ("database", dbname.as_str())];
-    if !appname.is_empty() {
-        params.push(("application_name", appname.as_str()));
-    }
-    if let Some(e) = enc.as_deref() {
-        if !e.is_empty() {
-            params.push(("client_encoding", e));
+// build_startup_packet (fe-protocol3.c:2478) for a plain SQL connection:
+// user, database, replication, options, application_name (an explicit
+// empty one suppresses fallback_application_name), client_encoding.
+fn db_startup_params(
+    opts: &[(String, String)],
+    encoding: Option<&str>,
+) -> Vec<(&'static str, String)> {
+    let user = resolve_user(opts);
+    let dbname = opt(opts, "dbname").filter(|s| !s.is_empty()).unwrap_or(&user).to_string();
+    let appname = opt(opts, "application_name")
+        .or_else(|| opt(opts, "fallback_application_name"))
+        .unwrap_or("");
+    let enc = encoding.or_else(|| opt(opts, "client_encoding")).unwrap_or("");
+    let mut params = vec![("user", user.clone()), ("database", dbname)];
+    for (k, v) in [
+        ("replication", opt(opts, "replication").unwrap_or("")),
+        ("options", opt(opts, "options").unwrap_or("")),
+        ("application_name", appname),
+        ("client_encoding", enc),
+    ] {
+        if !v.is_empty() {
+            params.push((k, v.to_string()));
         }
     }
-    if !options.is_empty() {
-        params.push(("options", options.as_str()));
-    }
-    connect(opts, &params, we)
+    params
 }
 
 /// libpq PGTransactionStatusType (PQtransactionStatus).
@@ -955,9 +1580,25 @@ impl PgConn {
         (self.display_host.clone(), self.display_port)
     }
 
-    /// PQnotifies.
+    /// PQnotifies (fe-exec.c:2692): parse whatever is buffered first, then
+    /// pop the queue.
     pub fn next_notify(&mut self) -> Option<Notify> {
+        self.parse_idle_input();
         self.notifies.pop_front()
+    }
+
+    // parseInput's idle arm, run only from PQnotifies: with no command in
+    // flight every complete buffered message is asynchronous traffic
+    // (NotificationResponse, NoticeResponse, ParameterStatus). consume_input
+    // itself must not parse — the startup handshake and the result loops
+    // read through it with pending_results still false.
+    fn parse_idle_input(&mut self) {
+        while !self.pending_results && !self.in_copy {
+            match self.next_message() {
+                Ok(Some((t, body))) => self.note_async(t, &body),
+                Ok(None) | Err(_) => return,
+            }
+        }
     }
 
     // wasm32: the wasi libc crate exposes no send/recv (WASI p1 has no
@@ -1028,6 +1669,7 @@ impl PgConn {
             return false;
         }
         let mut buf = [0u8; 16384];
+        let mut someread = false;
         loop {
             let n = unsafe { libc::recv(self.fd, buf.as_mut_ptr().cast(), buf.len(), 0) };
             if n > 0 {
@@ -1035,11 +1677,18 @@ impl PgConn {
                 if (n as usize) < buf.len() {
                     return true;
                 }
+                someread = true;
                 continue;
             }
             if n == 0 {
+                // pqReadData_internal: a zero read after data was read this
+                // call is reported next time (fe-misc.c:751); a bare one is
+                // EOF, with libpq's two explanatory lines (fe-misc.c:833).
+                if someread {
+                    return true;
+                }
                 self.conn_ok = false;
-                self.err = "server closed the connection unexpectedly".into();
+                self.append_conn_error(SERVER_CLOSED_MSG);
                 return false;
             }
             let e = std::io::Error::last_os_error();
@@ -1118,13 +1767,23 @@ impl PgConn {
                 Err(e) => return Ok(Err(e)),
             }
             if !self.conn_ok {
-                return Ok(Err(self.err.clone()));
+                return Ok(Err(self.socket_dropped()));
             }
             wait_socket(self.fd, WL_SOCKET_READABLE, wait_event_info)?;
             if !self.consume_input() {
-                return Ok(Err(self.err.clone()));
+                return Ok(Err(self.socket_dropped()));
             }
         }
+    }
+
+    // libpqsrv_get_result after PQconsumeInput fails: PQgetResult is still
+    // BUSY, pqWait finds the dropped socket (pqSocketCheck "invalid socket",
+    // fe-misc.c:1244) and pqSaveErrorResult goes PGASYNC_IDLE.
+    fn socket_dropped(&mut self) -> String {
+        self.append_conn_error("invalid socket");
+        self.pending_results = false;
+        self.in_copy = false;
+        self.err.clone()
     }
 
     // A lost or poisoned connection ends the query (libpq: pqSaveErrorResult
@@ -1145,12 +1804,7 @@ impl PgConn {
                 let (name, next) = cstr_at(body, 0);
                 let (value, _) = cstr_at(body, next);
                 if name == "server_version" {
-                    let major: i32 = value
-                        .split(|c: char| !c.is_ascii_digit())
-                        .next()
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(0);
-                    self.server_version = major * 10000;
+                    self.server_version = parse_server_version(&value);
                 }
                 if let Some(slot) = self.params.iter_mut().find(|(k, _)| *k == name) {
                     slot.1 = value;
@@ -1170,6 +1824,12 @@ impl PgConn {
                 let (extra, _) = cstr_at(body, next);
                 self.notifies.push_back(Notify { channel, be_pid, extra });
             }
+            b'N' => {
+                // defaultNoticeProcessor (fe-connect.c:7857): remote notices
+                // go to this process's stderr, formatted like an error.
+                let text = errmsg::build_message(&parse_diag(body), self.last_query.as_deref(), false);
+                eprint!("{text}");
+            }
             b'K' => {
                 // BackendKeyData shorter than its 4-byte pid is malformed;
                 // keep the zero pid/key (cancel then simply can't target).
@@ -1183,22 +1843,19 @@ impl PgConn {
         }
     }
 
-    // PQexec (simple query): send, then collect until ReadyForQuery keeping
-    // the last resultset. CopyBothResponse/CopyOutResponse return immediately
-    // with the stream open.
+    // libpqsrv_exec (libpq-be-fe-helpers.h:252): PQsendQuery + collect until
+    // ReadyForQuery keeping the last resultset. It has PQsendQuery's
+    // preconditions, not PQexec's — a busy connection is refused, never
+    // silently drained (dblink_exec, the cursor commands and the walreceiver
+    // all go through this shape in C). CopyBothResponse/CopyOutResponse
+    // return immediately with the stream open.
     pub fn exec(&mut self, query: &str) -> PgResult<QueryResult> {
-        // PQexecStart (fe-exec.c): "Silently discard any prior query result"
-        // — a local error can abandon an earlier result stream mid-flight
-        // (dblink's storeRow unwind), and PQexec is what makes the connection
-        // usable again for the next command.
-        if self.pending_results {
-            self.drain();
-        }
         if !self.send_query_raw(query) {
             return Ok(QueryResult::error(self.err.clone()));
         }
 
         let mut nfields = 0usize;
+        let mut tuples = false;
         let mut rows: Vec<Vec<Option<Vec<u8>>>> = Vec::new();
         let mut result = QueryResult::status_only(ExecStatus::CommandOk);
         let mut error: Option<(String, ErrorFields)> = None;
@@ -1213,6 +1870,7 @@ impl PgConn {
                         Ok(n) => n,
                         Err(e) => return Ok(self.proto_error(e)),
                     };
+                    tuples = true;
                     rows.clear();
                 }
                 b'D' => match parse_data_row(&mbody) {
@@ -1225,7 +1883,7 @@ impl PgConn {
                 b'C' => {
                     let (tag, _) = cstr_at(&mbody, 0);
                     result = QueryResult {
-                        status: if nfields > 0 { ExecStatus::TuplesOk } else { ExecStatus::CommandOk },
+                        status: tuples_status(tuples),
                         nfields,
                         rows: std::mem::take(&mut rows),
                         cmd_tag: tag,
@@ -1233,11 +1891,12 @@ impl PgConn {
                         err: String::new(),
                     };
                     nfields = 0;
+                    tuples = false;
                 }
                 b'I' => result = QueryResult::status_only(ExecStatus::Empty),
                 b'E' => {
                     let diag = parse_diag(&mbody);
-                    self.err = parse_error_fields(&mbody);
+                    self.note_error_response(&mbody);
                     error = Some((self.err.clone(), diag));
                 }
                 b'W' => {
@@ -1277,11 +1936,52 @@ impl PgConn {
         Ok(result)
     }
 
-    // PQsendQueryStart's CONNECTION_BAD arm: a dead connection refuses every send.
+    // pqGetErrorNotice3 (fe-protocol3.c:995): an ErrorResponse's text joins
+    // whatever the cycle already accumulated.
+    fn note_error_response(&mut self, body: &[u8]) {
+        if std::mem::take(&mut self.err_prescanned) {
+            return;
+        }
+        let text = parse_error_fields(body, self.last_query.as_deref());
+        self.append_conn_error(&text);
+    }
+
+    // libpq_append_conn_error: messages accumulate in conn->errorMessage
+    // until the next query cycle clears it.
+    fn append_conn_error(&mut self, msg: &str) {
+        if !self.err.is_empty() {
+            self.err.push('\n');
+        }
+        self.err.push_str(msg);
+    }
+
+    // PQsendQueryStart (fe-exec.c:1700): a new query cycle clears the error
+    // state (not while a command still owns the buffer), a dead connection
+    // refuses every send, and so does a busy one (asyncStatus != IDLE).
     // upstream c318777da8b8 (18.4): postgres_fdw: Fix handling of abort-cleanup-failed connections.
     fn send_query_start(&mut self) -> bool {
+        let busy = self.pending_results || self.in_copy;
+        if !busy {
+            self.err.clear();
+            self.err_prescanned = false;
+        }
         if !self.conn_ok {
-            self.err = "no connection to the server".into();
+            self.append_conn_error("no connection to the server");
+            return false;
+        }
+        if busy {
+            self.append_conn_error("another command is already in progress");
+            return false;
+        }
+        true
+    }
+
+    // PQsendQueryParams/PQsendPrepare/PQsendQueryPrepared (fe-exec.c:1527).
+    fn check_param_count(&mut self, n: usize) -> bool {
+        if n > PQ_QUERY_PARAM_MAX_LIMIT {
+            self.append_conn_error(&format!(
+                "number of parameters must be between 0 and {PQ_QUERY_PARAM_MAX_LIMIT}"
+            ));
             return false;
         }
         true
@@ -1291,6 +1991,7 @@ impl PgConn {
         if !self.send_query_start() {
             return false;
         }
+        self.last_query = Some(query.to_string());
         let mut body = query.as_bytes().to_vec();
         body.push(0);
         if let Err(e) = self.send_all(&msg(b'Q', &body)) {
@@ -1323,9 +2024,10 @@ impl PgConn {
         params: &[Option<&str>],
     ) -> bool {
         debug_assert!(param_types.is_empty() || param_types.len() == params.len());
-        if !self.send_query_start() {
+        if !self.send_query_start() || !self.check_param_count(params.len()) {
             return false;
         }
+        self.last_query = Some(query.to_string());
         let mut pkt = msg(b'P', &parse_body("", query, param_types, params.len()));
         pkt.extend_from_slice(&msg(b'B', &bind_body("", "", params)));
         pkt.extend_from_slice(&msg(b'D', b"P\0"));
@@ -1341,9 +2043,10 @@ impl PgConn {
 
     /// PQsendPrepare: Parse(name) + Sync (no Describe, exactly libpq).
     pub fn send_prepare(&mut self, stmt_name: &str, query: &str, param_types: &[Oid]) -> bool {
-        if !self.send_query_start() {
+        if !self.send_query_start() || !self.check_param_count(param_types.len()) {
             return false;
         }
+        self.last_query = Some(query.to_string());
         let mut pkt = msg(b'P', &parse_body(stmt_name, query, param_types, param_types.len()));
         pkt.extend_from_slice(&msg(b'S', &[]));
         if let Err(e) = self.send_all(&pkt) {
@@ -1356,9 +2059,10 @@ impl PgConn {
 
     /// PQsendQueryPrepared: Bind(stmt) + Describe(portal) + Execute + Sync.
     pub fn send_query_prepared(&mut self, stmt_name: &str, params: &[Option<&str>]) -> bool {
-        if !self.send_query_start() {
+        if !self.send_query_start() || !self.check_param_count(params.len()) {
             return false;
         }
+        self.last_query = None;
         let mut pkt = msg(b'B', &bind_body("", stmt_name, params));
         pkt.extend_from_slice(&msg(b'D', b"P\0"));
         pkt.extend_from_slice(&msg(b'E', &execute_body("", 0)));
@@ -1426,6 +2130,7 @@ impl PgConn {
     // and PortalSuspended ('s', treated as result-complete like libpq).
     fn collect_last_result(&mut self) -> PgResult<QueryResult> {
         let mut nfields = 0usize;
+        let mut tuples = false;
         let mut rows: Vec<Vec<Option<Vec<u8>>>> = Vec::new();
         let mut result = QueryResult::status_only(ExecStatus::CommandOk);
         let mut error: Option<(String, ErrorFields)> = None;
@@ -1440,6 +2145,7 @@ impl PgConn {
                         Ok(n) => n,
                         Err(e) => return Ok(self.proto_error(e)),
                     };
+                    tuples = true;
                     rows.clear();
                 }
                 b'D' => match parse_data_row(&mbody) {
@@ -1453,11 +2159,7 @@ impl PgConn {
                     let tag =
                         if t == b'C' { cstr_at(&mbody, 0).0 } else { String::new() };
                     result = QueryResult {
-                        status: if nfields > 0 {
-                            ExecStatus::TuplesOk
-                        } else {
-                            ExecStatus::CommandOk
-                        },
+                        status: tuples_status(tuples),
                         nfields,
                         rows: std::mem::take(&mut rows),
                         cmd_tag: tag,
@@ -1465,11 +2167,12 @@ impl PgConn {
                         err: String::new(),
                     };
                     nfields = 0;
+                    tuples = false;
                 }
                 b'I' => result = QueryResult::status_only(ExecStatus::Empty),
                 b'E' => {
                     let diag = parse_diag(&mbody);
-                    self.err = parse_error_fields(&mbody);
+                    self.note_error_response(&mbody);
                     error = Some((self.err.clone(), diag));
                 }
                 b'1' | b'2' | b'3' | b'n' | b't' => {}
@@ -1500,6 +2203,13 @@ impl PgConn {
     // discipline pumps with timeouts). Ok(true) = readable; Ok(false) =
     // timed out. Latch wakeups run CHECK_FOR_INTERRUPTS and keep waiting.
     pub fn wait_readable_timeout(&self, timeout_ms: i64) -> PgResult<bool> {
+        self.wait_readable_timeout_ev(timeout_ms, self.we.receive)
+    }
+
+    // The same wait under a caller-chosen wait event (C passes the event to
+    // WaitLatchOrSocket per call site: PostgresFdwCleanupResult,
+    // LogicalApplyMain).
+    pub fn wait_readable_timeout_ev(&self, timeout_ms: i64, wait_event_info: u32) -> PgResult<bool> {
         let deadline = std::time::Instant::now()
             + std::time::Duration::from_millis(timeout_ms.max(0) as u64);
         loop {
@@ -1512,7 +2222,7 @@ impl PgConn {
                 WL_LATCH_SET | WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE | WL_TIMEOUT,
                 self.fd,
                 left.as_millis().min(i64::MAX as u128) as i64,
-                self.we.receive,
+                wait_event_info,
             )?;
             if rc & WL_LATCH_SET != 0 {
                 if let Some(l) = init_small::globals::MyLatch() {
@@ -1532,7 +2242,7 @@ impl PgConn {
     // PQisBusy (after a consume_input): would get_result block? Not busy once
     // a whole result's terminator (or ReadyForQuery) is buffered, or when no
     // query is pending at all.
-    pub fn is_busy(&self) -> bool {
+    pub fn is_busy(&mut self) -> bool {
         if !self.pending_results || !self.conn_ok {
             return false;
         }
@@ -1552,7 +2262,18 @@ impl PgConn {
                 return true;
             }
             match self.inbuf[p] {
-                b'C' | b'I' | b'E' | b'Z' | b'W' | b'H' | b'G' => return false,
+                b'E' => {
+                    // pqGetErrorNotice3 appends the text to errorMessage as
+                    // it parses; PQgetResult does not append it again.
+                    if !self.err_prescanned {
+                        let body = self.inbuf[p + 5..p + 1 + len].to_vec();
+                        let text = parse_error_fields(&body, self.last_query.as_deref());
+                        self.append_conn_error(&text);
+                        self.err_prescanned = true;
+                    }
+                    return false;
+                }
+                b'C' | b'I' | b'Z' | b'W' | b'H' | b'G' => return false,
                 _ => {}
             }
             p += 1 + len;
@@ -1598,7 +2319,7 @@ impl PgConn {
                     return Ok(CopyData::End);
                 }
                 b'E' => {
-                    self.err = parse_error_fields(&body);
+                    self.note_error_response(&body);
                     return Err(self.err.clone());
                 }
                 b'S' | b'N' | b'A' => self.note_async(t, &body),
@@ -1631,6 +2352,7 @@ impl PgConn {
             return Ok(None);
         }
         let mut nfields = 0usize;
+        let mut tuples = false;
         let mut rows: Vec<Vec<Option<Vec<u8>>>> = Vec::new();
         loop {
             let (t, body) = match self.read_message(self.we.receive)? {
@@ -1643,6 +2365,7 @@ impl PgConn {
                         Ok(n) => n,
                         Err(e) => return Ok(Some(self.proto_error(e))),
                     };
+                    tuples = true;
                     rows.clear();
                 }
                 b'D' => match parse_data_row(&body) {
@@ -1654,8 +2377,7 @@ impl PgConn {
                 },
                 b'C' | b's' => {
                     let tag = if t == b'C' { cstr_at(&body, 0).0 } else { String::new() };
-                    let status =
-                        if nfields > 0 { ExecStatus::TuplesOk } else { ExecStatus::CommandOk };
+                    let status = tuples_status(tuples);
                     return Ok(Some(QueryResult {
                         status,
                         nfields,
@@ -1669,7 +2391,7 @@ impl PgConn {
                 b'I' => return Ok(Some(QueryResult::status_only(ExecStatus::Empty))),
                 b'E' => {
                     let diag = parse_diag(&body);
-                    self.err = parse_error_fields(&body);
+                    self.note_error_response(&body);
                     let mut r = QueryResult::error(self.err.clone());
                     r.diag = Some(diag);
                     return Ok(Some(r));
@@ -1679,6 +2401,15 @@ impl PgConn {
                     self.copy_server_done = false;
                     self.copy_client_done = false;
                     return Ok(Some(QueryResult::status_only(ExecStatus::CopyBoth)));
+                }
+                b'H' => {
+                    // fe-protocol3.c: CopyOutResponse moves the connection to
+                    // PGASYNC_COPY_OUT; every PQgetResult answers COPY_OUT until
+                    // the caller drains (PQgetCopyData / PQendcopy).
+                    self.in_copy = true;
+                    self.copy_server_done = false;
+                    self.copy_client_done = true;
+                    return Ok(Some(QueryResult::status_only(ExecStatus::CopyOut)));
                 }
                 b'd' => {}
                 b'c' => self.copy_server_done = true,
@@ -1710,7 +2441,15 @@ impl PgConn {
         if !self.send_query_raw(query) {
             return Ok(QueryResult::error(self.err.clone()));
         }
+        self.stream_results(sink)
+    }
+
+    // The collect half of exec_streaming, for callers that send first and
+    // treat a refused send differently from a failed query (storeQueryResult's
+    // elog(ERROR) on PQsendQuery).
+    pub fn stream_results(&mut self, sink: &mut dyn RowSink) -> PgResult<QueryResult> {
         let mut nfields = 0usize;
+        let mut tuples = false;
         let mut started = false;
         let mut result = QueryResult::status_only(ExecStatus::CommandOk);
         let mut error: Option<(String, ErrorFields)> = None;
@@ -1725,6 +2464,7 @@ impl PgConn {
                         Ok(n) => n,
                         Err(e) => return Ok(self.proto_error(e)),
                     };
+                    tuples = true;
                     started = false;
                 }
                 b'D' => {
@@ -1743,13 +2483,13 @@ impl PgConn {
                 }
                 b'C' => {
                     let (tag, _) = cstr_at(&body, 0);
-                    if nfields > 0 && !started {
+                    if tuples && !started {
                         // Empty resultset still announces its shape (C's
                         // "if empty resultset, fill tuplestore header").
                         sink.result_start(&*self, nfields)?;
                     }
                     result = QueryResult {
-                        status: if nfields > 0 { ExecStatus::TuplesOk } else { ExecStatus::CommandOk },
+                        status: tuples_status(tuples),
                         nfields,
                         rows: Vec::new(),
                         cmd_tag: tag,
@@ -1757,12 +2497,13 @@ impl PgConn {
                         err: String::new(),
                     };
                     nfields = 0;
+                    tuples = false;
                     started = false;
                 }
                 b'I' => result = QueryResult::status_only(ExecStatus::Empty),
                 b'E' => {
                     let diag = parse_diag(&body);
-                    self.err = parse_error_fields(&body);
+                    self.note_error_response(&body);
                     error = Some((self.err.clone(), diag));
                 }
                 b'1' | b'2' | b'3' | b'n' | b't' => {}
@@ -1815,12 +2556,18 @@ impl PgConn {
     pub fn cancel(&self, timeout_ms: i64) -> PgResult<Option<String>> {
         let deadline_ns = pg_clock::mono_ns().saturating_add(timeout_ms.max(0) as u64 * 1_000_000);
         let sock = match &self.target {
-            DialTarget::Tcp(host, port) => match tcp_connect_deadline(host, *port, deadline_ns) {
-                Ok(s) => CancelSock::Tcp(s),
-                Err(e) => return Ok(Some(e)),
-            },
+            DialTarget::Tcp(host, port) => {
+                let addrs = match cancel_addrs(host, *port, self.peer) {
+                    Ok(a) => a,
+                    Err(e) => return Ok(Some(e)),
+                };
+                match tcp_connect_addrs_deadline(host, *port, addrs, deadline_ns) {
+                    Ok(s) => CancelSock::Tcp(s),
+                    Err(e) => return Ok(Some(e)),
+                }
+            }
             #[cfg(not(target_family = "wasm"))]
-            DialTarget::Unix(path) => match std::os::unix::net::UnixStream::connect(path) {
+            DialTarget::Unix(path) => match unix_stream_connect(path) {
                 Ok(s) => CancelSock::Unix(s),
                 Err(e) => {
                     return Ok(Some(format!(
@@ -1874,7 +2621,7 @@ impl PgConn {
                         WL_LATCH_SET | WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE | WL_TIMEOUT,
                         fd,
                         left_ns.div_ceil(1_000_000).min(i64::MAX as u64) as i64,
-                        self.we.receive,
+                        PG_WAIT_CLIENT,
                     )?;
                     if rc & WL_LATCH_SET != 0 {
                         if let Some(l) = init_small::globals::MyLatch() {
@@ -1899,7 +2646,127 @@ impl PgConn {
 
     pub fn terminate(&mut self) {
         let _ = self.send_all(&msg(b'X', &[]));
+        self.terminate_sent = true;
     }
+
+    /// PQsetClientEncoding (fe-connect.c:7736): a SET on the wire; false is
+    /// C's -1. The server's ParameterStatus report updates client_encoding().
+    pub fn set_client_encoding(&mut self, encoding: &str) -> PgResult<bool> {
+        if !self.conn_ok {
+            return Ok(false);
+        }
+        let res = self.exec(&format!("set client_encoding to '{encoding}'"))?;
+        Ok(res.status == ExecStatus::CommandOk)
+    }
+
+    // PQconnectPoll CONNECTION_CHECK_TARGET (fe-connect.c:4380): the
+    // server's default_transaction_read_only / in_hot_standby reports (or a
+    // SHOW / pg_is_in_recovery() round trip when it sent none) decide whether
+    // this host satisfies target_session_attrs. A rejected host is told
+    // Terminate and the walk moves on; a failed round trip ends the walk.
+    fn check_target(&mut self, target: TargetServerType, host_identity: &str) -> PgResult<TargetCheck> {
+        let reported = |conn: &PgConn, name: &str| conn.parameter_status(name).map(|v| v == "on");
+        match target {
+            TargetServerType::Any => {}
+            TargetServerType::ReadWrite | TargetServerType::ReadOnly => {
+                let mut read_only = reported(self, "default_transaction_read_only");
+                let mut hot_standby = reported(self, "in_hot_standby");
+                if read_only.is_none() || hot_standby.is_none() {
+                    match self.target_probe("SHOW transaction_read_only", host_identity)? {
+                        Ok(Some(v)) => {
+                            read_only = Some(v.starts_with("on"));
+                            hot_standby = read_only;
+                        }
+                        Ok(None) => return Ok(self.reject_target(host_identity, "\"SHOW transaction_read_only\" failed")),
+                        Err(e) => return Ok(TargetCheck::Fail(e)),
+                    }
+                }
+                let read_only_server = read_only == Some(true) || hot_standby == Some(true);
+                let (wrong, why) = if target == TargetServerType::ReadWrite {
+                    (read_only_server, "session is read-only")
+                } else {
+                    (!read_only_server, "session is not read-only")
+                };
+                if wrong {
+                    return Ok(self.reject_target(host_identity, why));
+                }
+            }
+            TargetServerType::Primary | TargetServerType::Standby | TargetServerType::PreferStandby => {
+                let mut hot_standby = reported(self, "in_hot_standby");
+                if self.server_version < 90000 {
+                    hot_standby = Some(false);
+                }
+                if hot_standby.is_none() {
+                    match self.target_probe("SELECT pg_catalog.pg_is_in_recovery()", host_identity)? {
+                        Ok(Some(v)) => hot_standby = Some(v.starts_with('t')),
+                        Ok(None) => return Ok(self.reject_target(host_identity, "\"SELECT pg_is_in_recovery()\" failed")),
+                        Err(e) => return Ok(TargetCheck::Fail(e)),
+                    }
+                }
+                let (wrong, why) = if target == TargetServerType::Primary {
+                    (hot_standby == Some(true), "server is in hot standby mode")
+                } else {
+                    (hot_standby == Some(false), "server is not in hot standby mode")
+                };
+                if wrong {
+                    return Ok(self.reject_target(host_identity, why));
+                }
+            }
+        }
+        Ok(TargetCheck::Ok)
+    }
+
+    // CONNECTION_CHECK_WRITABLE / CHECK_STANDBY: Ok(Some(value)) for a
+    // one-row reply, Ok(None) when the query itself failed (next host),
+    // Err(message) when the connection did (error_return).
+    fn target_probe(&mut self, query: &str, host_identity: &str) -> PgResult<Result<Option<String>, String>> {
+        let res = self.exec(query)?;
+        if !self.conn_ok || (res.status == ExecStatus::Error && res.diag.is_none()) {
+            return Ok(Err(format!("{host_identity}{}", res.err)));
+        }
+        if res.status != ExecStatus::TuplesOk || res.rows.len() != 1 {
+            return Ok(Ok(None));
+        }
+        let v = res.rows[0].first().and_then(|c| c.as_deref()).unwrap_or(b"");
+        Ok(Ok(Some(String::from_utf8_lossy(v).into_owned())))
+    }
+
+    fn reject_target(&mut self, host_identity: &str, why: &str) -> TargetCheck {
+        self.terminate();
+        TargetCheck::NextHost(format!("{host_identity}{why}"))
+    }
+}
+
+// pqConnectOptions2 (fe-connect.c:1992): target_session_attrs is validated
+// before any socket is opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TargetServerType {
+    Any,
+    ReadWrite,
+    ReadOnly,
+    Primary,
+    Standby,
+    PreferStandby,
+}
+
+impl TargetServerType {
+    fn parse(value: Option<&str>) -> Result<Self, String> {
+        Ok(match value {
+            None | Some("any") => Self::Any,
+            Some("read-write") => Self::ReadWrite,
+            Some("read-only") => Self::ReadOnly,
+            Some("primary") => Self::Primary,
+            Some("standby") => Self::Standby,
+            Some("prefer-standby") => Self::PreferStandby,
+            Some(other) => return Err(format!("invalid target_session_attrs value: \"{other}\"")),
+        })
+    }
+}
+
+enum TargetCheck {
+    Ok,
+    NextHost(String),
+    Fail(String),
 }
 
 enum CancelSock {
@@ -2075,6 +2942,212 @@ mod tests {
     }
 
     #[test]
+    fn conninfo_unquoted_backslash_escapes_next_byte_and_drops_a_terminal_one() {
+        let opts = parse_conninfo(r"host=a\ b dbname=x\").unwrap();
+        assert_eq!(opt(&opts, "host"), Some("a b"));
+        assert_eq!(opt(&opts, "dbname"), Some("x"));
+        assert!(parse_conninfo(r"host='a\").is_err());
+    }
+
+    #[test]
+    fn busy_connection_refuses_sends_and_a_new_cycle_clears_the_error() {
+        use std::io::Read;
+        let (mut conn, mut server) = test_conn();
+        server.set_nonblocking(true).unwrap();
+        conn.err = "stale".into();
+        assert!(conn.send_query("SELECT 1"));
+        assert_eq!(conn.error_message(), "");
+        assert_eq!(conn.last_query.as_deref(), Some("SELECT 1"));
+        assert!(!conn.send_query("SELECT 2"));
+        assert_eq!(conn.error_message(), "another command is already in progress");
+        assert!(!conn.send_query_params("SELECT 2", &[], &[]));
+        assert_eq!(
+            conn.error_message(),
+            "another command is already in progress\nanother command is already in progress"
+        );
+        let r = conn.exec("SELECT 3").unwrap();
+        assert_eq!(r.status, ExecStatus::Error);
+        assert!(r.err.ends_with("another command is already in progress"));
+        assert!(conn.pending_results);
+        let mut wire = Vec::new();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let _ = server.read_to_end(&mut wire);
+        assert_eq!(wire, msg(b'Q', b"SELECT 1\0"), "only the first query reached the server");
+        conn.inbuf = msg(b'Z', b"I");
+        assert!(conn.get_result().unwrap().is_none());
+        assert!(conn.send_query("SELECT 4"));
+        assert_eq!(conn.error_message(), "");
+    }
+
+    #[test]
+    fn idle_input_is_parsed_for_notifies_and_busy_input_is_left_alone() {
+        use std::io::Write;
+        let (mut conn, mut server) = test_conn();
+        let mut body = 42i32.to_be_bytes().to_vec();
+        body.extend_from_slice(b"chan\0payload\0");
+        server.write_all(&msg(b'A', &body)).unwrap();
+        let mut got = None;
+        for _ in 0..400 {
+            assert!(conn.consume_input());
+            assert!(conn.notifies.is_empty());
+            got = conn.next_notify();
+            if got.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let n = got.unwrap();
+        assert_eq!((n.channel.as_str(), n.be_pid, n.extra.as_str()), ("chan", 42, "payload"));
+        assert!(conn.next_notify().is_none());
+
+        conn.pending_results = true;
+        conn.inbuf = msg(b'A', &body);
+        assert!(conn.next_notify().is_none());
+        assert_eq!(conn.inbuf.len(), 5 + body.len());
+        conn.pending_results = false;
+        assert_eq!(conn.next_notify().unwrap().channel, "chan");
+        assert!(conn.inbuf.is_empty());
+    }
+
+    #[test]
+    fn parameter_count_is_capped_like_libpq() {
+        let (mut conn, _server) = test_conn();
+        let params: Vec<Option<&str>> = vec![Some("1"); PQ_QUERY_PARAM_MAX_LIMIT + 1];
+        assert!(!conn.send_query_params("SELECT 1", &[], &params));
+        assert_eq!(conn.error_message(), "number of parameters must be between 0 and 65535");
+        assert!(!conn.pending_results);
+        assert!(!conn.send_query_prepared("s", &params));
+        assert!(!conn.send_prepare("s", "SELECT 1", &vec![0; PQ_QUERY_PARAM_MAX_LIMIT + 1]));
+    }
+
+    #[test]
+    fn error_text_carries_the_cursor_display_and_notices_skip_context() {
+        let (mut conn, _server) = test_conn();
+        assert!(conn.send_query("SELCT 1 +"));
+        let body = b"SERROR\0C42601\0Msyntax error at or near \"SELCT\"\0P1\0\0";
+        conn.inbuf = msg(b'E', body);
+        conn.inbuf.extend_from_slice(&msg(b'Z', b"I"));
+        let r = conn.get_result().unwrap().unwrap();
+        assert_eq!(r.status, ExecStatus::Error);
+        assert_eq!(
+            conn.error_message(),
+            "ERROR:  syntax error at or near \"SELCT\"\nLINE 1: SELCT 1 +\n        ^"
+        );
+        assert_eq!(r.diag.as_ref().unwrap().position, "1");
+        assert!(conn.get_result().unwrap().is_none());
+        assert!(conn.send_query_prepared("s", &[]));
+        conn.inbuf = msg(b'E', body);
+        conn.inbuf.extend_from_slice(&msg(b'Z', b"I"));
+        conn.get_result().unwrap().unwrap();
+        assert_eq!(conn.error_message(), "ERROR:  syntax error at or near \"SELCT\" at character 1");
+    }
+
+    #[test]
+    fn server_version_parses_every_libpq_shape() {
+        assert_eq!(parse_server_version("18.6"), 180006);
+        assert_eq!(parse_server_version("9.6.1"), 90601);
+        assert_eq!(parse_server_version("8.4.22"), 80422);
+        assert_eq!(parse_server_version("10devel"), 100000);
+        assert_eq!(parse_server_version("18beta1"), 180000);
+        assert_eq!(parse_server_version("9.6devel"), 90600);
+        assert_eq!(parse_server_version("18.6 (Debian 18.6-1)"), 180006);
+        assert_eq!(parse_server_version("junk"), 0);
+        let (mut conn, _server) = test_conn();
+        conn.note_async(b'S', b"server_version\08.4.22\0");
+        assert_eq!(conn.server_version(), 80422);
+    }
+
+    #[test]
+    fn int_and_protocol_version_params_validate_like_libpq() {
+        assert_eq!(parse_int_param(" 12 ", "keepalives_idle"), Ok(12));
+        assert_eq!(parse_int_param("-3", "keepalives_idle"), Ok(-3));
+        for bad in ["abc", "12x", "", " ", "+", "99999999999"] {
+            assert_eq!(
+                parse_int_param(bad, "keepalives_idle"),
+                Err(format!("invalid integer value \"{bad}\" for connection option \"keepalives_idle\""))
+            );
+        }
+        let pv = |s: &str| check_protocol_versions(&parse_conninfo(s).unwrap());
+        assert_eq!(pv("min_protocol_version=abc"), Err("invalid min_protocol_version value: \"abc\"".into()));
+        assert_eq!(pv("max_protocol_version=3.1"), Err("invalid max_protocol_version value: \"3.1\"".into()));
+        assert_eq!(
+            pv("min_protocol_version=3.2 max_protocol_version=3.0"),
+            Err("\"min_protocol_version\" is greater than \"max_protocol_version\"".into())
+        );
+        assert_eq!(pv("min_protocol_version=3.2"), Ok(()));
+        assert_eq!(pv("min_protocol_version=latest max_protocol_version=latest"), Ok(()));
+        assert_eq!(pv("max_protocol_version=3.0"), Ok(()));
+    }
+
+    #[test]
+    fn dial_prefers_hostaddr_and_defaults_to_the_socket_dir() {
+        let free = || {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let we = WaitEvents { connect: 0, receive: 0 };
+        let p = free();
+        let opts = parse_conninfo(&format!("host=/nonexistent hostaddr=127.0.0.1 port={p} user=u")).unwrap();
+        let err = connect(opts, &[("user", "u")], we).unwrap().err().unwrap();
+        assert!(err.starts_with(&format!("connection to server at \"127.0.0.1\", port {p} failed: ")), "{err}");
+        let opts = parse_conninfo(&format!("port={p} user=u")).unwrap();
+        let err = connect(opts, &[("user", "u")], we).unwrap().err().unwrap();
+        assert!(err.starts_with(&format!("connection to server on socket \"/tmp/.s.PGSQL.{p}\" failed: ")), "{err}");
+        assert!(err.ends_with("\n\tIs the server running locally and accepting connections on that socket?"), "{err}");
+        let ch = |h: &str, a: &str| ConnHost { host: h.into(), hostaddr: a.into(), port: String::new() };
+        assert_eq!(pq_host(&ch("h", "1.2.3.4")), "h");
+        assert_eq!(pq_host(&ch("", "1.2.3.4")), "1.2.3.4");
+        assert_eq!(pq_host(&ch("", "")), "/tmp");
+    }
+
+    #[test]
+    fn tcp_options_are_validated_after_the_dial() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let p = listener.local_addr().unwrap().port();
+        let we = WaitEvents { connect: 0, receive: 0 };
+        for (o, what) in [("keepalives_idle=abc", "keepalives_idle"), ("keepalives=x", "keepalives"), ("tcp_user_timeout=1.5", "tcp_user_timeout")] {
+            let opts = parse_conninfo(&format!("hostaddr=127.0.0.1 port={p} user=u {o}")).unwrap();
+            let err = connect(opts, &[("user", "u")], we).unwrap().err().unwrap();
+            let (_, v) = o.split_once('=').unwrap();
+            assert_eq!(
+                err,
+                format!("connection to server at \"127.0.0.1\", port {p} failed: invalid integer value \"{v}\" for connection option \"{what}\"")
+            );
+        }
+        let s = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        use std::os::fd::AsRawFd;
+        let opts = parse_conninfo("keepalives_idle=30 keepalives_interval=5 keepalives_count=3 tcp_user_timeout=1000").unwrap();
+        assert_eq!(setup_tcp_socket(s.as_raw_fd(), &opts), Ok(()));
+        let mut on = 0i32;
+        let mut len = std::mem::size_of::<i32>() as libc::socklen_t;
+        // SAFETY: s is an open socket; `on` receives an int.
+        let rc = unsafe { libc::getsockopt(s.as_raw_fd(), libc::SOL_SOCKET, libc::SO_KEEPALIVE, (&mut on as *mut i32).cast(), &mut len) };
+        assert_eq!((rc, on != 0), (0, true));
+        let opts = parse_conninfo("keepalives=0").unwrap();
+        let s2 = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        assert_eq!(setup_tcp_socket(s2.as_raw_fd(), &opts), Ok(()));
+        let rc = unsafe { libc::getsockopt(s2.as_raw_fd(), libc::SOL_SOCKET, libc::SO_KEEPALIVE, (&mut on as *mut i32).cast(), &mut len) };
+        assert_eq!((rc, on), (0, 0));
+    }
+
+    #[test]
+    fn db_startup_params_forward_replication_and_fallback_application_name() {
+        let keys = |s: &str| {
+            db_startup_params(&parse_conninfo(s).unwrap(), None)
+                .into_iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            keys("user=u dbname=d replication=database options=-cx=1 fallback_application_name=fb client_encoding=UTF8"),
+            ["user=u", "database=d", "replication=database", "options=-cx=1", "application_name=fb", "client_encoding=UTF8"]
+        );
+        assert_eq!(keys("user=u dbname=d application_name=a fallback_application_name=fb"), ["user=u", "database=d", "application_name=a"]);
+        assert_eq!(keys("user=u dbname=d application_name='' fallback_application_name=fb"), ["user=u", "database=d"]);
+        assert_eq!(PG_WAIT_CLIENT, 0x0600_0000);
+    }
+
+    #[test]
     fn conninfo_parse_last_dup_wins() {
         let opts = parse_conninfo("host=a host=b").unwrap();
         assert_eq!(opt(&opts, "host"), Some("b"));
@@ -2182,11 +3255,15 @@ mod tests {
         .unwrap()
         .err()
         .unwrap();
+        // connectFailureMessage (fe-connect.c:2681): the OS error line and
+        // libpq's hint line per refused address.
         let lines: Vec<&str> = err.split('\n').collect();
-        assert_eq!(lines.len(), 2, "{err}");
+        assert_eq!(lines.len(), 4, "{err}");
         let prefix = |p: u16| format!("connection to server at \"127.0.0.1\", port {p} failed: ");
         assert!(lines[0].starts_with(&prefix(p1)), "{err}");
-        assert!(lines[1].starts_with(&prefix(p2)), "{err}");
+        assert!(lines[2].starts_with(&prefix(p2)), "{err}");
+        let hint = "\tIs the server running on that host and accepting TCP/IP connections?";
+        assert_eq!((lines[1], lines[3]), (hint, hint), "{err}");
     }
 
     #[test]
@@ -2250,7 +3327,7 @@ mod tests {
         body.extend_from_slice(b"C57P01\0");
         body.extend_from_slice(b"Mgoodbye\0");
         body.push(0);
-        assert_eq!(parse_error_fields(&body), "FATAL:  goodbye");
+        assert_eq!(parse_error_fields(&body, None), "FATAL:  goodbye");
         let d = parse_diag(&body);
         assert_eq!(d.sqlstate, "57P01");
         assert_eq!(d.severity, "FATAL");
@@ -2309,13 +3386,17 @@ mod tests {
         let conn = PgConn {
             _stream: Stream::Tcp(client),
             fd,
+            external_fd: false,
             target: DialTarget::Tcp("127.0.0.1".into(), addr.port()),
             inbuf: Vec::new(),
             inpos: 0,
             conn_ok: true,
+            terminate_sent: false,
             in_copy: false,
             copy_server_done: false,
             copy_client_done: false,
+            peer: None,
+            err_prescanned: false,
             pending_results: false,
             txn_status: b'I',
             err: String::new(),
@@ -2329,6 +3410,7 @@ mod tests {
             last_sqlstate: String::new(),
             params: Vec::new(),
             notifies: std::collections::VecDeque::new(),
+            last_query: None,
             we: WaitEvents { connect: 0, receive: 0 },
         };
         (conn, server)
@@ -2485,6 +3567,33 @@ mod tests {
         assert!(conn.connection_bad());
     }
 
+    // bug_adf1ee39 residual: a COPY OUT started with send_query is reported
+    // as COPY_OUT by get_result, and again without reading until drained.
+    #[test]
+    fn get_result_reports_copy_out_until_drained() {
+        let (mut conn, _srv) = test_conn();
+        conn.pending_results = true;
+        let mut wire = msg(b'H', &[0, 0, 1, 0, 0]);
+        wire.extend_from_slice(&msg(b'd', b"1\n"));
+        wire.extend_from_slice(&msg(b'c', b""));
+        wire.extend_from_slice(&msg(b'C', b"COPY 1\0"));
+        wire.extend_from_slice(&msg(b'Z', b"I"));
+        conn.inbuf = wire;
+        let r = conn.get_result().unwrap().unwrap();
+        assert_eq!(r.status, ExecStatus::CopyOut);
+        assert!(!conn.connection_bad());
+        let r = conn.get_result().unwrap().unwrap();
+        assert_eq!(r.status, ExecStatus::CopyOut);
+        assert!(!conn.send_query("SELECT 7"));
+        assert_eq!(conn.error_message(), "another command is already in progress");
+        assert!(matches!(conn.get_copy_data().unwrap(), CopyData::Msg(_)));
+        assert!(matches!(conn.get_copy_data().unwrap(), CopyData::End));
+        let r = conn.get_result().unwrap().unwrap();
+        assert_eq!(r.status, ExecStatus::CommandOk);
+        assert_eq!(r.cmd_tag, "COPY 1");
+        assert!(conn.get_result().unwrap().is_none());
+    }
+
     #[test]
     fn get_result_buffered_path_reports_short_rowdesc_as_conn_error() {
         let (mut conn, _srv) = test_conn();
@@ -2615,12 +3724,17 @@ mod tests {
             );
         }
         // Non-encrypting modes (and the absent/default "prefer") are accepted.
-        for m in ["disable", "allow", "prefer", ""] {
+        for m in ["disable", "allow", "prefer"] {
             let opts = vec![("sslmode".to_string(), m.to_string())];
             assert!(check_sslmode(&opts).is_ok(), "sslmode={m:?} should be ok");
         }
         assert!(check_sslmode(&[]).is_ok());
-        // An unrecognized value is rejected as invalid.
+        // An unrecognized value is rejected as invalid; so is an explicitly
+        // empty one (fe-connect.c:1767 keeps "" and rejects it).
+        for m in ["bogus", ""] {
+            let opts = vec![("sslmode".to_string(), m.to_string())];
+            assert_eq!(check_sslmode(&opts).err().unwrap(), format!("invalid sslmode value: \"{m}\""));
+        }
         let opts = vec![("sslmode".to_string(), "bogus".to_string())];
         assert_eq!(
             check_sslmode(&opts).err().unwrap(),
@@ -2818,8 +3932,8 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(dead);
-        assert_eq!(conn.error_message(), "server closed the connection unexpectedly");
-        once_then_none(&mut conn, "server closed the connection unexpectedly");
+        assert_eq!(conn.error_message(), SERVER_CLOSED_MSG);
+        once_then_none(&mut conn, "before or while processing the request.\ninvalid socket");
         // Malformed DataRow (proto_error).
         let (mut conn, _srv) = test_conn();
         conn.pending_results = true;
@@ -2830,5 +3944,371 @@ mod tests {
         wire.extend_from_slice(&msg(b'D', &dbody));
         conn.inbuf = wire;
         once_then_none(&mut conn, "insufficient data");
+    }
+
+    fn row_desc(names: &[&str]) -> Vec<u8> {
+        let mut b = (names.len() as i16).to_be_bytes().to_vec();
+        for n in names {
+            b.extend_from_slice(n.as_bytes());
+            b.push(0);
+            b.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0]);
+        }
+        b
+    }
+
+    fn data_row(vals: &[&str]) -> Vec<u8> {
+        let mut b = (vals.len() as i16).to_be_bytes().to_vec();
+        for v in vals {
+            b.extend_from_slice(&(v.len() as i32).to_be_bytes());
+            b.extend_from_slice(v.as_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn drop_sends_terminate_once_like_pqfinish() {
+        use std::io::Read;
+        let (conn, mut server) = test_conn();
+        drop(conn);
+        let mut got = Vec::new();
+        server.read_to_end(&mut got).unwrap();
+        assert_eq!(got, msg(b'X', &[]));
+
+        let (mut conn, mut server) = test_conn();
+        conn.terminate();
+        drop(conn);
+        let mut got = Vec::new();
+        server.read_to_end(&mut got).unwrap();
+        assert_eq!(got, msg(b'X', &[]));
+
+        let (mut conn, mut server) = test_conn();
+        conn.conn_ok = false;
+        drop(conn);
+        let mut got = Vec::new();
+        server.read_to_end(&mut got).unwrap();
+        assert!(got.is_empty());
+    }
+
+    fn preload(conn: &mut PgConn, frames: &[Vec<u8>]) {
+        conn.inbuf = frames.concat();
+        conn.inpos = 0;
+    }
+
+    // pqParseInput3 (fe-protocol3.c:220): a RowDescription makes the result
+    // PGRES_TUPLES_OK whatever its column count — dblink's rowtype check
+    // depends on a zero-column SELECT not passing as a command tag.
+    #[test]
+    fn zero_column_select_is_tuples_ok() {
+        let (mut conn, _srv) = test_conn();
+        let reply = [msg(b'T', &row_desc(&[])), msg(b'C', b"SELECT 0\0"), msg(b'Z', b"I")];
+        preload(&mut conn, &reply);
+        let r = conn.exec("SELECT WHERE false").unwrap();
+        assert_eq!((r.status, r.nfields, r.cmd_tag.as_str()), (ExecStatus::TuplesOk, 0, "SELECT 0"));
+        preload(&mut conn, &reply);
+        assert!(conn.send_query("SELECT WHERE false"));
+        let r = conn.get_result().unwrap().unwrap();
+        assert_eq!((r.status, r.nfields), (ExecStatus::TuplesOk, 0));
+        assert!(conn.get_result().unwrap().is_none());
+        preload(&mut conn, &[msg(b'C', b"BEGIN\0"), msg(b'Z', b"T")]);
+        let r = conn.exec("BEGIN").unwrap();
+        assert_eq!((r.status, r.nfields), (ExecStatus::CommandOk, 0));
+    }
+
+    // A FATAL followed by EOF (pg_terminate_backend on the remote): the
+    // error buffer carries the FATAL text, libpq's three-line EOF notice and
+    // PQgetResult's "invalid socket", and the next send starts a clean cycle.
+    #[test]
+    fn fatal_then_eof_accumulates_libpqs_error_lines() {
+        let (mut conn, srv) = test_conn();
+        conn.pending_results = true;
+        conn.last_query = Some("SELECT pg_terminate_backend(pg_backend_pid())".into());
+        conn.inbuf = msg(
+            b'E',
+            b"SFATAL\0VFATAL\0C57P01\0Mterminating connection due to administrator command\0\0",
+        );
+        let r = conn.get_result().unwrap().unwrap();
+        assert_eq!(r.status, ExecStatus::Error);
+        assert_eq!(r.err, "FATAL:  terminating connection due to administrator command");
+        drop(srv);
+        let mut dead = false;
+        for _ in 0..400 {
+            if !conn.consume_input() {
+                dead = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(dead);
+        let r = conn.get_result().unwrap().unwrap();
+        assert_eq!(r.status, ExecStatus::Error);
+        assert_eq!(
+            r.err,
+            "FATAL:  terminating connection due to administrator command\n\
+             server closed the connection unexpectedly\n\
+             \tThis probably means the server terminated abnormally\n\
+             \tbefore or while processing the request.\n\
+             invalid socket"
+        );
+        assert_eq!(conn.error_message(), r.err);
+        assert!(conn.get_result().unwrap().is_none());
+        let r = conn.exec("SELECT 1").unwrap();
+        assert_eq!(r.err, "no connection to the server");
+        assert_eq!(conn.error_message(), "no connection to the server");
+    }
+
+    fn handshake_with(conn: &mut PgConn, require_auth: Option<&str>) -> Result<(), String> {
+        let policy = auth::AuthPolicy::parse(require_auth).unwrap();
+        let opts = auth::AuthOptions {
+            password: Some("secret"),
+            keys: auth::ScramKeys::default(),
+            policy,
+            passfile: None,
+        };
+        auth::handshake(conn, "u", &opts).unwrap()
+    }
+
+    // PQconnectPoll CONNECTION_AWAITING_RESPONSE (fe-connect.c:4010): until
+    // AuthenticationOk only an authentication request or an error is
+    // accepted, so a server that skips authentication cannot bypass
+    // require_auth by sending ReadyForQuery outright.
+    #[test]
+    fn ready_for_query_before_authentication_ok_is_rejected() {
+        for require_auth in [None, Some("scram-sha-256"), Some("!none"), Some("password")] {
+            let (mut conn, _srv) = test_conn();
+            preload(&mut conn, &[msg(b'Z', b"I")]);
+            assert_eq!(
+                handshake_with(&mut conn, require_auth),
+                Err("expected authentication request from server, but received Z".into()),
+                "{require_auth:?}"
+            );
+        }
+        let (mut conn, _srv) = test_conn();
+        preload(&mut conn, &[msg(b'S', b"server_version\x0018.6\0"), msg(b'Z', b"I")]);
+        assert_eq!(
+            handshake_with(&mut conn, None),
+            Err("expected authentication request from server, but received S".into())
+        );
+        let (mut conn, _srv) = test_conn();
+        preload(&mut conn, &[msg(b'R', &0i32.to_be_bytes()), msg(b'R', &0i32.to_be_bytes())]);
+        assert_eq!(
+            handshake_with(&mut conn, None),
+            Err("unexpected response from server; first received character was \"R\"".into())
+        );
+        let (mut conn, _srv) = test_conn();
+        preload(
+            &mut conn,
+            &[
+                msg(b'R', &0i32.to_be_bytes()),
+                msg(b'S', b"server_version\x0018.6\0"),
+                msg(b'K', &[0, 0, 0, 7, 0, 0, 0, 9]),
+                msg(b'N', b"SNOTICE\0Mhello\0\0"),
+                msg(b'Z', b"I"),
+            ],
+        );
+        assert_eq!(handshake_with(&mut conn, None), Ok(()));
+        assert_eq!(conn.parameter_status("server_version"), Some("18.6"));
+    }
+
+    // pqConnectOptions2 (fe-connect.c:1992) validates target_session_attrs
+    // before any socket is opened (port 1 would otherwise be dialed).
+    #[test]
+    fn target_session_attrs_is_validated_before_dial() {
+        let opts = parse_conninfo("host=127.0.0.1 port=1 user=u target_session_attrs=bogus").unwrap();
+        let err = connect(opts, &[("user", "u")], WaitEvents { connect: 0, receive: 0 }).unwrap().err().unwrap();
+        assert_eq!(err, "invalid target_session_attrs value: \"bogus\"");
+        assert_eq!(TargetServerType::parse(Some("")).unwrap_err(), "invalid target_session_attrs value: \"\"");
+        assert_eq!(TargetServerType::parse(None), Ok(TargetServerType::Any));
+        assert_eq!(TargetServerType::parse(Some("any")), Ok(TargetServerType::Any));
+        assert_eq!(TargetServerType::parse(Some("read-write")), Ok(TargetServerType::ReadWrite));
+        assert_eq!(TargetServerType::parse(Some("read-only")), Ok(TargetServerType::ReadOnly));
+        assert_eq!(TargetServerType::parse(Some("primary")), Ok(TargetServerType::Primary));
+        assert_eq!(TargetServerType::parse(Some("standby")), Ok(TargetServerType::Standby));
+        assert_eq!(TargetServerType::parse(Some("prefer-standby")), Ok(TargetServerType::PreferStandby));
+    }
+
+    fn next_host(check: TargetCheck) -> String {
+        match check {
+            TargetCheck::NextHost(e) => e,
+            TargetCheck::Ok => panic!("host accepted"),
+            TargetCheck::Fail(e) => panic!("walk ended: {e}"),
+        }
+    }
+
+    // CONNECTION_CHECK_TARGET (fe-connect.c:4380): the startup reports decide;
+    // without them SHOW transaction_read_only / pg_is_in_recovery() are asked,
+    // and a failed probe moves to the next host with C's message.
+    #[test]
+    fn check_target_reads_reports_then_probes_the_server() {
+        let id = "connection to server at \"h\", port 1 failed: ";
+        let (mut conn, _srv) = test_conn();
+        conn.server_version = 180006;
+        conn.params.push(("in_hot_standby".into(), "on".into()));
+        conn.params.push(("default_transaction_read_only".into(), "off".into()));
+        assert!(matches!(conn.check_target(TargetServerType::Any, id).unwrap(), TargetCheck::Ok));
+        assert!(matches!(conn.check_target(TargetServerType::Standby, id).unwrap(), TargetCheck::Ok));
+        assert!(matches!(conn.check_target(TargetServerType::PreferStandby, id).unwrap(), TargetCheck::Ok));
+        assert!(matches!(conn.check_target(TargetServerType::ReadOnly, id).unwrap(), TargetCheck::Ok));
+        assert_eq!(next_host(conn.check_target(TargetServerType::Primary, id).unwrap()), format!("{id}server is in hot standby mode"));
+        assert_eq!(next_host(conn.check_target(TargetServerType::ReadWrite, id).unwrap()), format!("{id}session is read-only"));
+        conn.params.clear();
+        conn.params.push(("in_hot_standby".into(), "off".into()));
+        conn.params.push(("default_transaction_read_only".into(), "off".into()));
+        assert!(matches!(conn.check_target(TargetServerType::Primary, id).unwrap(), TargetCheck::Ok));
+        assert!(matches!(conn.check_target(TargetServerType::ReadWrite, id).unwrap(), TargetCheck::Ok));
+        assert_eq!(next_host(conn.check_target(TargetServerType::Standby, id).unwrap()), format!("{id}server is not in hot standby mode"));
+        assert_eq!(next_host(conn.check_target(TargetServerType::ReadOnly, id).unwrap()), format!("{id}session is not read-only"));
+
+        let (mut conn, _srv) = test_conn();
+        conn.server_version = 180006;
+        let show = |v: &str| {
+            [msg(b'T', &row_desc(&["transaction_read_only"])), msg(b'D', &data_row(&[v])), msg(b'C', b"SHOW\0"), msg(b'Z', b"I")]
+        };
+        preload(&mut conn, &show("on"));
+        assert_eq!(next_host(conn.check_target(TargetServerType::ReadWrite, id).unwrap()), format!("{id}session is read-only"));
+        preload(&mut conn, &show("off"));
+        assert!(matches!(conn.check_target(TargetServerType::ReadWrite, id).unwrap(), TargetCheck::Ok));
+        let recovery = |v: &str| {
+            [msg(b'T', &row_desc(&["pg_is_in_recovery"])), msg(b'D', &data_row(&[v])), msg(b'C', b"SELECT 1\0"), msg(b'Z', b"I")]
+        };
+        preload(&mut conn, &recovery("t"));
+        assert_eq!(next_host(conn.check_target(TargetServerType::Primary, id).unwrap()), format!("{id}server is in hot standby mode"));
+        preload(&mut conn, &recovery("f"));
+        assert!(matches!(conn.check_target(TargetServerType::Standby, id).unwrap(), TargetCheck::NextHost(_)));
+        preload(&mut conn, &recovery("f"));
+        assert!(matches!(conn.check_target(TargetServerType::Primary, id).unwrap(), TargetCheck::Ok));
+        preload(&mut conn, &[msg(b'E', b"SERROR\0C42501\0Mdenied\0\0"), msg(b'Z', b"I")]);
+        assert_eq!(next_host(conn.check_target(TargetServerType::ReadOnly, id).unwrap()), format!("{id}\"SHOW transaction_read_only\" failed"));
+        preload(&mut conn, &[msg(b'E', b"SERROR\0C42501\0Mdenied\0\0"), msg(b'Z', b"I")]);
+        assert_eq!(next_host(conn.check_target(TargetServerType::Standby, id).unwrap()), format!("{id}\"SELECT pg_is_in_recovery()\" failed"));
+        // Servers before 9.0 have no standby mode: no probe is sent.
+        conn.server_version = 80400;
+        assert!(matches!(conn.check_target(TargetServerType::Primary, id).unwrap(), TargetCheck::Ok));
+    }
+
+    #[test]
+    fn empty_transport_option_values_are_invalid() {
+        for k in ["sslmode", "channel_binding", "sslnegotiation", "sslcertmode", "gssencmode"] {
+            let opts = vec![(k.to_string(), String::new())];
+            assert_eq!(check_transport_options(&opts).unwrap_err(), format!("invalid {k} value: \"\""));
+        }
+        assert!(check_transport_options(&[]).is_ok());
+    }
+
+    #[test]
+    fn ssl_protocol_versions_are_validated_like_libpq() {
+        let o = |min: &str, max: &str| {
+            vec![
+                ("ssl_min_protocol_version".to_string(), min.to_string()),
+                ("ssl_max_protocol_version".to_string(), max.to_string()),
+            ]
+        };
+        assert_eq!(
+            check_transport_options(&o("bogus", "")).unwrap_err(),
+            "invalid \"ssl_min_protocol_version\" value: \"bogus\""
+        );
+        assert_eq!(
+            check_transport_options(&o("", "bogus")).unwrap_err(),
+            "invalid \"ssl_max_protocol_version\" value: \"bogus\""
+        );
+        assert_eq!(check_transport_options(&o("TLSv1.3", "TLSv1.2")).unwrap_err(), "invalid SSL protocol version range");
+        assert_eq!(check_transport_options(&o("TLSv1.2", "TLSv1")).unwrap_err(), "invalid SSL protocol version range");
+        assert!(check_transport_options(&o("tlsv1.2", "TLSV1.3")).is_ok());
+        assert!(check_transport_options(&o("TLSv1", "TLSv1")).is_ok());
+        assert!(check_transport_options(&o("TLSv1.1", "TLSv1.1")).is_ok());
+        assert!(check_transport_options(&o("", "TLSv1")).is_ok());
+    }
+
+    #[test]
+    fn load_balance_hosts_is_validated_and_random_permutes() {
+        let o = |v: &str| vec![("load_balance_hosts".to_string(), v.to_string())];
+        assert_eq!(load_balance_random(&o("bogus")).unwrap_err(), "invalid load_balance_hosts value: \"bogus\"");
+        assert_eq!(load_balance_random(&o("")).unwrap_err(), "invalid load_balance_hosts value: \"\"");
+        assert!(!load_balance_random(&[]).unwrap());
+        assert!(!load_balance_random(&o("disable")).unwrap());
+        assert!(load_balance_random(&o("random")).unwrap());
+        let ordered: Vec<u32> = (0..16).collect();
+        let mut v = ordered.clone();
+        shuffle(&mut v, &mut pg_prng::PgPrng::seeded(285));
+        let mut sorted = v.clone();
+        sorted.sort();
+        assert_eq!(sorted, ordered);
+        assert_ne!(v, ordered);
+        let mut single = vec![7u32];
+        shuffle(&mut single, &mut pg_prng::PgPrng::seeded(1));
+        assert_eq!(single, vec![7]);
+    }
+
+    #[test]
+    fn abstract_socket_hosts_dial_as_unix_sockets() {
+        assert!(is_unixsock_path("@abstract"));
+        assert!(is_unixsock_path("/tmp"));
+        assert!(!is_unixsock_path("localhost"));
+        let e = unix_connect("@pgclient-b285-nonexistent/.s.PGSQL.1").err().expect("nothing listens there");
+        assert!(
+            e.starts_with("connection to server on socket \"@pgclient-b285-nonexistent/.s.PGSQL.1\" failed: "),
+            "{e}"
+        );
+        assert!(e.ends_with("\n\tIs the server running locally and accepting connections on that socket?"), "{e}");
+    }
+
+    #[test]
+    fn is_busy_parses_a_buffered_error_response_once() {
+        let (mut conn, _srv) = test_conn();
+        conn.pending_results = true;
+        let mut wire = msg(b'E', b"SERROR\0C42703\0Mboom\0\0");
+        wire.extend(msg(b'Z', b"I"));
+        conn.inbuf = wire;
+        assert!(!conn.is_busy());
+        assert_eq!(conn.error_message(), "ERROR:  boom");
+        assert!(!conn.is_busy());
+        assert_eq!(conn.error_message(), "ERROR:  boom");
+        let r = conn.get_result().unwrap().unwrap();
+        assert_eq!(r.status, ExecStatus::Error);
+        assert_eq!(r.err, "ERROR:  boom");
+        assert_eq!(conn.error_message(), "ERROR:  boom");
+        assert!(conn.get_result().unwrap().is_none());
+        assert!(!conn.err_prescanned);
+        // A partial row ahead of anything else: busy, and nothing is parsed.
+        conn.pending_results = true;
+        conn.inbuf = frame(b'D', 100, b"partial");
+        assert!(conn.is_busy());
+        assert_eq!(conn.error_message(), "ERROR:  boom");
+    }
+
+    #[test]
+    fn cancel_dials_the_connected_peer_not_a_fresh_lookup() {
+        let peer: std::net::SocketAddr = "10.255.255.1:9".parse().unwrap();
+        assert_eq!(cancel_addrs("localhost", 5432, Some(peer)).unwrap(), vec![peer]);
+        let (mut conn, _srv) = test_conn();
+        conn.peer = Some(peer);
+        conn.target = DialTarget::Tcp("no-such-host.invalid".into(), 5432);
+        assert_eq!(conn.cancel(0).unwrap(), Some("cancel request timed out".into()));
+        conn.peer = None;
+        assert!(conn.cancel(0).unwrap().unwrap().starts_with("could not translate host name \"no-such-host.invalid\""));
+    }
+
+    #[test]
+    fn host_addr_text_drops_the_ipv6_scope() {
+        let mut sa = ip::SockAddr::zeroed();
+        // SAFETY: zeroed, correctly sized sockaddr structs copied into
+        // sockaddr_storage-sized bytes.
+        unsafe {
+            let mut sin6: libc::sockaddr_in6 = std::mem::zeroed();
+            sin6.sin6_family = libc::AF_INET6 as libc::sa_family_t;
+            sin6.sin6_addr.s6_addr = std::net::Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1).octets();
+            sin6.sin6_scope_id = 1;
+            let n = std::mem::size_of::<libc::sockaddr_in6>();
+            std::ptr::copy_nonoverlapping(std::ptr::from_ref(&sin6).cast::<u8>(), sa.addr.as_mut_ptr(), n);
+            sa.salen = n as u32;
+            assert_eq!(host_addr_text(&sa), "fe80::1");
+            let mut sa4 = ip::SockAddr::zeroed();
+            let mut sin: libc::sockaddr_in = std::mem::zeroed();
+            sin.sin_family = libc::AF_INET as libc::sa_family_t;
+            sin.sin_addr.s_addr = u32::from(std::net::Ipv4Addr::new(127, 0, 0, 1)).to_be();
+            let n = std::mem::size_of::<libc::sockaddr_in>();
+            std::ptr::copy_nonoverlapping(std::ptr::from_ref(&sin).cast::<u8>(), sa4.addr.as_mut_ptr(), n);
+            sa4.salen = n as u32;
+            assert_eq!(host_addr_text(&sa4), "127.0.0.1");
+        }
     }
 }

@@ -239,7 +239,7 @@ fn position_compute(
     }
 
     let null_search = fcinfo.argisnull(1);
-    if null_search && !::arrayfuncs::array_contains_nulls(&array) {
+    if null_search && !::arrayfuncs::array_contains_nulls(&array)? {
         return Ok(None);
     }
     let searched = if null_search { Datum::null() } else { fcinfo.arg(1) };
@@ -304,7 +304,7 @@ pub fn fc_array_positions(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) ->
         return Err(multidim_search_unsupported());
     }
     let null_search = fcinfo.argisnull(1);
-    if ndim < 1 || (null_search && !::arrayfuncs::array_contains_nulls(&array)) {
+    if ndim < 1 || (null_search && !::arrayfuncs::array_contains_nulls(&array)?) {
         let empty = ::arrayfuncs::construct::construct_empty_array(mcx, 23)?;
         return byref_result(mcx, &empty);
     }

@@ -2,7 +2,7 @@
 -- Expected captured from C 18.6 (scripts/commands-misc-b55-e2e.sh header).
 \set VERBOSITY verbose
 
--- fp-catalog-namespace-p2#3 / #4: statistics-object and text-search lookups
+-- regression / #4: statistics-object and text-search lookups
 -- must walk a search_path longer than 1024 entries.
 BEGIN;
 DO $$ BEGIN FOR i IN 1..1030 LOOP EXECUTE format('CREATE SCHEMA b55s%s', i); END LOOP; END $$;
@@ -16,7 +16,7 @@ CREATE TEXT SEARCH CONFIGURATION b55s1.copied (COPY = cfg);
 SELECT cfgname FROM pg_ts_config WHERE cfgname = 'copied';
 ROLLBACK;
 
--- fp-commands-alter#2: ALTER TABLESPACE ... OWNER TO takes the shared-object
+-- regression: ALTER TABLESPACE ... OWNER TO takes the shared-object
 -- AccessExclusiveLock (objectaddress.c:1176) for the transaction.
 BEGIN;
 ALTER TABLESPACE pg_default OWNER TO CURRENT_USER;
@@ -25,7 +25,7 @@ SELECT mode FROM pg_locks WHERE pid = pg_backend_pid() AND locktype = 'object'
   AND objid = (SELECT oid FROM pg_tablespace WHERE spcname = 'pg_default');
 ROLLBACK;
 
--- fp-commands-cluster#1: CLUSTER marks the surviving relfilenumber new in
+-- regression: CLUSTER marks the surviving relfilenumber new in
 -- the subtransaction, so COPY FREEZE in the same transaction is allowed.
 CREATE TABLE b55_t6 (a integer);
 CREATE INDEX b55_t6i ON b55_t6 (a);
@@ -39,14 +39,14 @@ COMMIT;
 SELECT a FROM b55_t6 ORDER BY a;
 DROP TABLE b55_t6;
 
--- fp-commands-policy#2: both policy expressions are transformed before
+-- regression: both policy expressions are transformed before
 -- either has collations assigned (policy.c:652-659).
 CREATE TABLE b55_t19 (i int);
 CREATE POLICY p ON b55_t19 USING (('a' COLLATE "C") = ('b' COLLATE "POSIX")) WITH CHECK (missing_column > 0);
 CREATE POLICY p ON b55_t19 USING (('a' COLLATE "C") = ('b' COLLATE "POSIX"));
 DROP TABLE b55_t19;
 
--- fp-commands-sequence#1: sequence statements queued by ALTER TABLE carry the
+-- regression: sequence statements queued by ALTER TABLE carry the
 -- utility ParseState, so conflicting options report the cursor position.
 CREATE TABLE b55_t23 (id bigint NOT NULL);
 ALTER TABLE b55_t23 ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (INCREMENT 1 INCREMENT 2);

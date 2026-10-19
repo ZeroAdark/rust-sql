@@ -2536,7 +2536,7 @@ pub fn multixact_redo(record: &mut XLogReaderState) -> PgResult<()> {
         dlog(
             DEBUG1,
             format!(
-                "replaying multixact truncation: offsets [{}, {}), offsets segments [{:X}, {:X}), members [{}, {}), members segments [{:X}, {:X})",
+                "replaying multixact truncation: offsets [{}, {}), offsets segments [{:x}, {:x}), members [{}, {}), members segments [{:x}, {:x})",
                 start_trunc_off,
                 end_trunc_off,
                 MultiXactIdToOffsetSegment(start_trunc_off),

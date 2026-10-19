@@ -1,0 +1,39 @@
+-- bugs/batch-181-mixed-xhigh: expected captured from C 18.6
+-- (scripts/mixed-b181-e2e.sh); the regression block at the end
+-- is hand-verified (deliberate divergence, UPSTREAM-BUGS.md).
+\set VERBOSITY verbose
+-- regression: the partition descriptor context is identified
+-- by the parent relation's name (partdesc.c:321).
+CREATE TABLE b181_p (a int) PARTITION BY LIST (a);
+CREATE TABLE b181_p1 PARTITION OF b181_p FOR VALUES IN (1);
+SELECT * FROM b181_p;
+SELECT name, ident FROM pg_backend_memory_contexts WHERE name = 'partition descriptor' AND ident = 'b181_p';
+DROP TABLE b181_p;
+-- regression: copy_replication_slot reads its optional
+-- temporary/plugin arguments from PG_NARGS(), so an internal alias of the
+-- two-argument physical wrapper declaring a third argument honors it.
+CREATE FUNCTION b181_copyphys(IN src name, IN dst name, IN temporary bool, OUT slot_name name, OUT lsn pg_lsn) RETURNS record AS 'pg_copy_physical_replication_slot_b' LANGUAGE internal;
+SELECT slot_name FROM pg_create_physical_replication_slot('b181_src', true);
+SELECT slot_name, lsn IS NULL AS no_lsn FROM b181_copyphys('b181_src', 'b181_dst', true);
+SELECT slot_name, temporary FROM pg_replication_slots WHERE slot_name LIKE 'b181%' ORDER BY 1;
+SELECT pg_drop_replication_slot('b181_dst');
+SELECT pg_drop_replication_slot('b181_src');
+DROP FUNCTION b181_copyphys;
+-- regression: a reused unnamed portal's context is identified
+-- "<unnamed>" like a fresh one (portalmem.c:225).
+SELECT ident FROM pg_backend_memory_contexts WHERE name = 'PortalContext' ORDER BY 1 \parse b181_ps
+\bind_named b181_ps \g
+\bind_named b181_ps \g
+\bind_named b181_ps \g
+\bind_named b181_ps \g
+\bind_named b181_ps \g
+\bind_named b181_ps \g
+\bind_named b181_ps \g
+\bind_named b181_ps \g
+\close_prepared b181_ps
+-- regression (pg-also-bug, deliberate divergence): C leaves
+-- the half-created ephemeral slot acquired by this backend after the caught
+-- error (slotfuncs.c:189 releases only on success; a caught error never
+-- reaches postgres.c:4468); pgrust drops it, so no row is expected here.
+DO $$ BEGIN PERFORM pg_create_logical_replication_slot('b181_s24', 'nonexistent_plugin'); EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'caught % %', SQLSTATE, SQLERRM; END $$;
+SELECT slot_name, active FROM pg_replication_slots WHERE slot_name = 'b181_s24';

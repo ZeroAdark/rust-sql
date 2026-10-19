@@ -221,6 +221,7 @@ fn build_heap_page(vals: &[i32]) -> Box<TestPage> {
     page.0[12..14].copy_from_slice(&(lower as u16).to_ne_bytes());
     page.0[14..16].copy_from_slice(&(upper as u16).to_ne_bytes());
     page.0[16..18].copy_from_slice(&(BLCKSZ as u16).to_ne_bytes());
+    page.0[18..20].copy_from_slice(&(BLCKSZ as u16 | 4).to_ne_bytes());
     page.0[18..20].copy_from_slice(&((BLCKSZ as u16) | 4).to_ne_bytes());
     page
 }
@@ -235,6 +236,7 @@ fn new_bt_page(special_flags: u16, level: u32) -> Box<TestPage> {
     put_u16(&mut p, 12, SizeOfPageHeaderData as u16); // pd_lower
     put_u16(&mut p, 14, special as u16); // pd_upper
     put_u16(&mut p, 16, special as u16); // pd_special
+    put_u16(&mut p, 18, BLCKSZ as u16 | 4); // pd_pagesize_version
     let opaque = BTPageOpaqueData {
         btpo_prev: P_NONE,
         btpo_next: P_NONE,

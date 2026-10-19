@@ -232,7 +232,9 @@ fn check_timezone_value(value: &str, log_only: bool) -> PgResult<Option<&'static
         let scan = guc::cnum::c_strtod(value.as_bytes());
         if scan.consumed != 0 && scan.consumed == value.len() {
             let hours = scan.value;
-            let gmtoffset = (-hours * SECS_PER_HOUR as f64) as i64;
+            // variable.c:332: (long)NaN is LONG_MIN on x86-64, out of range.
+            let gmtoffset =
+                if hours.is_nan() { i64::MIN } else { (-hours * SECS_PER_HOUR as f64) as i64 };
             let new_tz = tz::pg_tzset_offset(gmtoffset)?;
             if new_tz.is_none() {
                 GUC_check_errdetail("UTC timezone offset is out of range.");

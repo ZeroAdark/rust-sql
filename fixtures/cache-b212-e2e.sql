@@ -1,6 +1,6 @@
 -- bugs/batch-212-backend-utils-cache: cache fixes, expected captured from C 18.6.
 \set VERBOSITY verbose
--- fp-cache-lsyscache-p2#1: get_typdefault converts a plain-literal typdefault
+-- regression: get_typdefault converts a plain-literal typdefault
 -- through InputFunctionCall, which raises XX000 when the input function
 -- returns NULL (lsyscache.c:2793, fmgr.c:1558). pg_stat_get_function_calls
 -- returns NULL for every OID while track_functions is none.
@@ -38,7 +38,7 @@ CREATE TYPE b212_w (INPUT = b212_w_in, OUTPUT = b212_w_out, INTERNALLENGTH = 4, 
 CREATE TABLE b212_ok (c int DEFAULT 7, d b212_w);
 INSERT INTO b212_ok (c) VALUES (1);
 SELECT c, d FROM b212_ok;
--- fp-cache-relcache-p1#1: after the last trigger is dropped (relhastriggers
+-- regression: after the last trigger is dropped (relhastriggers
 -- stays true until vacuum) the empty trigger descriptor is cached in the
 -- relcache entry; pg_trigger is not rescanned per statement
 -- (relcache.c:1260, trigger.c:1993).

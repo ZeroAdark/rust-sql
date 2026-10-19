@@ -21,7 +21,7 @@ const SYNC_REP_WAIT_FLUSH: usize = 1;
 const SYNC_REP_WAIT_APPLY: usize = 2;
 
 // pq_getmessage maximum body lengths (pqcomm.h).
-const PQ_LARGE_MESSAGE_LIMIT: i32 = 0x3fff_ffff;
+pub(crate) const PQ_LARGE_MESSAGE_LIMIT: i32 = 0x3fff_ffff - 1; /* MaxAllocSize - 1 */
 const PQ_SMALL_MESSAGE_LIMIT: i32 = 10000;
 const EOF: i32 = -1;
 
@@ -76,7 +76,7 @@ pub fn ProcessRepliesIfAny() -> PgResult<()> {
             other => {
                 return ereport(FATAL)
                     .errcode(ERRCODE_PROTOCOL_VIOLATION)
-                    .errmsg(format!("invalid standby message type \"{}\"", other as char))
+                    .errmsg_raw(invalid_standby_message_type(other))
                     .finish(loc(2312, "ProcessRepliesIfAny"));
             }
         };
@@ -320,6 +320,29 @@ fn transaction_id_in_recent_past(xid: types_core::TransactionId, epoch: u32) -> 
     types_core::xact::TransactionIdPrecedesOrEquals(xid, next_xid)
 }
 
+// walsender.c:2652-2668: the decoded feedback is logged at DEBUG2 (with the
+// frontend's reply time) before any state changes. Split out so the unit
+// test can drive it without the handler's shared-state steps.
+pub(crate) fn hs_feedback_debug2(
+    reply_time: TimestampTz,
+    feedback_xmin: types_core::TransactionId,
+    feedback_epoch: u32,
+    feedback_catalog_xmin: types_core::TransactionId,
+    feedback_catalog_epoch: u32,
+) {
+    if message_level_is_interesting(DEBUG2) {
+        let reply_time_str = timestamp_seams::timestamptz_to_str::call(reply_time);
+        let _ = elog::elog(
+            DEBUG2,
+            format!(
+                "hot standby feedback xmin {feedback_xmin} epoch {feedback_epoch}, \
+                 catalog_xmin {feedback_catalog_xmin} epoch {feedback_catalog_epoch} \
+                 reply_time {reply_time_str}"
+            ),
+        );
+    }
+}
+
 // static void ProcessStandbyHSFeedbackMessage(void) (walsender.c:2633).
 fn ProcessStandbyHSFeedbackMessage(msg: &mut StringInfo<'_>) -> PgResult<()> {
     use std::sync::atomic::Ordering::Relaxed;
@@ -330,6 +353,14 @@ fn ProcessStandbyHSFeedbackMessage(msg: &mut StringInfo<'_>) -> PgResult<()> {
     let feedback_epoch = pq_getmsgint(msg, 4)?;
     let feedback_catalog_xmin = pq_getmsgint(msg, 4)?;
     let feedback_catalog_epoch = pq_getmsgint(msg, 4)?;
+
+    hs_feedback_debug2(
+        reply_time,
+        feedback_xmin,
+        feedback_epoch,
+        feedback_catalog_xmin,
+        feedback_catalog_epoch,
+    );
 
     crate::my_set_reply_time(reply_time);
 
@@ -393,5 +424,29 @@ mod tests {
 
         assert!(!reply_clears_lag_times(300, 300, 300, 300), "flush just caught up");
         assert!(reply_clears_lag_times(300, 300, 300, 300), "unchanged full replay");
+    }
+}
+
+// errmsg("invalid standby message type \"%c\"", firstchar): %c stores the
+// byte itself, so a high byte goes out verbatim rather than UTF-8 encoded.
+fn invalid_standby_message_type(firstchar: u8) -> Vec<u8> {
+    let mut msg = b"invalid standby message type \"".to_vec();
+    msg.push(firstchar);
+    msg.push(b'"');
+    msg
+}
+
+#[cfg(test)]
+mod raw_message_tests {
+    #[test]
+    fn invalid_standby_message_type_keeps_the_raw_byte() {
+        assert_eq!(
+            super::invalid_standby_message_type(0xe9),
+            b"invalid standby message type \"\xe9\"".to_vec()
+        );
+        assert_eq!(
+            super::invalid_standby_message_type(b'Q'),
+            b"invalid standby message type \"Q\"".to_vec()
+        );
     }
 }

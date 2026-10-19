@@ -1421,7 +1421,7 @@ fn DecodeMultiInsert(ctx: &mut LogicalDecodingContext, buf: XLogRecordBuffer) ->
                 .reader
                 .XLogRecGetBlockData(0)
                 .expect("multi-insert block data present");
-            tuple.t_self = ItemPointerData::default();
+            tuple.t_self = ItemPointerData::invalid();
             tuple.t_tableOid = InvalidOid;
             tuple.image_mut()[SizeofHeapTupleHeader..]
                 .copy_from_slice(&tupledata[payload_start..payload_end]);
@@ -1486,7 +1486,7 @@ fn DecodeXLogTuple(data: &[u8], tuple: &mut heaptuple::HeapTuple<'static>) {
     let t_infomask = u16_at(data, 2);
     let t_hoff = data[4];
 
-    tuple.t_self = ItemPointerData::default();
+    tuple.t_self = ItemPointerData::invalid();
     tuple.t_tableOid = InvalidOid;
     tuple.image_mut()[SizeofHeapTupleHeader..].copy_from_slice(&data[SizeOfHeapHeader..]);
     let hdr = tuple.t_data_mut();
@@ -1585,6 +1585,27 @@ mod tests {
             e.message(),
             "logical decoding on standby requires \"wal_level\" >= \"logical\" on the primary"
         );
+    }
+
+    // DecodeXLogTuple (decode.c:1264) stamps t_self with ItemPointerSetInvalid
+    // (block 0xFFFFFFFF, offset 0), which output plugins can observe on the
+    // synthetic change tuple; block 0 is a valid block number.
+    #[test]
+    fn decoded_tuple_t_self_is_invalid_item_pointer() {
+        let cx = mcx::MemoryContext::new("t");
+        // SAFETY: `cx` outlives every use within this test.
+        let mcx: mcx::Mcx<'static> = unsafe { std::mem::transmute(cx.mcx()) };
+        let data = [0u8, 2, 0, 1, 24, 0xAB, 0xCD];
+        let mut tuple = heaptuple::HeapTuple::alloc_zeroed(
+            mcx,
+            data.len() - super::SizeOfHeapHeader + super::SizeofHeapTupleHeader,
+        )
+        .unwrap();
+        tuple.t_self = super::ItemPointerData::new(0, 0);
+        super::DecodeXLogTuple(&data, &mut tuple);
+        assert_eq!(tuple.t_self, super::ItemPointerData::invalid());
+        assert_eq!(types_tuple::ItemPointerGetBlockNumberNoCheck(&tuple.t_self), 0xFFFF_FFFF);
+        assert_eq!(tuple.t_data().t_hoff, 24);
     }
 
     // XLOG_RUNNING_XACTS decode must reject records whose declared xcnt/subxcnt

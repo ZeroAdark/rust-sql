@@ -1,6 +1,6 @@
 //! storage/aio: PgAioHandle engine, shmem model, io_method dispatch.
 //!
-//! Thread-model divergence (the one structural note, see the GL-AIO-1
+//! Thread-model divergence (the one structural note, see the regression
 //! letter): C's IO worker PROCESSES are postmaster-child THREADS of kind
 //! BackendType::IoWorker — pmchild-tracked, PGPROC-owning, covered by the
 //! postmaster state machine (PM_WAIT_IO_WORKERS). Everything cross-process
@@ -368,6 +368,8 @@ pub struct PgAioHandleSnapshot {
     pub generation: u64,
     pub state: u8,
     pub owner_procno: i32,
+    /// Owner pid read before the generation re-check (aio_funcs.c:113-117).
+    pub owner_pid: i32,
     pub op: u8,
     pub op_offset: u64,
     /// iov_byte_length(iov, iov_length): bytes the op covers.
@@ -386,6 +388,19 @@ pub struct PgAioHandleSnapshot {
 /// means the IO was recycled (don't display it); a state change means retry.
 /// `None` for IDLE or recycled handles.
 pub fn pgaio_io_snapshot(index: u32) -> Option<PgAioHandleSnapshot> {
+    pgaio_io_snapshot_with(index, |procno| {
+        lmgr_proc::GetPGProcByNumber(procno).pid.load(Ordering::Relaxed)
+    })
+}
+
+/// [`pgaio_io_snapshot`] with the owner-pid read injected: it runs between
+/// the copy and the generation re-check, so an owner that exited (after
+/// waiting for its IO) is caught by that check rather than reported as pid
+/// 0 or a slot reuser.
+pub fn pgaio_io_snapshot_with(
+    index: u32,
+    owner_pid_of: impl Fn(types_core::ProcNumber) -> i32,
+) -> Option<PgAioHandleSnapshot> {
     use std::sync::atomic::fence;
 
     let h = ioh(index);
@@ -420,6 +435,7 @@ pub fn pgaio_io_snapshot(index: u32) -> Option<PgAioHandleSnapshot> {
         let flags = h.flags.load(Ordering::Relaxed);
         let result = h.result.load(Ordering::Relaxed);
         let owner_procno = h.owner_procno;
+        let owner_pid = owner_pid_of(owner_procno);
 
         // 3) pg_read_barrier()
         fence(Ordering::Acquire);
@@ -435,6 +451,7 @@ pub fn pgaio_io_snapshot(index: u32) -> Option<PgAioHandleSnapshot> {
             generation: start_generation,
             state: start_state,
             owner_procno,
+            owner_pid,
             op: d.op,
             op_offset: d.op_data.offset,
             iov_bytes: iov_len_sum,

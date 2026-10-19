@@ -38,6 +38,7 @@ pg_string = { path = "../../../../common/string" }
 # (buffile.c track_io_timing).
 hashfn = { path = "../../../../common/hashfn" }
 pg_clock = { path = "../../../../port/pg_clock" }
+timeout = { path = "../../../utils/misc/timeout" }
 libc = "0.2"
 
 [dev-dependencies]

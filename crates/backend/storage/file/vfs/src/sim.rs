@@ -1205,6 +1205,14 @@ impl SimVfs {
             }
             return 0;
         }
+        if SHARED_MODE.load(Ordering::Acquire) {
+            let mut guard = SHARED
+                .get()
+                .expect("SHARED_MODE set without SHARED state")
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            return close_locked(&mut guard, fd);
+        }
         SIM.try_with(|cell| close_locked(&mut cell.borrow_mut(), fd)).unwrap_or(0)
     }
 }

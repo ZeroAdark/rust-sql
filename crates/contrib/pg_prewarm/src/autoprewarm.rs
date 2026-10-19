@@ -104,9 +104,19 @@ fn apw_init_state() -> AutoPrewarmSharedState {
 /// apw_init_shmem (autoprewarm.c:888): create-or-attach; true if the
 /// segment already existed.
 fn apw_init_shmem() -> bool {
+    // The registry's found bit is the C one: a crash restart clears the
+    // registry (DSMRegistryShmemResetAfterCrash), so the next leader starts
+    // from apw_init_state rather than the dead leader's PID.
+    let (_, found) = dsm_registry::GetNamedDSMSegment("autoprewarm", APW_SEGMENT_SIZE, None)
+        .unwrap_or_else(|e| std::panic::panic_any(e));
+    apw_attach_state(found)
+}
+
+const APW_SEGMENT_SIZE: usize = 48;
+
+fn apw_attach_state(found: bool) -> bool {
     let mut guard = pgsync::lock(&APW_STATE);
-    let found = guard.is_some();
-    if !found {
+    if !found || guard.is_none() {
         *guard = Some(apw_init_state());
     }
     found
@@ -416,67 +426,72 @@ fn apw_load_buffers() -> PgResult<()> {
     });
 
     // Get the info position of the first block of the next database.
-    loop {
-        let start = with_state(|s| s.prewarm_start_idx);
-        if start >= num_elements {
-            break;
-        }
-        let mut j = start;
-        let mut current_db = blkinfo[j].database;
-
-        // Advance the prewarm_stop_idx to the first BlockInfoRecord that does
-        // not belong to this database.
-        j += 1;
-        while j < num_elements {
-            if current_db != blkinfo[j].database {
-                // Combine BlockInfoRecords for global objects with those of
-                // the database.
-                if current_db != InvalidOid {
-                    break;
-                }
-                current_db = blkinfo[j].database;
+    let launched = (|| -> PgResult<()> {
+        loop {
+            let start = with_state(|s| s.prewarm_start_idx);
+            if start >= num_elements {
+                break;
             }
+            let mut j = start;
+            let mut current_db = blkinfo[j].database;
+
+            // Advance the prewarm_stop_idx to the first BlockInfoRecord that does
+            // not belong to this database.
             j += 1;
+            while j < num_elements {
+                if current_db != blkinfo[j].database {
+                    // Combine BlockInfoRecords for global objects with those of
+                    // the database.
+                    if current_db != InvalidOid {
+                        break;
+                    }
+                    current_db = blkinfo[j].database;
+                }
+                j += 1;
+            }
+
+            // If we reach this point with current_db == InvalidOid, then only
+            // BlockInfoRecords belonging to global objects exist.  We can't
+            // prewarm without a database connection, so just bail out.
+            if current_db == InvalidOid {
+                break;
+            }
+
+            // Configure stop point and database for next per-database worker.
+            with_state(|s| {
+                s.prewarm_stop_idx = j;
+                s.database = current_db;
+            });
+            debug_assert!(start < j);
+
+            // If we've run out of free buffers, don't launch another worker.
+            if !bufmgr::have_free_buffer() {
+                break;
+            }
+
+            // Likewise, don't launch if we've already been told to shut down.
+            if interrupt::ShutdownRequestPending() {
+                break;
+            }
+
+            // Start a per-database worker to load blocks for this database; this
+            // function will return once the per-database worker exits.
+            apw_start_database_worker()?;
+
+            // Prepare for next database.
+            with_state(|s| s.prewarm_start_idx = s.prewarm_stop_idx);
         }
+        Ok(())
+    })();
 
-        // If we reach this point with current_db == InvalidOid, then only
-        // BlockInfoRecords belonging to global objects exist.  We can't
-        // prewarm without a database connection, so just bail out.
-        if current_db == InvalidOid {
-            break;
-        }
-
-        // Configure stop point and database for next per-database worker.
-        with_state(|s| {
-            s.prewarm_stop_idx = j;
-            s.database = current_db;
-        });
-        debug_assert!(start < j);
-
-        // If we've run out of free buffers, don't launch another worker.
-        if !bufmgr::have_free_buffer() {
-            break;
-        }
-
-        // Likewise, don't launch if we've already been told to shut down.
-        if interrupt::ShutdownRequestPending() {
-            break;
-        }
-
-        // Start a per-database worker to load blocks for this database; this
-        // function will return once the per-database worker exits.
-        apw_start_database_worker()?;
-
-        // Prepare for next database.
-        with_state(|s| s.prewarm_start_idx = s.prewarm_stop_idx);
-    }
-
-    // Clean up.
+    // Clean up. On error the record segment goes with the worker too
+    // (dsm_backend_shutdown, dsm.c:757).
     let prewarmed_blocks = with_state(|s| {
         s.block_info = None;
         s.pid_using_dumpfile = INVALID_PID;
         s.prewarmed_blocks
     });
+    launched?;
 
     // Report our success, if we were able to finish.
     if !interrupt::ShutdownRequestPending() {
@@ -910,15 +925,17 @@ mod tests {
         assert_eq!(neg.record().unwrap().forknum, -1);
     }
 
-    // apw_init_shmem: first caller creates the state (found = false), every
-    // later caller attaches (found = true); the initial PIDs are InvalidPid.
+    // apw_init_shmem: the registry's found bit drives the state — a fresh
+    // segment (first boot, or the registry cleared by a crash restart) starts
+    // from apw_init_state; an attach keeps the live PIDs.
     #[test]
     fn init_shmem_reports_found() {
-        let first = apw_init_shmem();
-        let second = apw_init_shmem();
-        assert!(second, "second apw_init_shmem must find the existing state");
-        if !first {
-            assert_eq!(with_state(|s| (s.bgworker_pid, s.pid_using_dumpfile)), (INVALID_PID, INVALID_PID));
-        }
+        assert!(!apw_attach_state(false));
+        assert_eq!(with_state(|s| (s.bgworker_pid, s.pid_using_dumpfile)), (INVALID_PID, INVALID_PID));
+        with_state(|s| s.bgworker_pid = 4242);
+        assert!(apw_attach_state(true), "an existing segment attaches");
+        assert_eq!(with_state(|s| s.bgworker_pid), 4242);
+        assert!(!apw_attach_state(false), "crash restart: the registry no longer knows the segment");
+        assert_eq!(with_state(|s| (s.bgworker_pid, s.pid_using_dumpfile)), (INVALID_PID, INVALID_PID));
     }
 }

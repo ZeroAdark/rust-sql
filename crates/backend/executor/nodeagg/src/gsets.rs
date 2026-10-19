@@ -133,6 +133,11 @@ pub(crate) struct GroupingSetsState<'mcx> {
     pub(crate) first_slot: SlotData<'mcx>,
     first_stored: bool,
     pending_slot: SlotData<'mcx>,
+    // Owner of first_slot/pending_slot's tuple copies: an AllocSet so the
+    // slot replacement at each group boundary frees the previous group's
+    // image (C heap_freetuple through the slot; the query arena's bump
+    // deallocate is a no-op and would retain every group's tuple).
+    slot_mcx: Mcx<'mcx>,
     have_pending: bool,
     sort_in: Option<Tuplesort>,
     sort_out: Option<Tuplesort>,
@@ -170,6 +175,7 @@ pub(crate) fn init_grouping_sets<'mcx>(
     fm_agg_node: FmNodePtr,
     params: ParamBind<'mcx>,
     tmpcontext: ::executils::EcxtId,
+    explain_only: bool,
 ) -> PgResult<PgBox<'mcx, GroupingSetsState<'mcx>>> {
     let mcx = estate.es_query_cxt;
     let numnodes = 1 + node.chain.len();
@@ -241,6 +247,7 @@ pub(crate) fn init_grouping_sets<'mcx>(
             specs,
             fm_agg_node,
             params,
+            explain_only,
         )?)
     };
     let hash_cells: Vec<NonNull<NonNull<AggPerGroup>>> = hash
@@ -395,6 +402,8 @@ pub(crate) fn init_grouping_sets<'mcx>(
         exectuples::make_tuple_table_slot(mcx, TupleSlotKind::MinimalTuple, Some(scan_desc.clone()));
     let sort_slot =
         exectuples::make_tuple_table_slot(mcx, TupleSlotKind::MinimalTuple, Some(scan_desc));
+    let slot_mcx =
+        crate::make_owned_context(mcx, mcx.context().new_child("Agg Grouping Sets Group Slots"))?;
     let sort_desc = if numphases > 1 {
         Some(outer_desc_static.unwrap_or_else(|| {
             panic!("ExecInitAgg (nodeAgg.c): chained grouping sets need the outer result type")
@@ -419,6 +428,7 @@ pub(crate) fn init_grouping_sets<'mcx>(
             first_slot,
             first_stored: false,
             pending_slot,
+            slot_mcx,
             have_pending: false,
             sort_in: None,
             sort_out: None,
@@ -468,6 +478,7 @@ fn init_hash_sets<'mcx>(
     specs: &[AggTransSpec<'_, 'mcx>],
     fm_agg_node: FmNodePtr,
     params: ParamBind<'mcx>,
+    explain_only: bool,
 ) -> PgResult<HashSetsState<'mcx>> {
     let mcx = estate.es_query_cxt;
     let outer_plan = node
@@ -546,11 +557,13 @@ fn init_hash_sets<'mcx>(
 
         let (eqfuncoids, hashfunctions) =
             ::execgrouping::exec_tuples_hash_prepare(mcx, aggnode.grpOperators)?;
-        let nbuckets = crate::hash_choose_num_buckets(
-            hashentrysize,
-            aggnode.numGroups,
-            mem_limit / num_hashes,
-        );
+        // ExecInitAgg (nodeAgg.c:3721): EXPLAIN never fills the table, so
+        // skip its (numGroups-sized) allocation.
+        let nbuckets = if explain_only {
+            1
+        } else {
+            crate::hash_choose_num_buckets(hashentrysize, aggnode.numGroups, mem_limit / num_hashes)
+        };
         let mut key_col_idx: PgVec<'mcx, i16> = vec_with_capacity_in(mcx, num_cols)?;
         for i in 0..num_cols {
             key_col_idx.push((i + 1) as i16);
@@ -1004,6 +1017,8 @@ fn agg_refill_hash_table_gs<'mcx>(
 
     let setno = batch.setno;
     loop {
+        // agg_refill_hash_table (nodeAgg.c:2754): loop-top CHECK_FOR_INTERRUPTS.
+        crate::check_for_interrupts()?;
         let advance = {
             let AggStateData { gsets, trans_init, trans_typ, agg_node, .. } = node;
             let gs = &mut **gsets.as_mut().unwrap();
@@ -1385,7 +1400,7 @@ fn prepare_projection_slot<'mcx>(
             .write(GroupedColsCell { ptr: grouped.as_ptr(), len: grouped.len() })
     };
     if !gs.first_stored {
-        exectuples::exec_store_all_null_tuple(&mut gs.first_slot, mcx);
+        exectuples::exec_store_all_null_tuple(&mut gs.first_slot, gs.slot_mcx);
         return;
     }
     if let Some(&max_col) = gs.all_grouped_cols_desc.first() {
@@ -1652,12 +1667,13 @@ fn copy_into_first<'mcx>(
         Fetched::Outer(id) => {
             let slot = estate.slot_mut(id);
             let gs = node.gsets.as_mut().unwrap();
-            exectuples::exec_copy_slot(&mut gs.first_slot, slot, mcx, mcx)?;
+            let slot_mcx = gs.slot_mcx;
+            exectuples::exec_copy_slot(&mut gs.first_slot, slot, slot_mcx, mcx)?;
         }
         Fetched::Sorted => {
             let gs = node.gsets.as_mut().unwrap();
-            let GroupingSetsState { first_slot, sort_slot, .. } = &mut **gs;
-            exectuples::exec_copy_slot(first_slot, sort_slot, mcx, mcx)?;
+            let GroupingSetsState { first_slot, sort_slot, slot_mcx, .. } = &mut **gs;
+            exectuples::exec_copy_slot(first_slot, sort_slot, *slot_mcx, mcx)?;
         }
     }
     node.gsets.as_mut().unwrap().first_stored = true;
@@ -1743,8 +1759,8 @@ where
                             outer: Some(&mut *outer_slot),
                         };
                         if !exec_qual(Some(eq), &mut slots)? {
-                            let GroupingSetsState { pending_slot, .. } = &mut **gs;
-                            exectuples::exec_copy_slot(pending_slot, outer_slot, mcx, mcx)?;
+                            let GroupingSetsState { pending_slot, slot_mcx, .. } = &mut **gs;
+                            exectuples::exec_copy_slot(pending_slot, outer_slot, *slot_mcx, mcx)?;
                             gs.have_pending = true;
                             return Ok(());
                         }
@@ -1756,6 +1772,7 @@ where
                             first_slot,
                             pending_slot,
                             sort_slot,
+                            slot_mcx,
                             current_phase,
                             ..
                         } = &mut **gs;
@@ -1768,7 +1785,7 @@ where
                             outer: Some(&mut *sort_slot),
                         };
                         if !exec_qual(Some(eq), &mut slots)? {
-                            exectuples::exec_copy_slot(pending_slot, sort_slot, mcx, mcx)?;
+                            exectuples::exec_copy_slot(pending_slot, sort_slot, *slot_mcx, mcx)?;
                             gs.have_pending = true;
                             return Ok(());
                         }

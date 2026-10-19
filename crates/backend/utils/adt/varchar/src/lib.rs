@@ -229,7 +229,7 @@ fn array_get_integer_typmods<'mcx>(mcx: Mcx<'mcx>, arr: &[u8]) -> PgResult<PgVec
             ERRCODE_ARRAY_SUBSCRIPT_ERROR,
         ));
     }
-    if arrayfuncs::array_contains_nulls(arr) {
+    if arrayfuncs::array_contains_nulls(arr)? {
         return Err(typmod_array_err(
             "typmod array must not contain nulls",
             ERRCODE_NULL_VALUE_NOT_ALLOWED,

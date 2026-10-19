@@ -93,7 +93,9 @@ pub fn dense_int_entrylen(ctx: &SqeCtx, node: &PlanNode) -> AnswerSet {
                             let mut lens = vec![0u32; n];
                             for ci in 0..n {
                                 lens[ci] = if charmode {
-                                    dh.lengths(ci as u32).expect("char_len").1
+                                    // index char_len is bytes under the BytesOnly cut
+                                    let e = dh.entry(ci as u32).expect("entry");
+                                    super::utf8_chars(e.bytes) as u32
                                 } else {
                                     dh.byte_len_only(ci as u32).expect("byte_len")
                                 };

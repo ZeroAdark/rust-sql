@@ -98,9 +98,21 @@ fn install_proc_fixture() {
     snapmgr::init_seams();
 }
 
+thread_local! {
+    static FAIL_EXECUTOR_END: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn failing_executor_end_tap(_h: ::types_portal::QueryDescHandle) -> types_error::PgResult<()> {
+    if FAIL_EXECUTOR_END.with(|f| f.get()) {
+        return Err(Box::new(types_error::PgError::error("executor_end failed")));
+    }
+    Ok(())
+}
+
 fn install_fixtures() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
+        execmain::tap_executor_end::install(failing_executor_end_tap);
         std::env::set_var("PGRUST_TZDIR", "/usr/share/zoneinfo");
         // Fake global-vis BEFORE procarray::init_seams (its set is guarded;
         // scanfix's controllable fake must win).
@@ -311,6 +323,35 @@ fn pos(name: &str) -> (bool, bool, u64) {
     (p.atStart, p.atEnd, p.portalPos)
 }
 
+// A shutdown error inside PortalCleanup (portalcmds.c:297 clears queryDesc
+// first; abort cleanup reclaims the QueryDesc) must not orphan the registry
+// entry.
+#[test]
+fn executor_end_failure_releases_the_query_desc_entry() {
+    install_fixtures();
+    let mcx = leaked_mcx();
+    push_snapshot();
+
+    let before = execmain::registry_len();
+    let cstmt = mk_declare(mcx, "c_endfail", 0);
+    PerformCursorOpen(
+        mcx,
+        cstmt,
+        "DECLARE c_endfail CURSOR FOR SELECT 1",
+        ParamListHandle::NULL,
+        false,
+    )
+    .unwrap();
+    snapmgr::PopActiveSnapshot().unwrap();
+    assert_eq!(execmain::registry_len(), before + 1);
+
+    FAIL_EXECUTOR_END.with(|f| f.set(true));
+    let err = PerformPortalClose(Some("c_endfail")).unwrap_err();
+    FAIL_EXECUTOR_END.with(|f| f.set(false));
+    assert_eq!(err.message(), "executor_end failed");
+    assert_eq!(execmain::registry_len(), before);
+}
+
 // DECLARE (real rewriter + committed planner) → FETCH → CLOSE over SELECT 1;
 // the one-row Result plan takes the auto-NO_SCROLL leg of the heuristic.
 #[test]
@@ -337,7 +378,7 @@ fn declare_fetch_close_select1_e2e() {
         let p = portal.borrow();
         assert_eq!(p.strategy, PORTAL_ONE_SELECT);
         assert_ne!(p.cursorOptions & CURSOR_OPT_NO_SCROLL, 0, "Result plan can't back up");
-        assert_eq!(p.sourceText.as_ref().unwrap().as_str(), "DECLARE c1 CURSOR FOR SELECT 1");
+        assert_eq!(p.sourceText.unwrap(), "DECLARE c1 CURSOR FOR SELECT 1");
     }
     drop(portal);
 

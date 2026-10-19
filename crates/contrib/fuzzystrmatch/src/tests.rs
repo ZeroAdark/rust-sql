@@ -166,3 +166,12 @@ fn ctype_follows_libc_locale() {
     assert!(c_isalpha(b'z'));
     assert_eq!(sx("\u{e9}"), "");
 }
+
+// dmetaphone.c:249 NewMetaString palloc(length + 7): the largest input that
+// still fits MaxAllocSize is 1073741816 bytes.
+#[test]
+fn dmetaphone_input_length_hits_max_alloc_size() {
+    assert!(dmetaphone_alloc_guard(1073741816).is_ok());
+    let err = dmetaphone_alloc_guard(1073741817).unwrap_err();
+    assert_eq!(err.message(), "invalid memory alloc request size 1073741824");
+}

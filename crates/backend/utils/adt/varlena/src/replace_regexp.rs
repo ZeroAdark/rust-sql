@@ -110,6 +110,12 @@ fn regexp_failed(message: &str) -> PgError {
         .with_sqlstate(ERRCODE_INVALID_REGULAR_EXPRESSION)
 }
 
+// varlena.c:4485: palloc((src_text_len + 1) * sizeof(pg_wchar)) precedes the
+// engine dispatch, so its MaxAllocSize check does too.
+pub(crate) fn wchar_buffer_check(src_text_len: usize) -> PgResult<()> {
+    ::mcx::check_alloc_size((src_text_len + 1) * core::mem::size_of::<u32>())
+}
+
 // C: replace_text_regexp — n == 0 replaces all matches, n > 0 only the N'th.
 // search_start is a character offset. Payload in, payload out.
 #[allow(clippy::too_many_arguments)]
@@ -123,12 +129,21 @@ pub fn replace_text_regexp<'mcx>(
     mut search_start: i32,
     n: i32,
 ) -> PgResult<PgVec<'mcx, u8>> {
-    regex_core_seams::pg_set_regex_collation::call(mcx, collation)?;
+    wchar_buffer_check(src_text.len())?;
     // regex_engine dispatch: RE2-compatible patterns take the byte-offset
     // RE2 path; everything else (and regex_engine=spencer) falls through to
     // the untouched C-parity Spencer path below. A whole-match-only pattern
-    // may still ride RE2 when the replacement never consumes \1..\9.
-    if let Some(re) = regexp_alt::dispatch(pattern_text, cflags, src_text)? {
+    // may still ride RE2 when the replacement never consumes \1..\9. Invalid
+    // cflags skip it: pg_regcomp rejects them before the collation lookup.
+    let cflags_ok = ::regex::cflags_valid(cflags);
+    if cflags_ok {
+        regex_core_seams::pg_set_regex_collation::call(mcx, collation)?;
+    }
+    if let Some(re) = if cflags_ok {
+        regexp_alt::dispatch(pattern_text, cflags, src_text)?
+    } else {
+        None
+    } {
         if re.capture_safe() || regexp_alt::check_replace_text_has_escape(replace_text) < 2 {
             return regexp_alt::replace_text_regexp_re2(
                 mcx,

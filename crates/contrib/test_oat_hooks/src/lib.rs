@@ -22,9 +22,10 @@
 //! with `parse_bool` on every read: a non-boolean SET is accepted (and reads
 //! as false) where C would refuse it, and SHOW echoes the SET spelling.
 //!
-//! Hook installation is per backend (`LOAD` / session_preload_libraries), as
-//! the objectaccess slots are per thread; a postmaster-side
-//! shared_preload_libraries load does not reach the backends' slots.
+//! The objectaccess slots are per thread: a postmaster-side
+//! shared_preload_libraries load reaches every backend through
+//! launch_backend's inherited snapshot (objectaccess.c's process globals
+//! after fork); `LOAD` / session_preload_libraries install per backend.
 
 #![allow(non_snake_case)]
 

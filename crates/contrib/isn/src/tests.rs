@@ -127,6 +127,21 @@ fn invalid_syntax_errors() {
     );
 }
 
+// SQL_ASCII input bytes reach the message unchanged (isn.c:901 %s).
+#[test]
+fn invalid_syntax_error_keeps_raw_input_bytes() {
+    let err = string2ean(b"a\xff", None, IsnType::Ean13, false).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"invalid input syntax for EAN13 number: \"a\xff\"".as_slice())
+    );
+    let err = string2ean(b"\xe9", None, IsnType::Isbn, false).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"invalid input syntax for ISBN number: \"\xe9\"".as_slice())
+    );
+}
+
 #[test]
 fn weak_mode_marks_invalid() {
     // Fails strong.

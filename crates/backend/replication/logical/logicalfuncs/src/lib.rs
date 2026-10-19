@@ -181,7 +181,7 @@ fn pg_logical_slot_get_changes_guts(
             .errmsg("array must be one-dimensional")
             .finish(loc("pg_logical_slot_get_changes_guts"))?;
         unreachable!();
-    } else if arrayfuncs::array_contains_nulls(&arr_img) {
+    } else if arrayfuncs::array_contains_nulls(&arr_img)? {
         ereport(ERROR)
             .errcode(ERRCODE_FEATURE_NOT_SUPPORTED)
             .errmsg("array must not contain nulls")

@@ -17,7 +17,7 @@ use types_core::{
 };
 use types_error::{
     PgError, PgResult, ERRCODE_DUPLICATE_OBJECT, ERRCODE_INVALID_COLUMN_REFERENCE,
-    ERRCODE_INVALID_PARAMETER_VALUE, ERRCODE_UNDEFINED_COLUMN,
+    ERRCODE_INVALID_PARAMETER_VALUE, ERRCODE_UNDEFINED_COLUMN, ERRCODE_UNDEFINED_OBJECT,
 };
 use types_fmgr::{byref_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo, PGFunction};
 use types_nodes::bitmapset::Bitmapset;
@@ -149,6 +149,15 @@ fn detoast_datum<'mcx>(mcx: Mcx<'mcx>, d: Datum) -> PgResult<PgVec<'mcx, u8>> {
     // SAFETY: a live varlena readable through its full VARSIZE_ANY.
     let raw = unsafe { core::slice::from_raw_parts(p, types_tuple::varatt::varsize_any(p)) };
     detoast::detoast_attr(mcx, raw)
+}
+
+// The catcache only flattens external pointers (catcache.c:2175), so the
+// value pg_get_publication_tables copies into its result stays compressed.
+fn syscache_attr_image<'mcx>(mcx: Mcx<'mcx>, d: Datum) -> PgResult<PgVec<'mcx, u8>> {
+    let p = d.as_usize() as *const u8;
+    // SAFETY: a live varlena readable through its full VARSIZE_ANY.
+    let raw = unsafe { core::slice::from_raw_parts(p, types_tuple::varatt::varsize_any(p)) };
+    detoast::detoast_external_attr(mcx, raw)
 }
 
 fn varlena_payload(image: &[u8]) -> &[u8] {
@@ -675,11 +684,11 @@ pub fn GetPublicationRelations<'mcx>(
         relids.push(d.as_oid());
     }
     genam::systable_endscan(mcx, scan)?;
-    pubrelsrel.close(AccessShareLock)?;
 
     for &relid in relids.iter() {
         GetPubPartitionOptionRelations(mcx, &mut result, pub_partopt, relid)?;
     }
+    pubrelsrel.close(AccessShareLock)?;
     result.sort_unstable();
     result.dedup();
     Ok(result)
@@ -973,8 +982,14 @@ fn collect_publication_tables(fcinfo: &Fcinfo) -> PgResult<PubTablesRows> {
     let mut viaroot = false;
     for &elem in elems.iter() {
         let name_img = detoast_datum(mcx, elem)?;
-        let pubname =
-            core::str::from_utf8(varlena_payload(&name_img)).expect("publication name is UTF-8");
+        let Ok(pubname) = core::str::from_utf8(varlena_payload(&name_img)) else {
+            let mut m = b"publication \"".to_vec();
+            m.extend_from_slice(varlena_payload(&name_img));
+            m.extend_from_slice(b"\" does not exist");
+            return Err(Box::new(
+                PgError::error_raw_message(m).with_sqlstate(ERRCODE_UNDEFINED_OBJECT),
+            ));
+        };
         let pub_elem =
             GetPublicationByName(mcx, pubname, false)?.expect("missing_ok=false yields an error");
 
@@ -1059,12 +1074,12 @@ fn publication_table_row<'mcx>(
                 let (d, isnull) =
                     SysCacheGetAttr(PUBLICATIONRELMAP, &pubtuple, Anum_pg_publication_rel_prattrs)?;
                 if !isnull {
-                    attrs_img = Some(detoast_datum(mcx, d)?);
+                    attrs_img = Some(syscache_attr_image(mcx, d)?);
                 }
                 let (d, isnull) =
                     SysCacheGetAttr(PUBLICATIONRELMAP, &pubtuple, Anum_pg_publication_rel_prqual)?;
                 if !isnull {
-                    qual_img = Some(detoast_datum(mcx, d)?);
+                    qual_img = Some(syscache_attr_image(mcx, d)?);
                 }
                 ReleaseSysCache(pubtuple);
             }

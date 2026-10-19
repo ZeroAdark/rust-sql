@@ -632,9 +632,12 @@ pub fn DefineIndex<'mcx>(
     };
 
     let indexColNames = ChooseIndexColumnNames(mcx, &allIndexParams)?;
+    // Bytes, as C's char*: a generated name is byte-clipped at NAMEDATALEN
+    // (makeObjectName) and, in a SQL_ASCII database, may end inside a
+    // multibyte character; the catalog stores it verbatim.
     let name_storage;
-    let indexRelationName: &str = match stmt.idxname {
-        Some(n) => n,
+    let indexRelationName: &[u8] = match stmt.idxname {
+        Some(n) => n.as_bytes(),
         None => {
             name_storage = if stmt.primary {
                 ChooseRelationName(mcx, rel.name(), None, "pkey", namespaceId, true)?
@@ -643,11 +646,11 @@ pub fn DefineIndex<'mcx>(
                 // C ChooseIndexName (indexcmds.c:2709-2720): "excl" only for
                 // an EXCLUDE list; UNIQUE ... WITHOUT OVERLAPS is "key".
                 let suffix = if !stmt.excludeOpNames.is_nil() { "excl" } else { "key" };
-                ChooseRelationName(mcx, rel.name(), Some(addition.as_str()), suffix, namespaceId, true)?
+                ChooseRelationName(mcx, rel.name(), Some(&addition[..]), suffix, namespaceId, true)?
             } else {
                 ChooseIndexName(mcx, rel.name(), namespaceId, &indexColNames)?
             };
-            name_storage.as_str()
+            &name_storage[..]
         }
     };
 
@@ -988,9 +991,9 @@ pub fn DefineIndex<'mcx>(
         }
     }
 
-    let mut colname_refs: PgVec<'_, &str> = PgVec::new_in(mcx);
+    let mut colname_refs: PgVec<'_, &[u8]> = PgVec::new_in(mcx);
     for n in indexColNames.iter() {
-        colname_refs.push(n.as_str());
+        colname_refs.push(&n[..]);
     }
 
     let safe_index =
@@ -1015,7 +1018,7 @@ pub fn DefineIndex<'mcx>(
                     "{} {} will create implicit index \"{}\" for table \"{}\"",
                     if is_alter_table { "ALTER TABLE / ADD" } else { "CREATE TABLE /" },
                     constraint_type,
-                    indexRelationName,
+                    String::from_utf8_lossy(indexRelationName),
                     rel.name()
                 ),
             )
@@ -1780,13 +1783,10 @@ fn ComputeIndexAttrs<'mcx>(
 
         opclassIds[attn] = as_ddl_user(&mut ddl, || {
             if !attribute.opclass.is_nil() {
-                ResolveOpClass(&attribute.opclass, atttype, amname, accessMethodId)
-            } else {
-                GetDefaultOpClass(atttype, accessMethodId)
+                return ResolveOpClass(&attribute.opclass, atttype, amname, accessMethodId);
             }
-        })?;
-        if attribute.opclass.is_nil() {
-            if opclassIds[attn] == InvalidOid {
+            let opclass = GetDefaultOpClass(atttype, accessMethodId)?;
+            if opclass == InvalidOid {
                 return Err(Box::new(
                     (*err(
                         format!(
@@ -1801,7 +1801,8 @@ fn ComputeIndexAttrs<'mcx>(
                     ),
                 ));
             }
-        }
+            Ok(opclass)
+        })?;
 
         if let Some(opnode) = excl_iter.next() {
             let opname = opnode.as_list().expect("exclusion op name list");
@@ -1946,31 +1947,28 @@ fn ChooseIndexName<'mcx>(
     mcx: Mcx<'mcx>,
     tabname: &str,
     namespaceId: Oid,
-    colnames: &[PgString<'mcx>],
-) -> PgResult<PgString<'mcx>> {
+    colnames: &[PgVec<'mcx, u8>],
+) -> PgResult<PgVec<'mcx, u8>> {
     let addition = ChooseIndexNameAddition(mcx, colnames)?;
-    ChooseRelationName(mcx, tabname, Some(addition.as_str()), "idx", namespaceId, false)
+    ChooseRelationName(mcx, tabname, Some(&addition[..]), "idx", namespaceId, false)
 }
 
+// ChooseIndexNameAddition (indexcmds.c:2745): joins the column names with
+// '_', each strlcpy'd at NAMEDATALEN-1 BYTES (paranoia: the inputs are
+// already shorter), and stops once the addition reaches NAMEDATALEN;
+// make_object_name truncates the final name. Bytes throughout: a column
+// name from ChooseIndexColumnNames may already be byte-clipped.
 fn ChooseIndexNameAddition<'mcx>(
     mcx: Mcx<'mcx>,
-    colnames: &[PgString<'mcx>],
-) -> PgResult<PgString<'mcx>> {
-    let mut buf = PgString::new_in(mcx);
+    colnames: &[PgVec<'mcx, u8>],
+) -> PgResult<PgVec<'mcx, u8>> {
+    let mut buf: PgVec<'mcx, u8> = PgVec::new_in(mcx);
     for name in colnames {
         if !buf.is_empty() {
-            buf.try_push_str("_")?;
+            mcx::vec_append_bytes(&mut buf, b"_")?;
         }
-        // C strlcpy's each name capped at NAMEDATALEN-1 bytes (paranoia: the
-        // inputs are already shorter) and stops appending once the addition
-        // reaches NAMEDATALEN; make_object_name truncates the final name.
-        // Rust rendering of the cap backs off to a char boundary.
-        let name = name.as_str();
-        let mut cap = (NAMEDATALEN as usize - 1).min(name.len());
-        while !name.is_char_boundary(cap) {
-            cap -= 1;
-        }
-        buf.try_push_str(&name[..cap])?;
+        let cap = (NAMEDATALEN as usize - 1).min(name.len());
+        mcx::vec_append_bytes(&mut buf, &name[..cap])?;
         if buf.len() >= NAMEDATALEN as usize {
             break;
         }
@@ -1978,20 +1976,24 @@ fn ChooseIndexNameAddition<'mcx>(
     Ok(buf)
 }
 
+// ChooseIndexColumnNames (indexcmds.c:2778): duplicate column names get a
+// numeric suffix; the original is pg_mbcliplen'd (BYTES under SQL_ASCII,
+// possibly mid-character) so name+numeral stays under NAMEDATALEN.
 fn ChooseIndexColumnNames<'mcx>(
     mcx: Mcx<'mcx>,
     indexElems: &types_nodes::NodeList<'mcx>,
-) -> PgResult<PgVec<'mcx, PgString<'mcx>>> {
-    let mut result: PgVec<'mcx, PgString<'mcx>> = PgVec::new_in(mcx);
+) -> PgResult<PgVec<'mcx, PgVec<'mcx, u8>>> {
+    let mut result: PgVec<'mcx, PgVec<'mcx, u8>> = PgVec::new_in(mcx);
     for node in indexElems.iter() {
         let ielem = node.as_variant::<IndexElem>().expect("IndexElem");
         let origname = ielem
             .indexcolname
             .or(ielem.name)
             .unwrap_or("expr");
-        let mut curname = PgString::from_str_in(origname, mcx)?;
+        let mut curname: PgVec<'mcx, u8> = PgVec::new_in(mcx);
+        mcx::vec_append_bytes(&mut curname, origname.as_bytes())?;
         let mut i = 1;
-        while result.iter().any(|n| n.as_str() == curname.as_str()) {
+        while result.iter().any(|n| n[..] == curname[..]) {
             let nbuf = i.to_string();
             // Ensure generated names are shorter than NAMEDATALEN
             // (pg_mbcliplen over the original name, then the numeral).
@@ -2000,8 +2002,9 @@ fn ChooseIndexColumnNames<'mcx>(
                 origname.len() as i32,
                 (NAMEDATALEN as usize - 1 - nbuf.len()) as i32,
             ) as usize;
-            curname = PgString::from_str_in(&origname[..nlen], mcx)?;
-            curname.try_push_str(&nbuf)?;
+            curname.clear();
+            mcx::vec_append_bytes(&mut curname, &origname.as_bytes()[..nlen])?;
+            mcx::vec_append_bytes(&mut curname, nbuf.as_bytes())?;
             i += 1;
         }
         result.push(curname);
@@ -2022,11 +2025,11 @@ fn ChooseIndexColumnNames<'mcx>(
 pub(crate) fn ChooseRelationName<'mcx>(
     mcx: Mcx<'mcx>,
     name1: &str,
-    name2: Option<&str>,
+    name2: Option<&[u8]>,
     label: &str,
     namespaceid: Oid,
     isconstraint: bool,
-) -> PgResult<PgString<'mcx>> {
+) -> PgResult<PgVec<'mcx, u8>> {
     let pgclassrel = table::table_open(mcx, RELATION_RELATION_ID, types_rel::AccessShareLock)?;
     // indexcmds.c:2617 InitDirtySnapshot, held across the whole retry loop as
     // C's stack SnapshotDirty is.
@@ -2037,8 +2040,9 @@ pub(crate) fn ChooseRelationName<'mcx>(
     let mut pass = 0;
     let mut modlabel = PgString::from_str_in(label, mcx)?;
     let relname = loop {
-        let relname = make_object_name(mcx, name1, name2, modlabel.as_str())?;
-        let cname = name_arg(mcx, relname.as_str())?;
+        let relname =
+            pg_constraint::make_object_name(mcx, name1.as_bytes(), name2, modlabel.as_str())?;
+        let cname = name_arg(mcx, &relname[..])?;
         let keys = [
             eq_key(Anum_pg_class_relname, F_NAMEEQ, Datum::from_usize(cname.as_ptr() as usize)),
             eq_key(Anum_pg_class_relnamespace, F_OIDEQ, Datum::from_oid(namespaceid)),
@@ -2054,7 +2058,7 @@ pub(crate) fn ChooseRelationName<'mcx>(
         let mut collides = genam::systable_getnext(mcx, &mut scan)?.is_some();
         genam::systable_endscan(mcx, scan)?;
         if !collides && isconstraint {
-            collides = constraint_name_exists(mcx, relname.as_str(), namespaceid)?;
+            collides = constraint_name_exists(mcx, &relname[..], namespaceid)?;
         }
         if !collides {
             break relname;
@@ -2069,7 +2073,7 @@ pub(crate) fn ChooseRelationName<'mcx>(
 }
 
 // ConstraintNameExists (pg_constraint.c).
-fn constraint_name_exists(mcx: Mcx<'_>, name: &str, namespaceid: Oid) -> PgResult<bool> {
+fn constraint_name_exists(mcx: Mcx<'_>, name: &[u8], namespaceid: Oid) -> PgResult<bool> {
     let conrel = table::table_open(
         mcx,
         types_core::CONSTRAINT_RELATION_ID,
@@ -2094,54 +2098,11 @@ fn constraint_name_exists(mcx: Mcx<'_>, name: &str, namespaceid: Oid) -> PgResul
     Ok(found)
 }
 
-// makeObjectName (indexcmds.c:2518-2577): truncate the longer of name1/name2
-// (multibyte-aware) until "name1[_name2]_label" fits in NAMEDATALEN-1 bytes.
-fn make_object_name<'mcx>(
-    mcx: Mcx<'mcx>,
-    name1: &str,
-    name2: Option<&str>,
-    label: &str,
-) -> PgResult<PgString<'mcx>> {
-    let mut overhead = label.len() + 1;
-    if name2.is_some() {
-        overhead += 1;
-    }
-    assert!(NAMEDATALEN as usize - 1 > overhead, "makeObjectName label too long ({label:?})");
-    let availchars = NAMEDATALEN as usize - 1 - overhead;
-    let mut name1chars = name1.len();
-    let mut name2chars = name2.map_or(0, str::len);
-    while name1chars + name2chars > availchars {
-        if name1chars > name2chars {
-            name1chars -= 1;
-        } else {
-            name2chars -= 1;
-        }
-    }
-    name1chars = mbutils_seams::pg_mbcliplen::call(
-        name1.as_bytes(),
-        name1chars as i32,
-        name1chars as i32,
-    ) as usize;
-    let mut s = PgString::from_str_in(&name1[..name1chars], mcx)?;
-    if let Some(n2) = name2 {
-        name2chars = mbutils_seams::pg_mbcliplen::call(
-            n2.as_bytes(),
-            name2chars as i32,
-            name2chars as i32,
-        ) as usize;
-        s.try_push_str("_")?;
-        s.try_push_str(&n2[..name2chars])?;
-    }
-    s.try_push_str("_")?;
-    s.try_push_str(label)?;
-    Ok(s)
-}
-
-fn name_arg<'mcx>(mcx: Mcx<'mcx>, name: &str) -> PgResult<PgVec<'mcx, u8>> {
+fn name_arg<'mcx>(mcx: Mcx<'mcx>, name: &[u8]) -> PgResult<PgVec<'mcx, u8>> {
     let n = NAMEDATALEN as usize;
     assert!(name.len() < n, "makeObjectName truncation unported: {name:?}");
     let mut buf: PgVec<'mcx, u8> = mcx::vec_with_capacity_in(mcx, n)?;
-    mcx::vec_append_bytes(&mut buf, name.as_bytes())?;
+    mcx::vec_append_bytes(&mut buf, name)?;
     mcx::vec_append_bytes(&mut buf, &[0u8; 64][..n - name.len()])?;
     Ok(buf)
 }
@@ -2197,25 +2158,6 @@ mod tests {
         });
     }
 
-    // Re-homed from parse_utilcmd, which carried a second, weaker copy of
-    // makeObjectName (a char-boundary clip closure rather than pg_mbcliplen).
-    // C has one makeObjectName (indexcmds.c:2517); so do we now, and this is it.
-    #[test]
-    fn make_object_name_matches_c() {
-        setup_mbcliplen();
-        let cx = Box::leak(Box::new(::mcx::MemoryContext::new("indexcmds-objname-test")));
-        let mcx = cx.mcx();
-        assert_eq!(
-            super::make_object_name(mcx, "st", Some("id"), "seq").unwrap().as_str(),
-            "st_id_seq"
-        );
-        let long_a = "a".repeat(60);
-        let long_b = "b".repeat(60);
-        let n = super::make_object_name(mcx, &long_a, Some(&long_b), "seq").unwrap();
-        assert_eq!(n.len(), ::types_core::NAMEDATALEN as usize - 1);
-        assert_eq!(n.as_str(), format!("{}_{}_seq", "a".repeat(29), "b".repeat(29)));
-    }
-
     // ChooseIndexNameAddition (indexcmds.c): joins with '_', stops appending
     // once the addition reaches NAMEDATALEN; the final name truncation is
     // make_object_name's job. Long-name CREATE INDEX no longer panics.
@@ -2223,23 +2165,21 @@ mod tests {
     fn choose_index_name_addition_stops_at_namedatalen() {
         let cx = Box::leak(Box::new(::mcx::MemoryContext::new("indexcmds-addition-test")));
         let mcx = cx.mcx();
-        let short = [
-            ::mcx::PgString::from_str_in("a", mcx).unwrap(),
-            ::mcx::PgString::from_str_in("b", mcx).unwrap(),
-        ];
-        assert_eq!(super::ChooseIndexNameAddition(mcx, &short).unwrap().as_str(), "a_b");
+        let bytes = |s: &str| {
+            let mut v: ::mcx::PgVec<'_, u8> = ::mcx::PgVec::new_in(mcx);
+            ::mcx::vec_append_bytes(&mut v, s.as_bytes()).unwrap();
+            v
+        };
+        let short = [bytes("a"), bytes("b")];
+        assert_eq!(&super::ChooseIndexNameAddition(mcx, &short).unwrap()[..], b"a_b");
 
         let long1 = "x".repeat(40);
         let long2 = "y".repeat(40);
         let long3 = "z".repeat(40);
-        let cols = [
-            ::mcx::PgString::from_str_in(&long1, mcx).unwrap(),
-            ::mcx::PgString::from_str_in(&long2, mcx).unwrap(),
-            ::mcx::PgString::from_str_in(&long3, mcx).unwrap(),
-        ];
+        let cols = [bytes(&long1), bytes(&long2), bytes(&long3)];
         let addition = super::ChooseIndexNameAddition(mcx, &cols).unwrap();
         // C appends x*40, then '_' + y*40 (buflen 81 >= NAMEDATALEN) and breaks.
-        assert_eq!(addition.as_str(), format!("{long1}_{long2}"));
+        assert_eq!(&addition[..], format!("{long1}_{long2}").as_bytes());
     }
 
     // ChooseIndexColumnNames (indexcmds.c): duplicate columns get numeric
@@ -2259,10 +2199,33 @@ mod tests {
         }
         let names = super::ChooseIndexColumnNames(mcx, &elems).unwrap();
         assert_eq!(names.len(), 2);
-        assert_eq!(names[0].as_str(), long);
+        assert_eq!(&names[0][..], long.as_bytes());
         // Second: original clipped to NAMEDATALEN-1-1 = 62 bytes, then "1".
-        assert_eq!(names[1].as_str(), format!("{}1", "c".repeat(62)));
+        assert_eq!(&names[1][..], format!("{}1", "c".repeat(62)).as_bytes());
         assert!(names[1].len() < ::types_core::NAMEDATALEN as usize);
+    }
+
+    // regression: under the UTF-8 boundary stub the clip
+    // backs off to the character boundary (a UTF8 database); the SQL_ASCII
+    // byte-clip arm (62 bytes = 61 c's + 0xC3, then "1", as the C oracle
+    // stores it) is pinned in pg_constraint's make_object_name tests and
+    // by scripts/lane-bytes-names-e2e.sh against the running server.
+    #[test]
+    fn choose_index_column_names_backs_off_to_char_boundary_under_utf8() {
+        setup_mbcliplen();
+        let cx = Box::leak(Box::new(::mcx::MemoryContext::new("indexcmds-colnames-mb-test")));
+        let mcx = cx.mcx();
+        let long = format!("{}é", "c".repeat(61));
+        assert_eq!(long.len(), 63);
+        let mut elems = ::types_nodes::NodeList::nil();
+        for _ in 0..2 {
+            let mut e = ::types_nodes::Node::build::<super::IndexElem>(mcx).unwrap();
+            e.name = Some(&*Box::leak(long.clone().into_boxed_str()));
+            elems.lappend(mcx, e.seal()).unwrap();
+        }
+        let names = super::ChooseIndexColumnNames(mcx, &elems).unwrap();
+        assert_eq!(&names[0][..], long.as_bytes());
+        assert_eq!(&names[1][..], format!("{}1", "c".repeat(61)).as_bytes());
     }
 
     // Each AM handler's IndexAmRoutine flags (PG18): amcaninclude true for

@@ -1,0 +1,113 @@
+-- Two-binary differential corpus for the 2026-09-13 bug-inventory batch
+-- batch-278-backend-executor-execmain (C 18.6 oracle vs pgrust): sorted
+-- SetOp over bpchar keys of differing widths (nodeSetOp.c:394 orders with
+-- bpcharcmp) and worker Memoize counters for a Memoize inside an
+-- expression SubPlan under Gather (planstate_tree_walker visits subPlan).
+\set VERBOSITY verbose
+CREATE DATABASE b278e2e TEMPLATE template0 ENCODING 'UTF8';
+\c b278e2e
+\set VERBOSITY verbose
+CREATE ACCESS METHOD pgrcolumnar2 TYPE TABLE HANDLER heap_tableam_handler;
+-- regression: sorted SetOp compares bpchar with trailing blanks removed.
+CREATE TABLE b278_sa(c char(3)) USING pgrcolumnar2;
+CREATE TABLE b278_sb(c char(6)) USING pgrcolumnar2;
+COPY b278_sa FROM STDIN;
+COPY b278_sb FROM STDIN;
+SET enable_hashagg = off;
+SELECT c FROM b278_sa EXCEPT SELECT c FROM b278_sb ORDER BY 1;
+  c  
+-----
+ b  
+(1 row)
+
+SELECT c FROM b278_sa INTERSECT SELECT c FROM b278_sb ORDER BY 1;
+  c  
+-----
+ a  
+ c  
+(2 rows)
+
+SELECT c FROM b278_sa EXCEPT ALL SELECT c FROM b278_sb ORDER BY 1;
+  c  
+-----
+ b  
+(1 row)
+
+SELECT c FROM b278_sa INTERSECT ALL SELECT c FROM b278_sb ORDER BY 1;
+  c  
+-----
+ a  
+ c  
+(2 rows)
+
+RESET enable_hashagg;
+SELECT c FROM b278_sa EXCEPT SELECT c FROM b278_sb ORDER BY 1;
+  c  
+-----
+ b  
+(1 row)
+
+SELECT c FROM b278_sa INTERSECT SELECT c FROM b278_sb ORDER BY 1;
+  c  
+-----
+ a  
+ c  
+(2 rows)
+
+-- regression: Memoize inside a hashed SubPlan run by a worker reports its cache counters.
+CREATE TABLE b278_big AS SELECT i AS k, i % 50 AS y FROM generate_series(1, 200000) i;
+CREATE TABLE b278_mb AS SELECT i % 100 AS x, i % 50 AS y FROM generate_series(1, 2000) i;
+CREATE TABLE b278_mc AS SELECT i AS x FROM generate_series(1, 2000) i;
+CREATE INDEX b278_mc_x_idx ON b278_mc(x);
+VACUUM ANALYZE b278_big; VACUUM ANALYZE b278_mb; VACUUM ANALYZE b278_mc;
+SET parallel_setup_cost = 100; SET parallel_tuple_cost = 0; SET min_parallel_table_scan_size = 0;
+SET max_parallel_workers_per_gather = 2; SET max_parallel_workers = 1; SET parallel_leader_participation = off;
+SET enable_hashjoin = off; SET enable_mergejoin = off;
+EXPLAIN (ANALYZE, VERBOSE, COSTS OFF, TIMING OFF, SUMMARY OFF, BUFFERS OFF)
+SELECT count(*) FROM b278_big WHERE y NOT IN (SELECT mb.y FROM b278_mb mb JOIN b278_mc mc ON mb.x = mc.x WHERE mb.y > 40);
+                                                         QUERY PLAN                                                         
+----------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate (actual rows=1.00 loops=1)
+   Output: count(*)
+   ->  Gather (actual rows=1.00 loops=1)
+         Output: (PARTIAL count(*))
+         Workers Planned: 2
+         Workers Launched: 1
+         ->  Partial Aggregate (actual rows=1.00 loops=1)
+               Output: PARTIAL count(*)
+               Worker 0:  actual rows=1.00 loops=1
+               ->  Parallel Seq Scan on public.b278_big (actual rows=164000.00 loops=1)
+                     Output: b278_big.k, b278_big.y
+                     Filter: (NOT (ANY (b278_big.y = (hashed SubPlan 1).col1)))
+                     Rows Removed by Filter: 36000
+                     Worker 0:  actual rows=164000.00 loops=1
+                     SubPlan 1
+                       ->  Nested Loop (actual rows=360.00 loops=1)
+                             Output: mb.y
+                             Worker 0:  actual rows=360.00 loops=1
+                             ->  Seq Scan on public.b278_mb mb (actual rows=360.00 loops=1)
+                                   Output: mb.x, mb.y
+                                   Filter: (mb.y > 40)
+                                   Rows Removed by Filter: 1640
+                                   Worker 0:  actual rows=360.00 loops=1
+                             ->  Memoize (actual rows=1.00 loops=360)
+                                   Output: mc.x
+                                   Cache Key: mb.x
+                                   Cache Mode: logical
+                                   Worker 0:  actual rows=1.00 loops=360
+                                     Hits: 342  Misses: 18  Evictions: 0  Overflows: 0  Memory Usage: 2kB
+                                   ->  Index Only Scan using b278_mc_x_idx on public.b278_mc mc (actual rows=1.00 loops=18)
+                                         Output: mc.x
+                                         Index Cond: (mc.x = mb.x)
+                                         Heap Fetches: 0
+                                         Index Searches: 18
+                                         Worker 0:  actual rows=1.00 loops=18
+(35 rows)
+
+SELECT count(*) FROM b278_big WHERE y NOT IN (SELECT mb.y FROM b278_mb mb JOIN b278_mc mc ON mb.x = mc.x WHERE mb.y > 40);
+ count  
+--------
+ 164000
+(1 row)
+
+RESET enable_hashjoin; RESET enable_mergejoin;

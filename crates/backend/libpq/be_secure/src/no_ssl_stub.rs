@@ -12,7 +12,7 @@ pub struct TlsOpen {
     pub r: i32,
     pub raw_remaining: usize,
     pub alpn_used: bool,
-    pub peer_cn: Option<String>,
+    pub peer_cn: Option<Vec<u8>>,
     pub peer_dn: Option<String>,
     pub peer_cert_valid: bool,
 }

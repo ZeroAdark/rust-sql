@@ -54,6 +54,14 @@ pub fn init_bloom_state(index: &Relation<'_>) -> PgResult<BloomState> {
     let mut collations = Vec::with_capacity(ncolumns);
     for i in 0..ncolumns {
         let oid = hash_proc_oid(index, i);
+        if oid == 0 {
+            // indexam.c:946 index_getprocinfo
+            return Err(Box::new(PgError::error(format!(
+                "missing support function {BLOOM_HASH_PROC} for attribute {} of index \"{}\"",
+                i + 1,
+                index.name()
+            ))));
+        }
         hash_fn.push(fmgr_core::fmgr_info(oid)?);
         collations.push(index.rd_indcollation.get(i).copied().unwrap_or(0));
     }

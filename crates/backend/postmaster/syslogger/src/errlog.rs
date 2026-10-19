@@ -7,19 +7,33 @@
 use elog::sink::backend_log_context;
 use elog::{
     check_log_of_query, current_query_string, error_severity, get_formatted_log_time,
-    get_formatted_start_time, unpack_sql_state, write_pipe_chunks,
+    get_formatted_start_time, reset_formatted_start_time, unpack_sql_state, write_pipe_chunks,
 };
 use std::cell::Cell;
 use types_error::{PGErrorVerbosity, PgError, LOG_DESTINATION_CSVLOG, LOG_DESTINATION_JSONLOG};
 
 use crate::write_syslogger_file;
 
-// C keeps one `static long log_line_number` per writer, reset when MyProcPid
-// changes (a fork-inheritance artifact). Thread-per-backend makes a fresh
-// thread-local the exact analog: each backend starts at 0.
+// C keeps one `static long log_line_number` per writer plus the pid it was
+// counted under, and restarts it (with the cached session-start time) when
+// MyProcPid changes; a retained pool thread serving successive task pids
+// needs exactly that reset.
 thread_local! {
-    static CSV_LOG_LINE_NUMBER: Cell<i64> = const { Cell::new(0) };
-    static JSON_LOG_LINE_NUMBER: Cell<i64> = const { Cell::new(0) };
+    static CSV_LOG_LINE_NUMBER: Cell<(u32, i64)> = const { Cell::new((0, 0)) };
+    static JSON_LOG_LINE_NUMBER: Cell<(u32, i64)> = const { Cell::new((0, 0)) };
+}
+
+fn next_line_number(counter: &'static std::thread::LocalKey<Cell<(u32, i64)>>, my_pid: u32) -> i64 {
+    counter.with(|c| {
+        let (log_my_pid, mut line_number) = c.get();
+        if log_my_pid != my_pid {
+            line_number = 0;
+            reset_formatted_start_time();
+        }
+        line_number += 1;
+        c.set((my_pid, line_number));
+        line_number
+    })
 }
 
 // appendCSVLiteral (csvlog.c): PostgreSQL CSV defaults, quote = escape = '"';
@@ -84,14 +98,15 @@ fn route(buf: &str, destination: i32) {
 /// write_csvlog (csvlog.c) — column order is documented in config.sgml and
 /// load-bearing for anyone ingesting the .csv files; keep it byte-exact.
 pub fn write_csvlog(edata: &PgError) {
+    route(&csvlog_line(edata), LOG_DESTINATION_CSVLOG);
+}
+
+pub(crate) fn csvlog_line(edata: &PgError) -> String {
     let context = backend_log_context();
     let my_pid = context.map_or_else(elog::sink::current_pid, |c| c.process_id());
     let has_port = context.is_some_and(|c| c.has_client_port());
 
-    let line_number = CSV_LOG_LINE_NUMBER.with(|c| {
-        c.set(c.get() + 1);
-        c.get()
-    });
+    let line_number = next_line_number(&CSV_LOG_LINE_NUMBER, my_pid);
 
     let mut buf = String::new();
 
@@ -253,20 +268,20 @@ pub fn write_csvlog(edata: &PgError) {
     buf.push_str(&context.map_or(0, |c| c.query_id()).to_string());
 
     buf.push('\n');
-
-    route(&buf, LOG_DESTINATION_CSVLOG);
+    buf
 }
 
 /// write_jsonlog (jsonlog.c) — one JSON object per line; keys match C's.
 pub fn write_jsonlog(edata: &PgError) {
+    route(&jsonlog_line(edata), LOG_DESTINATION_JSONLOG);
+}
+
+pub(crate) fn jsonlog_line(edata: &PgError) -> String {
     let context = backend_log_context();
     let my_pid = context.map_or_else(elog::sink::current_pid, |c| c.process_id());
     let has_port = context.is_some_and(|c| c.has_client_port());
 
-    let line_number = JSON_LOG_LINE_NUMBER.with(|c| {
-        c.set(c.get() + 1);
-        c.get()
-    });
+    let line_number = next_line_number(&JSON_LOG_LINE_NUMBER, my_pid);
 
     let mut buf = String::new();
     buf.push('{');
@@ -322,7 +337,9 @@ pub fn write_jsonlog(edata: &PgError) {
     );
 
     append_json_key_value(&mut buf, "error_severity", Some(error_severity(edata.level)), true);
-    append_json_key_value(&mut buf, "state_code", Some(&unpack_sql_state(edata.sqlstate)), true);
+    if edata.sqlstate.0 != 0 {
+        append_json_key_value(&mut buf, "state_code", Some(&unpack_sql_state(edata.sqlstate)), true);
+    }
     append_json_key_value(&mut buf, "message", Some(edata.message.as_str()), true);
     append_json_key_value(
         &mut buf,
@@ -385,6 +402,5 @@ pub fn write_jsonlog(edata: &PgError) {
 
     buf.push('}');
     buf.push('\n');
-
-    route(&buf, LOG_DESTINATION_JSONLOG);
+    buf
 }

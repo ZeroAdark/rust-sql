@@ -254,7 +254,8 @@ pub fn tsquery_recv_core<'mcx>(
         return Err(PgError::error("invalid size of tsquery").into());
     }
     let size = size as usize;
-    let mut items: PgVec<Item> = vec_with_capacity_in(mcx, size)?;
+    let mut items: PgVec<Item> =
+        vec_with_capacity_in(mcx, size.min(buf.len().saturating_sub(buf.cursor) / 2))?;
     let mut pool: PgVec<u8> = PgVec::new_in(mcx);
     for i in 0..size {
         let typ = ::pqformat::pq_getmsgint(buf, 1)? as i8;

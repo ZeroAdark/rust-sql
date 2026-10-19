@@ -256,21 +256,16 @@ fn strtol_base10_full(s: &[u8]) -> Option<i32> {
         i += 1;
     }
     let digits_start = i;
-    let mut acc: i64 = 0;
-    let mut overflow = false;
+    let mut acc: i128 = 0;
     while i < s.len() && s[i].is_ascii_digit() {
-        let digit = (s[i] - b'0') as i64;
-        match acc.checked_mul(10).and_then(|v| v.checked_add(digit)) {
-            Some(v) => acc = v,
-            None => overflow = true,
-        }
+        acc = (acc * 10 + (s[i] - b'0') as i128).min(i64::MAX as i128 + 2);
         i += 1;
     }
-    if i == digits_start || overflow || i != s.len() {
+    let val = if neg { -acc } else { acc };
+    if i == digits_start || i != s.len() || val < i64::MIN as i128 || val > i64::MAX as i128 {
         return None;
     }
-    let val = if neg { acc.wrapping_neg() } else { acc };
-    Some(val as i32)
+    Some(val as i64 as i32)
 }
 
 pub(crate) fn b64dec(src: &[u8]) -> Option<Vec<u8>> {

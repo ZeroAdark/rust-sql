@@ -62,8 +62,19 @@ pub(crate) fn set_report_pending_hint(v: bool) {
     REPORT_PENDING_HINT.set(v);
 }
 
+/// The postmaster's PgReloadTime, which a fresh child inherits (fork in C;
+/// launch_backend.c:1034 restore_backend_variables under EXEC_BACKEND).
+static POSTMASTER_RELOAD_TIME: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
 pub fn set_pg_reload_time(t: i64) {
     PG_RELOAD_TIME.set(t);
+    if init_small::globals::MyProcPid() == init_small::globals::PostmasterPid() {
+        POSTMASTER_RELOAD_TIME.store(t, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn inherit_postmaster_reload_time() {
+    PG_RELOAD_TIME.set(POSTMASTER_RELOAD_TIME.load(std::sync::atomic::Ordering::Relaxed));
 }
 
 pub fn pg_reload_time() -> i64 {
@@ -164,6 +175,7 @@ pub fn initialize_guc_options() -> PgResult<()> {
 // them concurrently.
 pub fn initialize_guc_options_for_child(snapshot: &[NondefaultGuc]) -> PgResult<()> {
     initialize_guc_options_impl(|name| !snapshot.iter().any(|v| v.name == name))?;
+    inherit_postmaster_reload_time();
     crate::redefine_inherited_custom_variables()
 }
 
@@ -174,6 +186,7 @@ pub fn initialize_guc_options_for_child_base(
     base: &crate::layers::GucBaseSnapshot,
 ) -> PgResult<()> {
     initialize_guc_options_impl(|name| !base.contains(name))?;
+    inherit_postmaster_reload_time();
     crate::redefine_inherited_custom_variables()
 }
 
@@ -274,7 +287,7 @@ pub fn initialize_guc_options_from_environment() -> PgResult<()> {
         let v = if env == "0" { "off" } else { "on" };
         crate::SetConfigOption("pgrust.runtime", Some(v), PGC_POSTMASTER, PGC_S_ENV_VAR)?;
     }
-    // pgrust-only (GL-M41-3 flip): pgrust.runtime_vacuum_pool's startup
+    // pgrust-only (regression flip): pgrust.runtime_vacuum_pool's startup
     // default (parallel VACUUM on the morsel-pool workers). Flipped-kill
     // spelling per t35 convention: "0" or "off" disables; any other value /
     // unset = on (the flipped default).
@@ -605,10 +618,12 @@ pub fn set_config_option_global(
         SetConfigPrepared::Pending(prep) => prep,
     };
 
+    crate::reset_guc_check_error();
     let (newval, newextra) = match with_store(|reg| set_config_option_value(reg, &prep, value, source))
         .unwrap_or_else(|| store_uninitialized(name))
     {
         Ok(parsed) => parsed,
+        Err(e) if crate::take_guc_check_thrown() => return Err(e),
         Err(e) => return crate::registry::reject(prep.elevel, *e),
     };
 
@@ -661,8 +676,12 @@ pub fn reset_store_to_process_base() {
     // 1. Return every session-settable variable to its boot default, discarding
     //    the prior session's low-source values AND their reset_val stamps
     //    (the class ResetAllOptions cannot reach).
-    with_store_mut(crate::registry::reset_session_options_to_boot)
+    let mut deferred_hooks: Vec<DeferredAssignHook> = Vec::new();
+    with_store_mut(|reg| crate::registry::reset_session_options_to_boot(reg, &mut deferred_hooks))
         .unwrap_or_else(|| store_uninitialized("reset_store_to_process_base"));
+    for hook in deferred_hooks {
+        hook();
+    }
     // 2. Re-overlay the postmaster config base (postgresql.conf/env/argv) that a
     //    freshly initialized backend has over boot defaults, so legitimate
     //    config-file settings are preserved. The base is session-neutral and

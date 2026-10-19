@@ -293,6 +293,17 @@ pub fn log_stall_report(msg: String) {
 /// Default "the caller left the park loop" gap: four recheck periods.
 const DEFAULT_PARK_GAP_MS: i64 = 4_000;
 
+/// Four recheck periods of the given cadence (the default gap when the
+/// cadence knob is disabled): a quantum's own sleep must never read as the
+/// owner having left the loop.
+fn park_gap_ms(recheck_ms: i64) -> i64 {
+    if recheck_ms > 0 {
+        recheck_ms.saturating_mul(4)
+    } else {
+        DEFAULT_PARK_GAP_MS
+    }
+}
+
 /// The monotonic clock the stall machinery runs on, for owners that keep a
 /// [`ParkStallClock`] across calls.
 pub fn park_now_ms() -> i64 {
@@ -304,7 +315,7 @@ pub fn park_now_ms() -> i64 {
 /// lives in one crate and the latch sleep in another, so the caller cannot
 /// hold a `StallDetector` across iterations the way `gather_readnext` does.
 ///
-/// GL-SYNCWEDGE-1: the quantum used to build a fresh `StallDetector` on every
+/// regression: the quantum used to build a fresh `StallDetector` on every
 /// call. `start_ms` therefore re-armed once per 1000 ms recheck, the 60 s
 /// report deadline could never mature, and a leader that parked for 12m53s in
 /// production emitted NOT ONE log line. This type keeps the detector across
@@ -319,7 +330,17 @@ pub struct ParkStallClock {
 
 impl ParkStallClock {
     pub fn new() -> Self {
-        Self::with_params(StallDetector::new(), DEFAULT_PARK_GAP_MS)
+        Self::for_cadence(threshold_ms(), recheck_ms())
+    }
+
+    /// `new()` at an explicit report threshold and recheck cadence: the
+    /// away-gap is four cadence periods, so a quantum's own sleep never
+    /// re-arms the episode.
+    pub fn for_cadence(threshold_ms: i64, recheck_ms: i64) -> Self {
+        Self::with_params(
+            StallDetector::with_thresholds(threshold_ms, recheck_ms),
+            park_gap_ms(recheck_ms),
+        )
     }
 
     pub fn with_params(detector: StallDetector, gap_ms: i64) -> Self {
@@ -358,9 +379,33 @@ impl Default for ParkStallClock {
 
 #[cfg(test)]
 mod stall_tests {
-    use super::{ParkStallClock, StallDetector};
+    use super::{park_gap_ms, ParkStallClock, StallDetector, DEFAULT_PARK_GAP_MS};
 
-    // The GL-SYNCWEDGE-1 defect, stated executably: a park loop that builds a
+    // PGRUST_MQ_RECHECK_MS above the fixed 4 s gap made every quantum's own
+    // sleep look like the owner leaving the loop: enter() reset the detector
+    // each lap and a 75-minute park reported nothing. The gap follows the
+    // cadence.
+    #[test]
+    fn park_gap_tracks_a_recheck_cadence_above_the_default_gap() {
+        assert_eq!(park_gap_ms(1_000), DEFAULT_PARK_GAP_MS);
+        assert_eq!(park_gap_ms(0), DEFAULT_PARK_GAP_MS);
+        assert_eq!(park_gap_ms(-1), DEFAULT_PARK_GAP_MS);
+        assert_eq!(park_gap_ms(5_000), 20_000);
+        let mut clock = ParkStallClock::for_cadence(60_000, 5_000);
+        let mut reports = 0;
+        let mut now = 0i64;
+        for _ in 0..900 {
+            clock.enter(now);
+            now += clock.detector().next_timeout_ms(now).expect("bounded");
+            if clock.note_timeout(now).is_some() {
+                reports += 1;
+            }
+        }
+        assert_eq!(now, 4_500_000);
+        assert_eq!(reports, 1, "one report for a 75-minute park at a 5 s cadence");
+    }
+
+    // The regression defect, stated executably: a park loop that builds a
     // FRESH detector for every 1000 ms quantum re-arms `start_ms` each lap, so
     // the 60 s report deadline never matures. 12m53s of parking, zero reports.
     // This is exactly what parallel::wait_on_my_latch did.

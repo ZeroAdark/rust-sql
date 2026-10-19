@@ -88,6 +88,14 @@ pub struct AbbrevState {
 }
 
 impl AbbrevState {
+    /// The comparator over converted datum1 words (`AbbrevArm::abbrev_comparator`).
+    pub fn abbrev_comparator(&self) -> SortComparator {
+        match self.conv {
+            ConverterState::Numeric(_) => SortComparator::NumericAbbrev,
+            _ => SortComparator::Unsigned,
+        }
+    }
+
     pub fn new(arm: AbbrevArm) -> AbbrevState {
         let conv = match arm.kind {
             AbbrevKind::VarStrC => {

@@ -3,7 +3,7 @@
 --   --sql fixtures/bugs-batch62-e2e.sql "$PGINSTALL/postgres"
 \set VERBOSITY verbose
 
--- fp-adt-b2#1: the geometric estimators ignore their arguments and return
+-- regression: the geometric estimators ignore their arguments and return
 -- constants; a LANGUAGE internal alias call returns them too.
 CREATE FUNCTION b62_areasel() RETURNS double precision LANGUAGE internal AS 'areasel';
 CREATE FUNCTION b62_areajoinsel() RETURNS double precision LANGUAGE internal AS 'areajoinsel';
@@ -13,7 +13,7 @@ CREATE FUNCTION b62_contsel() RETURNS double precision LANGUAGE internal AS 'con
 CREATE FUNCTION b62_contjoinsel() RETURNS double precision LANGUAGE internal AS 'contjoinsel';
 SELECT b62_areasel(), b62_areajoinsel(), b62_positionsel(), b62_positionjoinsel(), b62_contsel(), b62_contjoinsel();
 
--- fp-adt-selfuncs-p1#1 / fp-adt-selfuncs-p2#1: a comparison operator whose
+-- regression / regression: a comparison operator whose
 -- function returns NULL is a non-match for var_eq_const, mcv_selectivity,
 -- histogram_selectivity, eqjoinsel_inner and eqjoinsel_semi, never an error.
 CREATE TABLE b62_t3(x int);
@@ -35,7 +35,7 @@ ANALYZE b62_b4;
 EXPLAIN (COSTS OFF) SELECT * FROM b62_a4 JOIN b62_b4 ON b62_a4.x === b62_b4.x;
 EXPLAIN (COSTS OFF) SELECT * FROM b62_a4 WHERE EXISTS (SELECT FROM b62_b4 WHERE b62_a4.x === b62_b4.x);
 
--- fp-path-pathkeys#1: an opfamily without its same-type equality operator is
+-- regression: an opfamily without its same-type equality operator is
 -- an ordinary XX000 error from make_pathkey_from_sortinfo (the opfamily OID
 -- differs per cluster, so it is masked).
 CREATE OPERATOR CLASS b62_incomplete_ops FOR TYPE integer USING btree AS FUNCTION 1 btint4cmp(integer, integer);
@@ -47,7 +47,7 @@ EXCEPTION WHEN OTHERS THEN
   RAISE NOTICE '% %', SQLSTATE, regexp_replace(SQLERRM, 'opfamily \d+', 'opfamily <oid>');
 END $$;
 
--- fp-plan-createplan-p1#1: order_qual_clauses' insertion sort tolerates NaN
+-- regression: order_qual_clauses' insertion sort tolerates NaN
 -- costs (COST 1e39 x cpu_operator_cost 0) and orders them as C does.
 CREATE FUNCTION b62_cost_probe(boolean) RETURNS boolean LANGUAGE plpgsql VOLATILE COST 1e39 AS $$ BEGIN RETURN $1; END $$;
 CREATE TABLE b62_t23(a int);
@@ -60,7 +60,7 @@ SELECT * FROM b62_t23 WHERE b62_cost_probe(a=1) AND b62_cost_probe(a=2);
 EXPLAIN (COSTS OFF) SELECT a FROM b62_t23 GROUP BY a HAVING b62_cost_probe(a=1) AND b62_cost_probe(a=2);
 RESET cpu_operator_cost;
 
--- fp-index-indexam#1: planning inside an index expression during REINDEX
+-- regression: planning inside an index expression during REINDEX
 -- refuses the index being rebuilt (index_can_return's RELATION_CHECKS).
 CREATE TABLE b62_t11(a int);
 INSERT INTO b62_t11 SELECT g FROM generate_series(1,10) g;

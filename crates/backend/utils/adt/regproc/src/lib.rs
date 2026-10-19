@@ -45,6 +45,17 @@ pub type RegName<'mcx> = PgVec<'mcx, u8>;
 // myTempNamespace read through the seam; an uninstalled seam (unit tests,
 // contexts with no session) reads as InvalidOid exactly like C's global
 // before any temp namespace is assigned.
+// C FuncnameGetCandidates / FunctionIsVisible / OperatorIsVisible walk
+// activeSearchPath after recomputeNamespacePath (namespace.c:1221), which
+// never creates a pending temp namespace the way fetch_search_path does.
+fn lookup_search_path(mcx: Mcx<'_>) -> PgResult<PgVec<'_, Oid>> {
+    if namespace_seams::active_search_path::is_installed() {
+        namespace_seams::active_search_path::call(mcx)
+    } else {
+        namespace_seams::fetch_search_path::call(mcx, true)
+    }
+}
+
 fn my_temp_namespace_or_invalid() -> Oid {
     if namespace_seams::my_temp_namespace::is_installed() {
         namespace_seams::my_temp_namespace::call()
@@ -316,7 +327,7 @@ fn funcname_candidates<'mcx>(
     };
     let path = match ns_filter {
         Some(_) => None,
-        None => Some(namespace_seams::fetch_search_path::call(mcx, true)?),
+        None => Some(lookup_search_path(mcx)?),
     };
     let mut kept: Vec<FuncCand> = Vec::new();
     for (i, cand) in raw.iter().enumerate() {
@@ -368,17 +379,6 @@ fn range_var_get_relid(
     missing_ok: bool,
 ) -> PgResult<Oid> {
     namespace_seams::range_var_get_relid::call(mcx, rv, NoLock, missing_ok)
-}
-
-fn unqualified_rv(relname: &str) -> rel_vocab::RangeVar<'_> {
-    rel_vocab::RangeVar {
-        catalogname: None,
-        schemaname: None,
-        relname,
-        inh: true,
-        relpersistence: RELPERSISTENCE_PERMANENT,
-        location: -1,
-    }
 }
 
 pub fn regprocin(mcx: Mcx<'_>, s: &str, mut esc: Esc) -> PgResult<Option<Oid>> {
@@ -823,8 +823,7 @@ pub fn regclassout(mcx: Mcx<'_>, classid: Oid) -> PgResult<RegName<'_>> {
     let Some(relname) = lsyscache::get_rel_name(mcx, classid)? else {
         return oid_numeric_cstr(mcx, classid);
     };
-    // C RelationIsVisible == "would regclassin find it unqualified".
-    let visible = range_var_get_relid(mcx, &unqualified_rv(&relname), true)? == classid;
+    let visible = namespace_seams::relation_is_visible::call(classid)?;
     let nspname = if visible {
         None
     } else {
@@ -872,7 +871,6 @@ pub fn text_regclass(mcx: Mcx<'_>, s: &str) -> PgResult<Oid> {
     range_var_get_relid(mcx, &rv, false)
 }
 
-
 // FunctionIsVisible / OperatorIsVisible search-path walk, local to this
 // crate (a catalog_namespace dep cycles through fmgr_core).
 // format_procedure (regproc.c): "name(argtype,argtype)", schema-qualified
@@ -888,7 +886,7 @@ pub fn format_procedure(mcx: Mcx<'_>, procedure_oid: Oid) -> PgResult<String> {
     // FunctionIsVisible: only an identical-argtype candidate earlier on the
     // path shadows this oid (FuncnameGetCandidates dedups by argument list).
     let raw = syscache_seams::lookup_pg_proc_name_candidates::call(mcx, proname)?;
-    let path = namespace_seams::fetch_search_path::call(mcx, true)?;
+    let path = lookup_search_path(mcx)?;
     let pos = |nsp: Oid| path.iter().position(|&p| p == nsp);
     let mut visible = false;
     let mut best: Option<(usize, Oid)> = None;
@@ -950,7 +948,7 @@ pub fn format_operator(mcx: Mcx<'_>, operator_oid: Oid) -> PgResult<String> {
     // OperatorIsVisible: first exact (name,left,right) match on the path.
     let cands =
         syscache_seams::lookup_pg_operator_candidates::call(mcx, oprname, oprleft, oprright)?;
-    let path = namespace_seams::fetch_search_path::call(mcx, true)?;
+    let path = lookup_search_path(mcx)?;
     let mut visible = false;
     let mut my_nsp = InvalidOid;
     let mtn = my_temp_namespace_or_invalid();

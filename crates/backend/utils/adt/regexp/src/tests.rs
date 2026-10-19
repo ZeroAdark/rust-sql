@@ -1112,7 +1112,7 @@ fn session_cache_reclaims_complete_context() {
 // regexp.c:204-231: every cached regexp owns a "RegexpMemoryContext" child of
 // RegexpCacheMemoryContext identified by its pattern, which
 // pg_backend_memory_contexts lists; the pre-fix port kept only the cache root.
-// Audit fp-regex-regc_nfa-p2#1.
+// Audit regression.
 #[test]
 fn cached_regexps_own_an_identified_memory_context() {
     utf8();
@@ -1146,4 +1146,16 @@ fn cached_regexps_own_an_identified_memory_context() {
     let cache = forest.iter().find(|t| t.name == "RegexpCacheMemoryContext").unwrap();
     assert_eq!(cache.children.len(), MAX_CACHED_RES);
     assert!(!cache.children.iter().any(|c| c.ident.as_deref() == Some("b150_a(b)c")), "evicted entry's context deleted");
+}
+
+// regexp.c:445 quotes the offending option's bytes verbatim: a SQL_ASCII
+// high byte reaches the wire as itself, not as U+FFFD.
+#[test]
+fn invalid_option_message_keeps_non_utf8_bytes() {
+    let err = invalid_re_option(b"\xff");
+    assert_eq!(err.message_raw.as_deref(), Some(&b"invalid regular expression option: \"\xff\""[..]));
+    assert_eq!(err.sqlstate(), ERRCODE_INVALID_PARAMETER_VALUE);
+    let err = invalid_re_option(b"zq");
+    assert_eq!(err.message(), "invalid regular expression option: \"z\"");
+    assert!(err.message_raw.is_none());
 }

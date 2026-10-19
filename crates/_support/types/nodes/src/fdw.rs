@@ -73,4 +73,8 @@ pub struct FdwExplainFlags<'a> {
     /// second child scanned under the alias "pagg"). None (or out of range)
     /// = fall back to the RTE's eref aliasname, as C.
     pub rtable_names: &'a [Option<&'a str>],
+    /// ri_BatchSize of the executed INSERT result relation (postgres_fdw.c:2972
+    /// prints the value captured at ExecInitModifyTable); None when the plan
+    /// did not run or the FDW recorded none.
+    pub batch_size: Option<i32>,
 }

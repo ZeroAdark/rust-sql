@@ -541,14 +541,14 @@ fn log_status_format_renders_every_escape() {
     let previous = set_backend_log_context(Some(&TEST_CONTEXT));
     let error = PgError::error("boom").with_sqlstate(UNDEFINED_TABLE);
 
-    let mut buf = String::new();
+    let mut buf = Vec::new();
     log_status_format(
         &mut buf,
         Some("%a|%b|%u|%d|%p|%P|%v|%x|%e|%Q|%r|%h|%L|%i|%c"),
         &error,
     );
     assert_eq!(
-        buf,
+        String::from_utf8(buf.clone()).unwrap(),
         "psql|client backend|postgres|postgres|1234|1200|3/44|99|42P01|42|127.0.0.1(5432)|127.0.0.1|127.0.0.1|postgres: session|6553f100.4d2"
     );
 
@@ -561,16 +561,16 @@ fn log_status_format_applies_padding_and_percent_escape() {
     let previous = set_backend_log_context(Some(&TEST_CONTEXT));
     let error = PgError::error("boom");
 
-    let mut buf = String::new();
+    let mut buf = Vec::new();
     log_status_format(&mut buf, Some("%8p|%-8p|%%"), &error);
-    assert_eq!(buf, "    1234|1234    |%");
+    assert_eq!(String::from_utf8(buf.clone()).unwrap(), "    1234|1234    |%");
 
     // Padding-only escapes for absent values render spaces; %q in a backend
     // is ignored; a trailing bare % is a format error and is dropped.
     set_backend_log_context(None);
-    let mut buf = String::new();
+    let mut buf = Vec::new();
     log_status_format(&mut buf, Some("[%4a]%qX%"), &error);
-    assert_eq!(buf, "[    ]");
+    assert_eq!(String::from_utf8(buf.clone()).unwrap(), "[    ]");
 
     set_backend_log_context(previous);
 }
@@ -583,9 +583,25 @@ fn log_status_format_padding_wraps_like_c_int() {
 
     // elog.c:2801 accumulates the width in a wrapping int: 2^32 is 0 and
     // 2^32 + 8 is 8, not a saturated i32::MAX of padding.
-    let mut buf = String::new();
+    let mut buf = Vec::new();
     log_status_format(&mut buf, Some("%4294967296p|%4294967304p|%-4294967304p"), &error);
-    assert_eq!(buf, "1234|    1234|1234    ");
+    assert_eq!(String::from_utf8(buf.clone()).unwrap(), "1234|    1234|1234    ");
+
+    set_backend_log_context(previous);
+}
+
+// elog.c:2862 and :3198-3200: an unknown conversion discards one byte
+// after '%', so a multibyte character there leaves its continuation bytes
+// in the line; the prefix is bytes, never re-encoded.
+#[test]
+fn log_status_format_unknown_multibyte_conversion_keeps_the_tail_bytes() {
+    let _guard = lock();
+    let previous = set_backend_log_context(Some(&TEST_CONTEXT));
+    let error = PgError::error("boom");
+
+    let mut buf = Vec::new();
+    log_status_format(&mut buf, Some("%\u{e9} [%p]"), &error);
+    assert_eq!(buf, b"\xa9 [1234]");
 
     set_backend_log_context(previous);
 }
@@ -596,9 +612,9 @@ fn log_status_format_q_stops_without_client_port() {
     let previous = set_backend_log_context(None);
     let error = PgError::error("boom");
 
-    let mut buf = String::new();
+    let mut buf = Vec::new();
     log_status_format(&mut buf, Some("before %q after"), &error);
-    assert_eq!(buf, "before ");
+    assert_eq!(String::from_utf8(buf.clone()).unwrap(), "before ");
 
     set_backend_log_context(previous);
 }
@@ -834,6 +850,17 @@ fn err_sendbytes_passes_raw_high_bytes() {
     assert_eq!(e.message(), "unrecognized weight: ");
 }
 
+// errmsg_raw: the builder form of error_raw_message (async.c:602 trace_notify
+// DEBUG1 with a SQL_ASCII channel name).
+#[test]
+fn errmsg_raw_carries_exact_bytes() {
+    let e = builder::ereport(::types_error::ERROR)
+        .errmsg_raw(b"Async_Notify(a\xE9)".to_vec())
+        .into_error();
+    assert_eq!(e.message(), "Async_Notify(a\u{FFFD})");
+    assert_eq!(e.message_raw.as_deref(), Some(&b"Async_Notify(a\xE9)"[..]));
+}
+
 // Issue #58: the critical-section ERROR->PANIC promotion (errstart) must read
 // the counter START_CRIT_SECTION actually bumps — init_small's — not a
 // duplicate elog-side cell that nothing increments. Real code, not
@@ -940,4 +967,231 @@ fn is_under_postmaster_is_the_globals_cell() {
         "miscinit's SetIsUnderPostmaster(true) must reach DebugFileOpen"
     );
     init_small::globals::SetIsUnderPostmaster(saved);
+}
+
+#[test]
+fn log_destination_check_matches_split_identifier_string() {
+    assert_eq!(
+        check_log_destination("\x0bstderr\x0b,\x0bsyslog").unwrap(),
+        LOG_DESTINATION_STDERR | LOG_DESTINATION_SYSLOG
+    );
+    let long = "x".repeat(70);
+    assert_eq!(
+        check_log_destination(&format!("\"{long}\"")).unwrap_err(),
+        format!("Unrecognized key word: \"{}\".", &long[..63])
+    );
+    assert_eq!(
+        check_log_destination(&long).unwrap_err(),
+        format!("Unrecognized key word: \"{}\".", &long[..63])
+    );
+}
+
+#[test]
+fn builder_captures_errno_for_percent_m() {
+    let _guard = lock();
+    reset_guc();
+    // SAFETY: closing an invalid descriptor only sets errno to EBADF.
+    unsafe { libc::close(-1) };
+    let err = ereport(ERROR)
+        .errcode_for_file_access()
+        .errmsg("could not open directory \"d\": %m")
+        .into_error();
+    assert_eq!(
+        err.message,
+        format!("could not open directory \"d\": {}", errno::strerror(libc::EBADF))
+    );
+}
+
+struct OtherPidContext;
+
+impl BackendLogContext for OtherPidContext {
+    fn has_client_port(&self) -> bool {
+        true
+    }
+    fn process_id(&self) -> u32 {
+        5678
+    }
+    fn session_start_time(&self) -> i64 {
+        1_700_003_600
+    }
+}
+
+static OTHER_PID_CONTEXT: OtherPidContext = OtherPidContext;
+
+fn render_prefix(format: &str) -> String {
+    let mut buf = Vec::new();
+    log_status_format(&mut buf, Some(format), &PgError::error("boom"));
+    String::from_utf8(buf).unwrap()
+}
+
+// elog.c:2841: log_line_number and the cached start timestamp restart when
+// MyProcPid changes, so a retained thread never carries them across sessions.
+#[test]
+fn log_status_format_resets_line_number_and_start_time_when_pid_changes() {
+    let _guard = lock();
+    let previous = set_backend_log_context(Some(&TEST_CONTEXT));
+
+    let first: i64 = render_prefix("%l").parse().unwrap();
+    assert_eq!(render_prefix("%l"), (first + 1).to_string());
+    let start = render_prefix("%s");
+
+    set_backend_log_context(Some(&OTHER_PID_CONTEXT));
+    assert_eq!(render_prefix("%l"), "1");
+    assert_eq!(render_prefix("%l"), "2");
+    assert_ne!(render_prefix("%s"), start);
+
+    set_backend_log_context(Some(&TEST_CONTEXT));
+    assert_eq!(render_prefix("%l"), "1");
+    assert_eq!(render_prefix("%s"), start);
+
+    set_backend_log_context(previous);
+}
+
+// elog.c:3236/3567: a present-but-empty message (plpgsql `RAISE EXCEPTION
+// ''`) is written as-is; only a NULL message becomes "missing error text".
+#[test]
+fn empty_primary_message_is_not_replaced_by_missing_error_text() {
+    let _guard = lock();
+    reset_guc();
+    let saved_prefix = config::log_line_prefix_format();
+    config::set_log_line_prefix(None);
+
+    let empty = PgError::error("").with_message_id("");
+    assert_eq!(report::format_server_log_line(&empty), b"ERROR:  \n");
+
+    let unset = PgError::error("");
+    assert_eq!(
+        report::format_server_log_line(&unset),
+        b"ERROR:  missing error text\n"
+    );
+
+    config::set_log_line_prefix(saved_prefix);
+}
+
+// elog.c:3236: the server log gets C's exact message/detail bytes, not a
+// U+FFFD rendering, when the message is not valid UTF-8.
+#[test]
+fn server_log_line_carries_raw_message_and_detail_bytes() {
+    let _guard = lock();
+    reset_guc();
+    let saved_prefix = config::log_line_prefix_format();
+    config::set_log_line_prefix(None);
+
+    let raw = b"relation \"\xE9abc\" does not exist".to_vec();
+    let mut error = PgError::error(String::from_utf8_lossy(&raw).into_owned())
+        .with_detail("Key (k)=(\u{FFFD}).");
+    error.message_raw = Some(raw);
+    error.detail_raw = Some(b"Key (k)=(\xFF).".to_vec());
+
+    assert_eq!(
+        report::format_server_log_line(&error),
+        b"ERROR:  relation \"\xE9abc\" does not exist\nDETAIL:  Key (k)=(\xFF).\n"
+    );
+
+    config::set_log_line_prefix(saved_prefix);
+}
+
+// regression: elog.c:3767 append_with_tabs copies a C string, so a
+// raw message carrying an embedded NUL (acldefault_sql's %c of '\0') ends
+// the server-log line at the NUL.
+#[test]
+fn server_log_line_stops_at_the_first_nul() {
+    let _guard = lock();
+    reset_guc();
+    let saved_prefix = config::log_line_prefix_format();
+    config::set_log_line_prefix(None);
+
+    let raw = b"unrecognized object type abbreviation: \0".to_vec();
+    let mut error = PgError::error("unrecognized object type abbreviation: ".to_string())
+        .with_detail("tail\0dropped");
+    error.message_raw = Some(raw);
+    error.detail_raw = Some(b"tail\0dropped".to_vec());
+
+    assert_eq!(
+        report::format_server_log_line(&error),
+        b"ERROR:  unrecognized object type abbreviation: \nDETAIL:  tail\n"
+    );
+
+    config::set_log_line_prefix(saved_prefix);
+}
+
+// heap-crit lane (regression): the scoped START/END_CRIT_SECTION
+// guard — Drop is END, an ereport ERROR under it is PANIC, count ends at 0.
+#[test]
+fn crit_section_guard_balances_the_count_on_every_exit() {
+    let _guard = lock();
+    reset_guc();
+    assert_eq!(config::crit_section_count(), 0);
+
+    let g = CritSection::enter();
+    assert_eq!(config::crit_section_count(), 1);
+    let inner = CritSection::enter();
+    assert_eq!(config::crit_section_count(), 2, "sections nest like C's counter");
+    inner.exit();
+    assert_eq!(config::crit_section_count(), 1);
+    drop(g);
+    assert_eq!(config::crit_section_count(), 0);
+
+    fn early(flag: bool) -> u32 {
+        let _crit = CritSection::enter();
+        if flag {
+            return config::crit_section_count();
+        }
+        0
+    }
+    assert_eq!(early(true), 1);
+    assert_eq!(config::crit_section_count(), 0);
+
+    let v = CritSection::run(|| {
+        assert_eq!(config::crit_section_count(), 1);
+        Ok(7)
+    })
+    .unwrap();
+    assert_eq!(v, 7);
+    assert_eq!(config::crit_section_count(), 0);
+}
+
+#[test]
+fn crit_section_guard_escalates_ereport_error_to_panic_and_restores_count() {
+    let _guard = lock();
+    reset_guc();
+    assert_eq!(config::crit_section_count(), 0);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _crit = CritSection::enter();
+        assert!(errstart(ERROR, None));
+        errmsg("simulated failure inside a guarded critical section").unwrap();
+        let _ = errfinish(None, 0, None);
+    }));
+    let payload = result.expect_err("ERROR inside a held CritSection must escalate to PANIC");
+    assert!(payload.is::<::types_error::PanicExitThread>());
+    assert_eq!(
+        config::crit_section_count(),
+        0,
+        "the guard's Drop ran during the PANIC unwind and restored the count"
+    );
+}
+
+// `run`: a hand-built PgError escaping the body is promoted, not recovered.
+#[test]
+fn crit_section_run_promotes_escaping_hand_built_error() {
+    let _guard = lock();
+    reset_guc();
+    assert_eq!(config::crit_section_count(), 0);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CritSection::run(|| -> PgResult<()> {
+            Err(Box::new(PgError::new(ERROR, "xlog flush request 0/1234 is not satisfied")))
+        })
+    }));
+    assert!(result
+        .expect_err("hand-built Err escaping CritSection::run must PANIC")
+        .is::<::types_error::PanicExitThread>());
+    assert_eq!(config::crit_section_count(), 0);
+
+    let err = (|| -> PgResult<()> {
+        Err(Box::new(PgError::new(ERROR, "xlog flush request 0/1234 is not satisfied")))
+    })()
+    .unwrap_err();
+    assert_eq!(err.level, ERROR);
 }

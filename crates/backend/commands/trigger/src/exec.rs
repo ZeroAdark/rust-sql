@@ -199,6 +199,9 @@ pub struct TriggerWhenCache<'mcx> {
     // (trigger.c:2527-2536): compiled once per relation, like the WHEN
     // states above.
     partition_check: Option<PgBox<'mcx, execexpr::ExprState<'mcx>>>,
+    // C TriggerEnabled evaluates in GetPerTupleExprContext, reset every row.
+    // Boxed: the armed ExprStates hold its address.
+    per_tuple: Option<Box<mcx::MemoryContext>>,
 }
 
 // The WHEN/UPDATE-OF half of C TriggerEnabled; borrows of the estate the
@@ -215,6 +218,12 @@ impl<'a, 'mcx> TriggerWhenEval<'a, 'mcx> {
             return update_of_cols_match(trigger.tgattr.as_slice(), self.modified_cols);
         }
         true
+    }
+
+    fn reset_per_tuple(&mut self) {
+        if let Some(cx) = self.cache.per_tuple.as_deref_mut() {
+            cx.reset();
+        }
     }
 
     fn compile(&mut self, idx: usize, trigger: &Trigger<'_>, rel: &Relation<'mcx>) -> PgResult<()> {
@@ -241,8 +250,18 @@ impl<'a, 'mcx> TriggerWhenEval<'a, 'mcx> {
             nodes_core::fix_opfuncids(folded)?;
             planned.lappend(self.mcx, folded)?;
         }
-        self.cache.states[idx] =
-            execexpr::exec_init_qual(self.mcx, &planned, execexpr::ParamBind::NONE)?;
+        let mut state = execexpr::exec_init_qual(self.mcx, &planned, execexpr::ParamBind::NONE)?;
+        let parent = self.mcx;
+        let per_tuple = self
+            .cache
+            .per_tuple
+            .get_or_insert_with(|| Box::new(parent.context().new_child_wholesale("TriggerWhen per-tuple")));
+        if let Some(st) = state.as_deref_mut() {
+            // SAFETY: the boxed context is owned by the cache that owns this
+            // state and is only reset between evaluations.
+            unsafe { st.arm_result_mcx_raw(per_tuple.mcx()) };
+        }
+        self.cache.states[idx] = state;
         Ok(())
     }
 
@@ -262,6 +281,7 @@ impl<'a, 'mcx> TriggerWhenEval<'a, 'mcx> {
             return Ok(true);
         }
         self.compile(idx, trigger, rel)?;
+        self.reset_per_tuple();
         let mut slots = execexpr::EvalSlots { scan: None, inner: old_slot, outer: new_slot };
         execexpr::exec_qual(self.cache.states[idx].as_deref_mut(), &mut slots)
     }
@@ -284,6 +304,7 @@ impl<'a, 'mcx> TriggerWhenEval<'a, 'mcx> {
             return Ok(true);
         }
         self.compile(idx, trigger, rel)?;
+        self.reset_per_tuple();
         let mcx = self.mcx;
         let stage = |slot: &mut Option<SlotData<'mcx>>, tup: Option<&HeapTupleData<'_>>| {
             let Some(tup) = tup else { return Ok::<_, Box<PgError>>(None) };

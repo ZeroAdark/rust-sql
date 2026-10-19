@@ -7,7 +7,7 @@
 -- C PostgreSQL 18.6.
 \set VERBOSITY verbose
 \pset pager off
--- fp-partitioning-partbounds-p1#1: list-partition bound merge over a by-ref
+-- regression: list-partition bound merge over a by-ref
 -- range key (planner comparator frame armed with a result context)
 CREATE TABLE b30_pa (k int4range) PARTITION BY LIST (k);
 CREATE TABLE b30_pa1 PARTITION OF b30_pa FOR VALUES IN ('[1,3)');
@@ -33,7 +33,7 @@ SELECT * FROM b30_pa LEFT JOIN b30_pb USING (k) ORDER BY k;
 
 RESET enable_partitionwise_join;
 DROP TABLE b30_pa, b30_pb;
--- fp-partitioning-partprune-p1#1: ANY(array) over a partition key where the
+-- regression: ANY(array) over a partition key where the
 -- array Const keeps a stored short header (custom-plan parameter binding)
 CREATE TABLE b30_p (k int) PARTITION BY LIST (k);
 CREATE TABLE b30_p1 PARTITION OF b30_p FOR VALUES IN (1);
@@ -56,7 +56,7 @@ SELECT a, b30_count_p(a) FROM b30_args ORDER BY a;
 RESET plan_cache_mode;
 DROP FUNCTION b30_count_p(int[]);
 DROP TABLE b30_p, b30_args;
--- fp-plan-createplan-p2#1: MIN/MAX optimization keeps the HAVING predicates
+-- regression: MIN/MAX optimization keeps the HAVING predicates
 -- in their written order (C passes the quals straight to the Result node)
 CREATE TABLE b30_mm (a int PRIMARY KEY);
 INSERT INTO b30_mm SELECT generate_series(1, 1000);
@@ -94,7 +94,7 @@ RESET enable_seqscan;
 DROP FUNCTION b30_mm_first(int), b30_mm_second(int);
 DROP SEQUENCE b30_mm_seq;
 DROP TABLE b30_mm;
--- fp-plan-createplan-p2#2: parameterized NamedTuplestoreScan quals get
+-- regression: parameterized NamedTuplestoreScan quals get
 -- their outer Vars replaced by nestloop Params
 CREATE TABLE b30_outer (x int);
 INSERT INTO b30_outer VALUES (1), (2), (3);
@@ -121,7 +121,7 @@ SELECT * FROM b30_counts ORDER BY n;
 
 DROP TABLE b30_src, b30_counts, b30_outer;
 DROP FUNCTION b30_src_trg();
--- fp-util-clauses-p2#1: functions inlined while preprocessing a function RTE
+-- regression: functions inlined while preprocessing a function RTE
 -- are recorded as plan dependencies, so redefining one invalidates the
 -- cached generic plan
 CREATE FUNCTION b30_g() RETURNS integer LANGUAGE sql STABLE AS 'SELECT 1';
@@ -152,7 +152,7 @@ DEALLOCATE b30_p;
 RESET plan_cache_mode;
 DROP FUNCTION b30_f();
 DROP FUNCTION b30_g();
--- fp-util-var#1: a NULL Const substituted into a join alias by subquery
+-- regression: a NULL Const substituted into a join alias by subquery
 -- pull-up stays a whole-row field; only dropped columns are skipped
 CREATE TABLE b30_t (x integer);
 INSERT INTO b30_t VALUES (1);

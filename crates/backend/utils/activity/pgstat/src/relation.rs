@@ -337,6 +337,12 @@ pub fn pgstat_drop_relation(relid: Oid, relisshared: bool) {
         relid as u64,
     );
 
+    // Keep pending transaction counters when tracking is disabled.
+    // The transactional drop above still proceeds.
+    if !crate::pgstat_track_counts() {
+        return;
+    }
+
     let key = relation_key(relid, relisshared);
     pending::with_state(|st| {
         if !st.have_pending(key) {
@@ -447,7 +453,8 @@ pub fn pgstat_report_vacuum(
             tabentry.total_vacuum_time += elapsedtime;
         }
     });
-    // C flushes IO stats here (pgstat_flush_io/pgstat_flush_backend): IO-stats lane.
+    crate::io::pgstat_flush_io(false);
+    crate::backend::pgstat_flush_backend(false, crate::backend::PGSTAT_BACKEND_FLUSH_IO);
 }
 
 pub fn pgstat_report_analyze(
@@ -501,7 +508,8 @@ pub fn pgstat_report_analyze(
             tabentry.total_analyze_time += elapsedtime;
         }
     });
-    // C flushes IO stats here (pgstat_flush_io/pgstat_flush_backend): IO-stats lane.
+    crate::io::pgstat_flush_io(false);
+    crate::backend::pgstat_flush_backend(false, crate::backend::PGSTAT_BACKEND_FLUSH_IO);
 }
 
 pub fn pgstat_fetch_stat_tabentry(relid: Oid) -> Option<crate::shmem::PgStat_StatTabEntry> {

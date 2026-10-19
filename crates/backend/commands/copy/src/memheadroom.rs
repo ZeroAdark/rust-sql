@@ -1,4 +1,4 @@
-//! Container-aware memory headroom (GL-COPYFAST-1 §3 defect row, the
+//! Container-aware memory headroom (regression §3 defect row, the
 //! memruns auto-sizing fix).
 //!
 //! The defect: on the CI cluster's 27Gi pods the container-leaf
@@ -136,7 +136,11 @@ fn headroom_with(root: &Path, self_cgroup: &str, meminfo: &str) -> Option<u64> {
         }
     } else if let Some(rel) = &v2_rel {
         let (b, leaf_visible) = walk(root, rel, true);
-        (b, !rel.is_empty() && leaf_visible)
+        // memory.max exists only on non-root cgroups: a mount root carrying
+        // one is a private cgroupns view whose ancestors (and their limits)
+        // are invisible, whichever child we sit in.
+        let host_root = !root.join("memory.max").exists();
+        (b, !rel.is_empty() && leaf_visible && host_root)
     } else {
         // No cgroup membership lines at all: bare environment.
         (None, true)
@@ -245,6 +249,19 @@ mod tests {
         f.write("", "memory.max", "max\n");
         f.write("", "memory.current", "1024\n");
         assert_eq!(headroom_with(&f.root, "0::/\n", MEMINFO), None);
+    }
+
+    /// The same private-cgroupns posture with the process in a CHILD of the
+    /// namespace root ("0::/app.scope"): the mount root carries memory.max,
+    /// so the pod-slice limit above it is invisible — refuse, never meminfo.
+    #[test]
+    fn v2_namespaced_child_refuses_meminfo() {
+        let f = Fixture::new("v2-nschild");
+        f.write("", "memory.max", "max\n");
+        f.write("", "memory.current", "1024\n");
+        f.write("app.scope", "memory.max", "max\n");
+        f.write("app.scope", "memory.current", "1024\n");
+        assert_eq!(headroom_with(&f.root, "0::/app.scope\n", MEMINFO), None);
     }
 
     /// A non-root leaf whose directory is missing under the mount is a

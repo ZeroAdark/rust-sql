@@ -230,3 +230,17 @@ fn exit_unwind_predicate_covers_all_three_fatal_payloads() {
         "generic panics stay containable (class-4 demote-to-ERROR)"
     );
 }
+
+#[test]
+fn relayed_debug_reports_are_reconstructed_as_debug1() {
+    // pqmq.c:242-250 (audit regression): the leader applies its logging
+    // thresholds to DEBUG1 for every worker DEBUG level; other levels pass.
+    use types_error::{DEBUG2, DEBUG5, INFO, LOG, NOTICE};
+    assert_eq!(relayed_notice_level(DEBUG5), DEBUG1);
+    assert_eq!(relayed_notice_level(DEBUG2), DEBUG1);
+    assert_eq!(relayed_notice_level(DEBUG1), DEBUG1);
+    assert_eq!(relayed_notice_level(LOG), LOG);
+    assert_eq!(relayed_notice_level(INFO), INFO);
+    assert_eq!(relayed_notice_level(NOTICE), NOTICE);
+    assert_eq!(relayed_notice_level(WARNING), WARNING);
+}

@@ -582,7 +582,7 @@ fn oversized_record_error_matches_c() {
 // AllocSetContextCreate(TopMemoryContext, "WAL record construction") context,
 // which pg_backend_memory_contexts lists (C: one row per backend); the pre-fix
 // port allocated them on the plain heap and the row was absent.
-// Audit fp-transam-xloginsert#1.
+// Audit regression.
 #[test]
 fn init_xlog_insert_registers_the_wal_record_construction_context() {
     mcxt_stats::init_seams();

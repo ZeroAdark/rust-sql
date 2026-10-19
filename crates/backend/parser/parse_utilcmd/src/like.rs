@@ -665,11 +665,9 @@ pub fn generateClonedIndexStmt<'mcx>(
             stmt.initdeferred = condeferred;
             constraint_oid = constraint_id;
 
-            // C rebuilds excludeOpNames from conexclop for every
-            // indisexclusion index. DIVERGENCE (kept): WITHOUT OVERLAPS
-            // clones stay NIL — DefineIndex re-derives the same operators
-            // via GetOperatorFromCompareType.
-            if idxrec.indisexclusion && !iswithoutoverlaps {
+            // conexclop is rebuilt for every indisexclusion index, WITHOUT
+            // OVERLAPS included: ChooseIndexName keys the "excl" suffix on it.
+            if idxrec.indisexclusion {
                 let ops = relcache_build_seams::scan_exclusion_ops::call(
                     mcx,
                     indrelid,

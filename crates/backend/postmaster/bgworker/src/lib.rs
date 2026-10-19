@@ -122,6 +122,9 @@ struct RegisteredBgWorker {
     crashed_at: i64,
     shmem_slot: i32,
     terminate: bool,
+    // Registration order; C's BackgroundWorkerList is head-inserted
+    // (bgworker.c:1032, :455), so every traversal sees the newest first.
+    seq: u64,
 }
 
 struct Registry {
@@ -130,6 +133,7 @@ struct Registry {
     parallel_terminate_count: u32,
     slots: Vec<BackgroundWorkerSlot>,
     registered: Vec<Option<RegisteredBgWorker>>,
+    next_seq: u64,
 }
 
 static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
@@ -209,7 +213,8 @@ pub fn BackgroundWorkerShmemInit() -> PgResult<()> {
     let (_raw, _found) = shmem::ShmemInitStruct("Background Worker Data", BackgroundWorkerShmemSize()?)?;
     let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
     let total_slots = g::max_worker_processes() as usize;
-    let mut registered = guard.take().map(|r| r.registered).unwrap_or_default();
+    let (mut registered, mut next_seq) =
+        guard.take().map(|r| (r.registered, r.next_seq)).unwrap_or_default();
     // First init: adopt the static registrations (C copies BackgroundWorkerList
     // entries into slots here; on crash re-init the surviving `registered`
     // entries are re-slotted instead and the pending list is already empty).
@@ -220,7 +225,9 @@ pub fn BackgroundWorkerShmemInit() -> PgResult<()> {
             crashed_at: 0,
             shmem_slot: -1,
             terminate: false,
+            seq: next_seq,
         }));
+        next_seq += 1;
     }
     let mut slots: Vec<BackgroundWorkerSlot> = (0..total_slots)
         .map(|_| BackgroundWorkerSlot {
@@ -251,6 +258,7 @@ pub fn BackgroundWorkerShmemInit() -> PgResult<()> {
         parallel_terminate_count: 0,
         slots,
         registered,
+        next_seq,
     });
     Ok(())
 }
@@ -357,7 +365,9 @@ pub fn BackgroundWorkerStateChange(allow_new_workers: bool) {
                 crashed_at: 0,
                 shmem_slot: slotno as i32,
                 terminate: false,
+                seq: reg.next_seq,
             };
+            reg.next_seq += 1;
             match reg.registered.iter_mut().find(|e| e.is_none()) {
                 Some(hole) => *hole = Some(rw),
                 None => reg.registered.push(Some(rw)),
@@ -580,7 +590,10 @@ pub fn RegisterBackgroundWorker(worker: &BackgroundWorker) -> PgResult<()> {
     // C runs the sanity checks at LOG elevel here: reject the registration
     // but keep the postmaster going.
     if let Err(e) = SanityCheckBackgroundWorker(&mut worker) {
-        let _ = ereport(LOG).errmsg(e.message().to_string()).finish(loc(0, "RegisterBackgroundWorker"));
+        let _ = ereport(LOG)
+            .errcode(e.sqlstate)
+            .errmsg(e.message().to_string())
+            .finish(loc(0, "RegisterBackgroundWorker"));
         return Ok(());
     }
 
@@ -701,7 +714,9 @@ pub fn RegisterDynamicBackgroundWorker(
                             crashed_at: 0,
                             shmem_slot: slotno as i32,
                             terminate: false,
+                            seq: reg.next_seq,
                         };
+                        reg.next_seq += 1;
                         match reg.registered.iter_mut().find(|e| e.is_none()) {
                             Some(hole) => *hole = Some(rw),
                             None => reg.registered.push(Some(rw)),
@@ -838,9 +853,13 @@ pub fn find_registered_worker_by_pid(pid: pid_t) -> Option<usize> {
     })
 }
 
+/// Registered workers in C's BackgroundWorkerList traversal order: newest
+/// registration first (head insertion, bgworker.c:1032 and :455).
 pub fn registered_indexes() -> Vec<usize> {
     with_registry(|reg| {
-        (0..reg.registered.len()).filter(|&i| reg.registered[i].is_some()).collect()
+        let mut idx: Vec<usize> = (0..reg.registered.len()).filter(|&i| reg.registered[i].is_some()).collect();
+        idx.sort_by_key(|&i| std::cmp::Reverse(reg.registered[i].as_ref().map_or(0, |rw| rw.seq)));
+        idx
     })
 }
 

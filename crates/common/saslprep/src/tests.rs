@@ -105,3 +105,14 @@ fn utf8_roundtrip_helpers_match_wchar() {
         assert_eq!(wchar::utf8_to_unicode(&buf[..len]), cp);
     }
 }
+
+#[test]
+fn oversized_input_declines_before_allocating_like_c_oom() {
+    // saslprep.c:1093: input_size >= MaxAllocSize / sizeof(pg_wchar) is
+    // SASLPREP_OOM, which the SCRAM callers treat like "use the raw password".
+    let limit = mcx::MAX_ALLOC_SIZE / core::mem::size_of::<pg_wchar>();
+    let mut input = vec![b'a'; limit - 1];
+    input.extend_from_slice("\u{00ad}".as_bytes());
+    let cx = MemoryContext::new("test-saslprep-oversized");
+    assert!(pg_saslprep(cx.mcx(), &input).unwrap().is_none());
+}

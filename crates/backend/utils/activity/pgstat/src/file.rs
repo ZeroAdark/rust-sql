@@ -10,7 +10,7 @@
 use core::mem::size_of;
 
 use elog::{elog, ereport};
-use types_error::{ErrorLocation, PgResult, ERROR, LOG, WARNING};
+use types_error::{ErrorLocation, PgResult, DEBUG2, ERROR, LOG, WARNING};
 
 use crate::pending::{
     PgStat_HashKey, PgStat_Kind, PGSTAT_KIND_ARCHIVER, PGSTAT_KIND_BACKEND, PGSTAT_KIND_BGWRITER,
@@ -143,6 +143,7 @@ fn push_fixed<T: Copy>(out: &mut Vec<u8>, kind: PgStat_Kind, v: &T) {
 pub(crate) fn pgstat_write_statsfile() -> PgResult<()> {
     let tmp = stat_path(PGSTAT_STAT_PERMANENT_TMPFILE);
     let dst = stat_path(PGSTAT_STAT_PERMANENT_FILENAME);
+    let _ = elog(DEBUG2, format!("writing stats file \"{PGSTAT_STAT_PERMANENT_FILENAME}\""));
     // vfs-routed (provider-seam reroute): pg_stat/ is datadir domain;
     // std::fs would bypass the sim namespace. pg_stat is one level deep.
     // C never creates the directory (initdb does); a failure here surfaces
@@ -429,12 +430,16 @@ pub(crate) fn read_statsfile_body(buf: &[u8]) -> Option<()> {
                     let name = String::from_utf8_lossy(&namebuf[..nul]);
                     // from_serialized_name: drop stats for slots removed while
                     // shut down (StartupReplicationSlots runs before restore).
-                    let index = match core::str::from_utf8(&namebuf[..nul]) {
-                        Ok(name) => slot_seams::named_replication_slot_info::call(name, true)
-                            .map(|(index, _)| index)
-                            .unwrap_or(-1),
-                        Err(_) => -1,
-                    };
+                    let mut index = -1;
+                    if let Ok(name) = core::str::from_utf8(&namebuf[..nul]) {
+                        let _ = slot_seams::with_named_replication_slot_info::call(
+                            name,
+                            &mut |i, _| {
+                                index = i;
+                                Ok(())
+                            },
+                        );
+                    }
                     if index < 0 {
                         // skip over data for entry we don't care about
                         if c.take(entry_len(kind)).is_none() {
@@ -494,6 +499,7 @@ pub(crate) fn read_statsfile_body(buf: &[u8]) -> Option<()> {
 pub(crate) fn pgstat_read_statsfile() {
     let path = stat_path(PGSTAT_STAT_PERMANENT_FILENAME);
     let path_s = path.to_str().expect("stat paths are UTF-8");
+    let _ = elog(DEBUG2, format!("reading stats file \"{PGSTAT_STAT_PERMANENT_FILENAME}\""));
     // vfs-routed (provider-seam reroute).
     let buf = match fd::read_whole_file(path_s) {
         Ok(buf) => buf,
@@ -518,6 +524,10 @@ pub(crate) fn pgstat_read_statsfile() {
         );
         pgstat_reset_after_failure();
     }
+    let _ = elog(
+        DEBUG2,
+        format!("removing permanent stats file \"{PGSTAT_STAT_PERMANENT_FILENAME}\""),
+    );
     let _ = fd::pg_unlink(path_s);
 }
 
@@ -529,15 +539,27 @@ pub fn pgstat_restore_stats() -> PgResult<()> {
 // pgstat_discard_stats (pgstat.c:519-547).
 pub fn pgstat_discard_stats() -> PgResult<()> {
     let path = stat_path(PGSTAT_STAT_PERMANENT_FILENAME);
-    if fd::pg_unlink(path.to_str().expect("stat paths are UTF-8")) != 0
-        && fd::get_errno() != libc::ENOENT
-    {
-        log_file_error(
-            fd::get_errno(),
-            format!(
-                "could not unlink permanent statistics file \"{PGSTAT_STAT_PERMANENT_FILENAME}\": %m"
-            ),
-            "pgstat_discard_stats",
+    if fd::pg_unlink(path.to_str().expect("stat paths are UTF-8")) != 0 {
+        if fd::get_errno() == libc::ENOENT {
+            let _ = elog(
+                DEBUG2,
+                format!(
+                    "didn't need to unlink permanent stats file \"{PGSTAT_STAT_PERMANENT_FILENAME}\" - didn't exist"
+                ),
+            );
+        } else {
+            log_file_error(
+                fd::get_errno(),
+                format!(
+                    "could not unlink permanent statistics file \"{PGSTAT_STAT_PERMANENT_FILENAME}\": %m"
+                ),
+                "pgstat_discard_stats",
+            );
+        }
+    } else {
+        let _ = elog(
+            DEBUG2,
+            format!("unlinked permanent statistics file \"{PGSTAT_STAT_PERMANENT_FILENAME}\""),
         );
     }
     pgstat_reset_after_failure();

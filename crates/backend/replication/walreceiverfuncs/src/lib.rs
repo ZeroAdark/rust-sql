@@ -19,6 +19,7 @@ use types_core::{
 use types_error::PgResult;
 
 pub const MAXCONNINFO: usize = 1024;
+pub const NI_MAXHOST: usize = 1025;
 pub const NAMEDATALEN: usize = 64;
 const WALRCV_STARTUP_TIMEOUT: pg_time_t = 10;
 const WAIT_EVENT_WAL_RECEIVER_EXIT: u32 = 0x0800_0000 | 53;
@@ -242,7 +243,7 @@ pub fn ShutdownWalRcv() -> PgResult<()> {
     Ok(())
 }
 
-fn strlcpy_trunc(s: &str, size: usize) -> String {
+pub fn strlcpy_trunc(s: &str, size: usize) -> String {
     let mut n = s.len().min(size - 1);
     while n > 0 && !s.is_char_boundary(n) {
         n -= 1;

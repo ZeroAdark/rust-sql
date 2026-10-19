@@ -4559,7 +4559,7 @@ mod bound_gate {
         assert!(!crate::session_residue(), "hint cleared by the gate");
     }
 
-    /// POOL-QOS memory governor (GL-CONCMEM-1): the bar spelling is
+    /// POOL-QOS memory governor (regression): the bar spelling is
     /// unit-pinned — `0`/`off` DISARM (Some(0)), a positive integer arms at
     /// that many KB, anything else falls through to the auto (cgroup) arm.
     #[test]

@@ -221,21 +221,24 @@ pub fn ExecuteTruncateGuts<'mcx>(
     }
     if any_triggers {
         trigger::AfterTriggerBeginQuery();
-        for (rel, entry) in rels.iter().zip(trig_state.iter_mut()) {
-            if let Some((td, fmgr, when_cache)) = entry.as_mut() {
-                // Fire BEFORE STATEMENT triggers as the table owner when asked
-                // (tablecmds.c:2139, logical replication apply).
-                let ucxt = switch_to_table_owner(mcx, rel, run_as_table_owner)?;
+    }
+    // tablecmds.c:2139: the owner switch (and its SET ROLE check) runs for
+    // every relation, triggers or not (logical replication apply).
+    for (rel, entry) in rels.iter().zip(trig_state.iter_mut()) {
+        let ucxt = switch_to_table_owner(mcx, rel, run_as_table_owner)?;
+        let r = match entry.as_mut() {
+            Some((td, fmgr, when_cache)) => {
                 let mut when = trigger::TriggerWhenEval {
                     mcx,
                     cache: when_cache,
                     modified_cols: None,
                 };
-                let r = trigger::ExecBSTruncateTriggers(mcx, rel, td, fmgr, &mut when);
-                restore_user_context(&ucxt)?;
-                r?;
+                trigger::ExecBSTruncateTriggers(mcx, rel, td, fmgr, &mut when)
             }
-        }
+            None => Ok(()),
+        };
+        restore_user_context(&ucxt)?;
+        r?;
     }
 
     let my_subid = xact::GetCurrentSubTransactionId();
@@ -466,8 +469,12 @@ fn truncate_check_rel(
 fn truncate_check_perms(relid: Oid, relkind: u8, relname: &str) -> PgResult<()> {
     let aclresult = aclchk::pg_class_aclcheck(relid, miscinit::GetUserId(), adt_acl::ACL_TRUNCATE)?;
     if aclresult != aclchk::ACLCHECK_OK {
-        let _ = relkind; // get_relkind_objtype: both reachable relkinds map to OBJECT_TABLE
-        aclchk_seams::aclcheck_error::call(aclresult, ObjectType::OBJECT_TABLE as i32, relname)?;
+        let objtype = if relkind == types_rel::RELKIND_FOREIGN_TABLE {
+            ObjectType::OBJECT_FOREIGN_TABLE
+        } else {
+            ObjectType::OBJECT_TABLE
+        };
+        aclchk_seams::aclcheck_error::call(aclresult, objtype as i32, relname)?;
     }
     Ok(())
 }

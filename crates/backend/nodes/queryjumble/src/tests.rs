@@ -193,3 +193,42 @@ fn jumble_buffer_overflow_folds() {
     JumbleQuery(mcx, &mut q).unwrap();
     assert_ne!(q.queryId, 0);
 }
+
+#[test]
+fn nil_list_cell_jumbles_as_a_pending_null() {
+    EnableQueryId();
+    let ctx = MemoryContext::new_bump("qjumble-test");
+    let mcx = ctx.mcx();
+
+    // C's NIL is a NULL pointer: gram.y's list_make2($1, NIL) (func_table)
+    // and BEGIN ATOMIC END store a NIL cell that _jumbleNode(NULL) folds into
+    // pending_nulls; the port boxes it as an empty List node, which must not
+    // emit a T_List tag of its own.
+    // Two NIL cells: T_List's tag value (1) is also a one-null count, so a
+    // single cell could not tell the two byte streams apart.
+    let mut cells = NodeList::nil();
+    cells.lappend(mcx, Node::mk_list(mcx, NodeList::nil()).unwrap()).unwrap();
+    cells.lappend(mcx, Node::mk_list(mcx, NodeList::nil()).unwrap()).unwrap();
+    cells.lappend(mcx, Node::mk_string(mcx, "x").unwrap()).unwrap();
+    let mut q = Query {
+        commandType: types_nodes::nodes_enums::CmdType::CMD_UTILITY,
+        utilityStmt: Some(Node::mk_list(mcx, cells).unwrap()),
+        ..Default::default()
+    };
+    let js = JumbleQuery(mcx, &mut q).unwrap();
+    let bytes = &js.jumble[..js.jumble_len];
+    let list_tag = (types_nodes::NodeTag::T_List as u16 as u32).to_ne_bytes();
+    let mut expected = list_tag.to_vec();
+    expected.extend_from_slice(&2u32.to_ne_bytes());
+    expected.extend_from_slice(&(types_nodes::NodeTag::T_String as u16 as u32).to_ne_bytes());
+    expected.extend_from_slice(b"x\0");
+    assert!(
+        bytes.windows(expected.len()).any(|w| w == expected.as_slice()),
+        "outer T_List tag, two pending nulls flushed, then the tagged string"
+    );
+    let three_tags = [list_tag, list_tag, list_tag].concat();
+    assert!(
+        !bytes.windows(three_tags.len()).any(|w| w == three_tags.as_slice()),
+        "an empty list cell must not add a T_List tag"
+    );
+}

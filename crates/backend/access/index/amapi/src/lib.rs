@@ -66,15 +66,34 @@ fn resolve_extension_handler(amhandler: Oid) -> PgResult<IndexAmKind> {
     let Some(name) = syscache_seams::pg_proc_proname::call(amhandler)? else {
         return Err(proc_lookup_failed(amhandler));
     };
-    match name.name_str() {
-        b"hnswhandler" => return Ok(IndexAmKind::Hnsw),
-        b"blhandler" => return Ok(IndexAmKind::Bloom),
-        _ => {}
-    }
-    match fmgr_core::internal_builtin_of(amhandler)?.and_then(|b| builtin_index_am(b.foid)) {
-        Some(kind) => Ok(kind),
-        None => Err(not_an_am_routine(amhandler)),
-    }
+    // A LANGUAGE internal alias dispatches by prosrc whatever its SQL name
+    // (fmgr.c:236-247), so it resolves before the proname arms.
+    let kind = match fmgr_core::internal_builtin_of(amhandler)?
+        .and_then(|b| builtin_index_am(b.foid))
+    {
+        Some(kind) => kind,
+        None => match name.name_str() {
+            b"hnswhandler" => IndexAmKind::Hnsw,
+            b"blhandler" => IndexAmKind::Bloom,
+            _ => return Err(not_an_am_routine(amhandler)),
+        },
+    };
+    apply_handler_proconfig(amhandler)?;
+    Ok(kind)
+}
+
+// fmgr_security_definer's proconfig arm (fmgr.c:724-726, 654-676): a handler
+// declared with SET options applies them around the (no-op) call.
+fn apply_handler_proconfig(amhandler: Oid) -> PgResult<()> {
+    let Some(row) = syscache_seams::lookup_pg_proc_secdef::call(amhandler)? else {
+        return Ok(());
+    };
+    let Some(cfg) = row.proconfig else {
+        return Ok(());
+    };
+    let save_nestlevel = guc_seams::new_guc_nest_level::call();
+    guc_seams::process_guc_array_secdef::call(&cfg)?;
+    guc_seams::at_eoxact_guc::call(true, save_nestlevel)
 }
 
 pub fn GetIndexAmRoutineByAmId(amoid: Oid, noerror: bool) -> PgResult<Option<IndexAmKind>> {
@@ -124,8 +143,15 @@ pub fn IndexAmTranslateStrategy(
 
     let kind = GetIndexAmRoutineByAmId(amoid, false)?.expect("noerror=false returned Some");
     let result = match kind {
-        // bttranslatestrategy outside 1..=5 (the shortcut covered the rest).
-        IndexAmKind::Btree => COMPARE_INVALID,
+        // bttranslatestrategy (nbtree.c:1763): any AM whose handler is
+        // bthandler translates 1..=5, not only BTREE_AM_OID.
+        IndexAmKind::Btree => {
+            if strategy > InvalidStrategy && strategy <= BTMaxStrategyNumber {
+                strategy as CompareType
+            } else {
+                COMPARE_INVALID
+            }
+        }
         // hashtranslatestrategy: only HTEqualStrategyNumber -> COMPARE_EQ.
         IndexAmKind::Hash => {
             if strategy == 1 {
@@ -170,8 +196,15 @@ pub fn IndexAmTranslateCompareType(
 
     let kind = GetIndexAmRoutineByAmId(amoid, false)?.expect("noerror=false returned Some");
     let result = match kind {
-        // bttranslatecmptype outside COMPARE_LT..=COMPARE_GT.
-        IndexAmKind::Btree => InvalidStrategy,
+        // bttranslatecmptype (nbtree.c:1783): any AM whose handler is
+        // bthandler translates COMPARE_LT..=COMPARE_GT, not only BTREE_AM_OID.
+        IndexAmKind::Btree => {
+            if cmptype > COMPARE_INVALID && cmptype <= COMPARE_GT {
+                cmptype as StrategyNumber
+            } else {
+                InvalidStrategy
+            }
+        }
         // hashtranslatecmptype: only COMPARE_EQ -> HTEqualStrategyNumber.
         IndexAmKind::Hash => {
             if cmptype == types_pathnodes::COMPARE_EQ {

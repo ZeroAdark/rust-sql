@@ -134,8 +134,11 @@ fn CheckCertAuth(port: &Port) -> PgResult<i32> {
     let hba = port.hba.as_ref().expect("CheckCertAuth: port->hba is NULL");
     let user_name = port.user_name.as_deref().unwrap_or("");
 
-    let peer_username = if hba.clientcertname == clientCertDN {
-        port.peer_dn.as_deref()
+    // auth.c:2700-2739: peer_username is the raw certificate bytes (the DN
+    // rendering is RFC2253-escaped ASCII; the CN is whatever OpenSSL copied
+    // out) and check_usermap strcmp's them.
+    let peer_username: Option<&[u8]> = if hba.clientcertname == clientCertDN {
+        port.peer_dn.as_deref().map(str::as_bytes)
     } else {
         port.peer_cn.as_deref()
     };
@@ -326,8 +329,11 @@ const IDENT_PORT: u16 = 113;
 // else is None. Byte-walk with a NUL-past-end cursor, matching C's string
 // scan; C's out-of-string scans (only reachable when blank-skipping consumes
 // the final CR) become bounded failure arms here.
+// The user name is returned as the reply's bytes (C's ident_user char
+// buffer): it is the authenticated identity check_usermap strcmp's, so a
+// non-UTF-8 name maps through pg_ident.conf exactly as in C.
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
-fn interpret_ident_response(ident_response: &[u8]) -> Option<String> {
+fn interpret_ident_response(ident_response: &[u8]) -> Option<Vec<u8>> {
     // C reads a NUL-terminated buffer; stop at the first NUL like strlen.
     let nul = ident_response
         .iter()
@@ -400,7 +406,7 @@ fn interpret_ident_response(ident_response: &[u8]) -> Option<String> {
         ident_user.push(at(cursor));
         cursor += 1;
     }
-    Some(String::from_utf8_lossy(&ident_user).into_owned())
+    Some(ident_user)
 }
 
 // Closes the Ident socket on every exit path (C's ident_inet_done label).
@@ -498,8 +504,10 @@ fn ident_inet(port: &Port) -> PgResult<i32> {
     if let Some(ident_user) = ident_user {
         // Success!  Store the identity, then check the usermap. Note that
         // setting the authenticated identity is done before checking the
-        // usermap, because at this point authentication has succeeded.
-        set_authn_id(port, &ident_user)?;
+        // usermap, because at this point authentication has succeeded
+        // (auth.c:1836-1837). The usermap sees the reply bytes; only the
+        // text-typed authn id (log lines, system_user()) renders them.
+        set_authn_id(port, &String::from_utf8_lossy(&ident_user))?;
         let hba = port.hba.as_ref().expect("ident_inet: port->hba is NULL");
         return hba::check_usermap(
             hba.usermap.as_deref(),
@@ -524,7 +532,7 @@ fn ident_inet_exchange(
     remote_port: &str,
     local_port: &str,
     ident_port: &str,
-) -> PgResult<Option<String>> {
+) -> PgResult<Option<Vec<u8>>> {
     // Bind to the address which the client originally contacted, otherwise
     // the ident server won't be able to match up the right connection. This
     // is necessary if the PostgreSQL server is running on an IP alias.
@@ -724,18 +732,20 @@ fn auth_peer(port: &Port) -> PgResult<i32> {
 
     // Copy out of the getpwuid_r buffer before check_usermap; this is our
     // authenticated identity, set before checking the map so the log
-    // reflects that authentication succeeded.
+    // reflects that authentication succeeded (auth.c:1903-1905). The usermap
+    // strcmp's pw_name's bytes as C does; the text-typed authn id renders them.
+    // SAFETY: getpwuid_r returned 0 with a non-NULL pw, so pw_name points at
+    // a NUL-terminated string inside `buf`.
     let pw_name = unsafe { std::ffi::CStr::from_ptr(pwbuf.pw_name) }
-        .to_string_lossy()
-        .into_owned();
-    set_authn_id(port, &pw_name)?;
+        .to_bytes()
+        .to_vec();
+    set_authn_id(port, &String::from_utf8_lossy(&pw_name))?;
 
     let hba = port.hba.as_ref().expect("auth_peer: port->hba is NULL");
-    let (authn_id, _) = miscinit::client_connection_info();
     hba::check_usermap(
         hba.usermap.as_deref(),
         port.user_name.as_deref().unwrap_or(""),
-        authn_id.expect("authn_id set by set_authn_id"),
+        &pw_name,
         false,
     )
 }

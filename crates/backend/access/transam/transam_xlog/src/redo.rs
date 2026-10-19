@@ -58,8 +58,16 @@ fn panic_err(msg: String) -> Box<PgError> {
     Box::new(PgError::new(PANIC, msg))
 }
 
-fn RecoveryRestartPoint(check_point: &CheckPoint, record: &XLogReaderState) {
+pub(crate) fn RecoveryRestartPoint(check_point: &CheckPoint, record: &XLogReaderState) {
     if xlogutils::XLogHaveInvalidPages() {
+        let _ = elog::elog(
+            types_error::DEBUG2,
+            format!(
+                "could not record restart point at {:X}/{:X} because there are unresolved references to invalid pages",
+                check_point.redo >> 32,
+                check_point.redo as u32
+            ),
+        );
         return;
     }
     let ctl = XLogCtl();

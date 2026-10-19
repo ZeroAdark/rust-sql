@@ -1680,7 +1680,7 @@ fn search_indexed_tlist_for_sortgroupref<'mcx>(
             varreturningtype: types_nodes::primnodes::VarReturningType::VAR_RETURNING_DEFAULT,
             varnosyn: 0,
             varattnosyn: 0,
-            location: expr_location(node),
+            location: -1,
         };
         return Ok(Some(Node::mk(run.mcx, newvar)?));
     }
@@ -1886,12 +1886,6 @@ fn fix_upper_expr<'mcx>(
                     fix_upper_expr(run, d, subplan_tlist, rtoffset, newvarno, num_exec)?,
                 )?;
             }
-            let aggfilter = match a.aggfilter {
-                None => None,
-                Some(f) => {
-                    Some(fix_upper_expr(run, f, subplan_tlist, rtoffset, newvarno, num_exec)?)
-                }
-            };
             let mut args = NodeList::nil();
             for arg_node in &a.args {
                 let arg = arg_node.as_target_entry().expect("agg arg is a TLE");
@@ -1910,6 +1904,12 @@ fn fix_upper_expr<'mcx>(
                 )?;
                 args.lappend(mcx, new_tle)?;
             }
+            let aggfilter = match a.aggfilter {
+                None => None,
+                Some(f) => {
+                    Some(fix_upper_expr(run, f, subplan_tlist, rtoffset, newvarno, num_exec)?)
+                }
+            };
             Node::mk(
                 mcx,
                 types_nodes::primnodes::Aggref {
@@ -1985,13 +1985,6 @@ fn fix_upper_expr<'mcx>(
                     Some(fix_upper_expr(run, f, subplan_tlist, rtoffset, newvarno, num_exec)?)
                 }
             };
-            let mut run_condition = NodeList::nil();
-            for rc in &wf.runCondition {
-                run_condition.lappend(
-                    mcx,
-                    fix_upper_expr(run, rc, subplan_tlist, rtoffset, newvarno, num_exec)?,
-                )?;
-            }
             Node::mk(
                 mcx,
                 types_nodes::primnodes::WindowFunc {
@@ -2001,7 +1994,7 @@ fn fix_upper_expr<'mcx>(
                     inputcollid: wf.inputcollid,
                     args,
                     aggfilter,
-                    runCondition: run_condition,
+                    runCondition: wf.runCondition.clone_in(mcx)?,
                     winref: wf.winref,
                     winstar: wf.winstar,
                     winagg: wf.winagg,
@@ -2854,14 +2847,14 @@ fn fix_scan_expr_mutator<'mcx>(
                 vartype: var.vartype,
                 vartypmod: var.vartypmod,
                 varcollid: var.varcollid,
-                varnullingrels: types_nodes::bitmapset::Bitmapset::empty(),
+                varnullingrels: var.varnullingrels.clone_in(mcx)?,
                 varlevelsup: 0,
                 varreturningtype: var.varreturningtype,
                 varnosyn: var.varnosyn,
                 varattnosyn: var.varattnosyn,
                 location: var.location,
             };
-            if newvar.varno > 0 {
+            if newvar.varno >= 0 {
                 newvar.varno += rtoffset;
             }
             if newvar.varnosyn > 0 {
@@ -3584,12 +3577,17 @@ fn fix_scan_expr_walker<'mcx>(run: &mut PlannerRun<'mcx>, node: Node<'mcx>) -> P
             fix_scan_expr_walker(run, node.as_target_entry().unwrap().expr)
         }
         NodeTag::T_OpExpr => {
+            let opfuncid = set_opfuncid(node.as_op_expr().unwrap())?;
+            // C's fix_expr_common writes the set_opfuncid memo in place
+            // (a commuted indexorderbyorig OpExpr arrives with InvalidOid).
+            // SAFETY: the memo is the operator's own opcode; every reader of
+            // this node resolves to the same value, and no reference derived
+            // from the node is live across the write.
+            unsafe {
+                node.with_mut::<types_nodes::primnodes::OpExpr, _>(|o| o.opfuncid = opfuncid)
+            };
+            record_plan_function_dependency(run, opfuncid)?;
             let o = node.as_op_expr().unwrap();
-            // The walker cannot write the set_opfuncid memo back into the
-            // shared node; assert it was already resolved (the mutator arms
-            // handle the switched-clause InvalidOid case).
-            debug_assert!(o.opfuncid != 0, "fix_scan_expr_walker: unresolved opfuncid");
-            record_plan_function_dependency(run, o.opfuncid)?;
             for arg in &o.args {
                 fix_scan_expr_walker(run, arg)?;
             }

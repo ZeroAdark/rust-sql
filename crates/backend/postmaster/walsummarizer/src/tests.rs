@@ -50,6 +50,12 @@ fn diff_ms_rounds_up_and_clamps() {
     assert_eq!(diff_ms(0, 1), 1);
     assert_eq!(diff_ms(0, 1000), 1);
     assert_eq!(diff_ms(0, 10_000_000), 10_000);
+    // timestamp.c:1769-1772: overflow and >= INT_MAX ms clamp to INT_MAX.
+    let int_max = i32::MAX as i64;
+    assert_eq!(diff_ms(0, int_max * 1000 - 1000), int_max - 1);
+    assert_eq!(diff_ms(0, int_max * 1000 - 999), int_max);
+    assert_eq!(diff_ms(0, i64::MAX), int_max);
+    assert_eq!(diff_ms(i64::MIN, i64::MAX), int_max);
 }
 
 // upstream 18f0de6b885a (18.6): Prevent walsummarizer from getting stuck at a timeline switch.
@@ -520,4 +526,14 @@ mod shutdown_lock {
         assert_eq!(d.summarizer_pgprocno.load(Relaxed), INVALID_PROC_NUMBER);
         assert_eq!(lk.state.load(Relaxed) & lwlock::LW_LOCK_MASK, 0, "lock released");
     }
+}
+
+/// walsummary.c:249 compares the signed st_mtime directly: a pre-epoch
+/// mtime is older than any cutoff and the summary is removed.
+#[test]
+fn pre_epoch_summary_mtime_is_expired() {
+    assert!(summary_expired(-86_400, 1_700_000_000));
+    assert!(summary_expired(1_699_999_999, 1_700_000_000));
+    assert!(!summary_expired(1_700_000_000, 1_700_000_000));
+    assert!(!summary_expired(i64::MAX, 1_700_000_000));
 }

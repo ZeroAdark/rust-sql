@@ -113,6 +113,11 @@ pub fn fc_g_cube_union(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResu
     let sizep = fcinfo.arg(1).as_usize() as *mut i32;
 
     let n = entryvec.n as usize;
+    let key0 = entryvec.vector[0].key.as_usize();
+    // cube_union_v0's a == b shortcut: GiST passes the same key twice for a
+    // one-entry side, and C then keeps the (unnormalized) key verbatim.
+    // SAFETY: non-null cube key datum.
+    let mut same_as_key0 = unsafe { varatt::varatt_is_4b_u(key0 as *const u8) };
     // SAFETY: non-null cube key datums.
     let mut out: Vec<u8> = unsafe { cube_payload(fcinfo.result_mcx(), entryvec.vector[0].key)? }.to_vec();
     // Rebuild the full image (header + payload) for the union loop.
@@ -123,6 +128,10 @@ pub fn fc_g_cube_union(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResu
         img
     };
     for i in 1..n {
+        if same_as_key0 && entryvec.vector[i].key.as_usize() == key0 {
+            continue;
+        }
+        same_as_key0 = false;
         // SAFETY: non-null cube key datums.
         let other = unsafe { cube_payload(fcinfo.result_mcx(), entryvec.vector[i].key)? };
         let mut full = Vec::with_capacity(4 + other.len());

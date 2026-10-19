@@ -404,10 +404,20 @@ fn div_d18_shacrypt_sub_space_salt_byte() {
         let (msg, _) = crypt_err_state("foox", &format!("$5$ab{b}cd"));
         assert_eq!(msg, format!("invalid character in salt string: \"{b}\""));
     }
-    // Multibyte: C prints pg_mblen bytes — one whole UTF-8 char.
+    // Multibyte: C prints pg_mblen bytes — one whole UTF-8 char in a UTF8
+    // database, the first byte alone under SQL_ASCII (crypt-sha.c:330).
+    let saved = mbutils::GetDatabaseEncoding();
+    mbutils::SetDatabaseEncoding(wchar::PG_UTF8).unwrap();
     let (msg, state) = crypt_err_state("foox", "$5$ab\u{e9}cd");
+    mbutils::SetDatabaseEncoding(wchar::PG_SQL_ASCII).unwrap();
+    let ascii = match crypt(b"foox", "$5$ab\u{e9}cd".as_bytes()) {
+        Err(CryptError::Pg(e)) => e,
+        other => panic!("{other:?}"),
+    };
+    mbutils::SetDatabaseEncoding(saved).unwrap();
     assert_eq!(msg, "invalid character in salt string: \"\u{e9}\"");
     assert_eq!(state, types_error::ERRCODE_INVALID_PARAMETER_VALUE);
+    assert_eq!(ascii.message_raw.as_deref(), Some(b"invalid character in salt string: \"\xc3\"".as_slice()));
 }
 
 // ---------------------------------------------------------------------------

@@ -151,6 +151,7 @@ pub struct ColorMap {
     pub hicolormap: Vec<color>,
     pub hiarrayrows: i32,
     pub hiarraycols: i32,
+    pub maxarrayrows: i32,
 }
 
 pub struct Cvec {

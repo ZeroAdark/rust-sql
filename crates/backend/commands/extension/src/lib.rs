@@ -139,6 +139,18 @@ pub fn check_valid_extension_name(extensionname: &str) -> PgResult<()> {
 }
 
 // check_valid_extension_name (extension.c:360-397) is bytewise.
+// namein (name.c:47-66): an oversize name is clipped at a character boundary
+// of the database encoding, never mid-character.
+pub(crate) fn namein_bytes(s: &[u8]) -> types_tuple::NameData {
+    let mut len = s.len();
+    if len >= types_core::NAMEDATALEN as usize {
+        len = mbutils::pg_mbcliplen(s, len as i32, types_core::NAMEDATALEN - 1) as usize;
+    }
+    let mut name = types_tuple::NameData::default();
+    name.data[..len].copy_from_slice(&s[..len]);
+    name
+}
+
 pub(crate) fn check_valid_extension_name_bytes(bytes: &[u8]) -> PgResult<()> {
     if bytes.is_empty() {
         return Err(invalid_name(

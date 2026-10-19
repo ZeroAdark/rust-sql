@@ -265,6 +265,14 @@ pub fn tokenize_auth_file(
         errcontext.linenum.set(line_number);
     }
 
+    if let Some(errno) = file.read_errno {
+        elog::ereport(elevel)
+            .with_saved_errno(errno)
+            .errcode_for_file_access()
+            .errmsg(format!("could not read file \"{filename}\": %m"))
+            .finish(crate::loc(769, "tokenize_auth_file"))?;
+    }
+
     Ok(())
 }
 

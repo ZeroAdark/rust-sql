@@ -69,7 +69,7 @@ tie-representative choice in multirange canonicalization = non-surface
 (value-preserving)." pgrust keeps its stable sort; no shipped-code change.
 Rationale of record: C's own tie choice is input-order and qsort-implementation
 dependent — unspecified behavior, not a contract — consistent with the
-cmp-magnitude sign-only ruling and the GL-PARMERGE-1 within-tie precedent. The
+cmp-magnitude sign-only ruling and the regression within-tie precedent. The
 harness handling below is therefore the PERMANENT handling, not an interim one.
 
 **Harness handling (ratified).** `compare_mr_image` keeps
@@ -194,7 +194,7 @@ zero-length element that was P1.
 C canonicalizes with `qsort_arg` (vendored verbatim here) and the shipped Rust
 with a stable sort, so for two input ranges that compare EQUAL with DIFFERENT
 bytes the surviving representative after the merge is an ordering artifact
-(GL-PARMERGE-1 precedent: within-tie order is the ratified non-surface). The
+(regression precedent: within-tie order is the ratified non-surface). The
 driver removes the ambiguity by construction rather than asserting over it —
 flags normalized through `wf_flags`, and numrange bounds entering a multirange
 minted from integer literals so value-equality implies byte-equality. The

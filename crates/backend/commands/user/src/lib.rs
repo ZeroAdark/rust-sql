@@ -2136,9 +2136,9 @@ pub fn check_createrole_self_grant(
 ) -> PgResult<bool> {
     let value = newval.clone().unwrap_or_default();
     let ctx = mcx::MemoryContext::new("check_createrole_self_grant");
-    let Some(elemlist) = varlena::split_identifier_string(
+    let Some(elemlist) = varlena::split_identifier_string_bytes(
         ctx.mcx(),
-        &value,
+        value.as_bytes(),
         b',',
         mbutils::GetDatabaseEncoding(),
     )?
@@ -2149,12 +2149,16 @@ pub fn check_createrole_self_grant(
 
     let mut options: u32 = 0;
     for tok in &elemlist {
-        if tok.eq_ignore_ascii_case("SET") {
+        if tok.eq_ignore_ascii_case(b"SET") {
             options |= GRANT_ROLE_SPECIFIED_SET;
-        } else if tok.eq_ignore_ascii_case("INHERIT") {
+        } else if tok.eq_ignore_ascii_case(b"INHERIT") {
             options |= GRANT_ROLE_SPECIFIED_INHERIT;
         } else {
-            guc::GUC_check_errdetail(format!("Unrecognized key word: \"{tok}\"."));
+            // user.c:2547 "%s": the (byte-truncated) key word verbatim.
+            let mut detail = b"Unrecognized key word: \"".to_vec();
+            detail.extend_from_slice(tok);
+            detail.extend_from_slice(b"\".");
+            guc::GUC_check_errdetail_raw(detail);
             return Ok(false);
         }
     }

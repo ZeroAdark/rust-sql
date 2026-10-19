@@ -17,7 +17,9 @@ seam_core::seam!(
 
 seam_core::seam!(
     // C pg_analyze_and_rewrite_withcb with sql_fn_parser_setup: named/positional
-    // SQL-function parameter hooks (empty string = unnamed).
+    // SQL-function parameter hooks (empty string = unnamed). `analyze_hooks`
+    // false is inline_function's bare transformTopLevelStmt (clauses.c:4719):
+    // no jumble, no post_parse_analyze_hook, no query-id report.
     pub fn parse_analyze_sql_fn<'a, 'mcx>(
         mcx: Mcx<'mcx>,
         parse_tree: &'a RawStmt<'mcx>,
@@ -27,6 +29,7 @@ seam_core::seam!(
         argnames: &'a [&'a str],
         input_collation: Oid,
         query_env: QueryEnvHandle,
+        analyze_hooks: bool,
     ) -> PgResult<Query<'mcx>>
 );
 
@@ -81,4 +84,15 @@ seam_core::seam!(
         locked_from_parent: bool,
         resolve_unknowns: bool,
     ) -> PgResult<Query<'mcx>>
+);
+
+seam_core::seam!(
+    // transformJsonArrayQueryConstructor (parse_expr.c:3789-3797): the child
+    // ParseState comes back unfreed so the caller's column-count check runs
+    // before free_parsestate's own limits.
+    pub fn transform_stmt_child<'a, 'mcx>(
+        mcx: Mcx<'mcx>,
+        parse_tree: types_nodes::Node<'mcx>,
+        parent_parse_state: &'a parser_small1::ParseState<'a, 'mcx>,
+    ) -> PgResult<(Query<'mcx>, parser_small1::ParseState<'a, 'mcx>)>
 );

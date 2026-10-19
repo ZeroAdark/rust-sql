@@ -123,7 +123,7 @@ pub(crate) fn check_role(
         } else if token_is_keyword(tok, "all") {
             return Ok(true);
         } else if token_has_regexp(tok) {
-            if crate::token::regexec_auth_token(role, tok, &mut [])?.unwrap_or(false) {
+            if crate::token::regexec_auth_token(role.as_bytes(), tok, &mut [])?.unwrap_or(false) {
                 return Ok(true);
             }
         } else if case_insensitive {
@@ -166,7 +166,7 @@ pub(crate) fn check_db(
         } else if token_is_keyword(tok, "replication") {
             continue; // never match this if not walsender
         } else if token_has_regexp(tok) {
-            if crate::token::regexec_auth_token(dbname, tok, &mut [])?.unwrap_or(false) {
+            if crate::token::regexec_auth_token(dbname.as_bytes(), tok, &mut [])?.unwrap_or(false) {
                 return Ok(true);
             }
         } else if token_matches(tok, dbname.as_bytes()) {

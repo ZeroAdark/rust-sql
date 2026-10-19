@@ -50,11 +50,11 @@ const LOCALEDIR: &str = match option_env!("PGRUST_LOCALEDIR") {
 };
 const DOCDIR: &str = match option_env!("PGRUST_DOCDIR") {
     Some(v) => v,
-    None => "/usr/local/pgsql/share/doc",
+    None => "/usr/local/pgsql/share/doc/postgresql",
 };
 const HTMLDIR: &str = match option_env!("PGRUST_HTMLDIR") {
     Some(v) => v,
-    None => "/usr/local/pgsql/share/doc",
+    None => "/usr/local/pgsql/share/doc/postgresql",
 };
 const MANDIR: &str = match option_env!("PGRUST_MANDIR") {
     Some(v) => v,
@@ -82,12 +82,19 @@ pub fn first_dir_separator(filename: &str) -> Option<usize> {
 
 // Sound only on canonicalized paths: ".." can then appear only at the start.
 pub fn path_contains_parent_reference(path: &str) -> bool {
-    let b = path.as_bytes();
+    path_contains_parent_reference_bytes(path.as_bytes())
+}
+
+fn path_contains_parent_reference_bytes(b: &[u8]) -> bool {
     b.starts_with(b"..") && (b.len() == 2 || is_dir_sep(b[2]))
 }
 
 pub fn path_is_relative_and_below_cwd(path: &str) -> bool {
-    !is_absolute_path(path) && !path_contains_parent_reference(path)
+    path_is_relative_and_below_cwd_bytes(path.as_bytes())
+}
+
+fn path_is_relative_and_below_cwd_bytes(b: &[u8]) -> bool {
+    b.first() != Some(&b'/') && !path_contains_parent_reference_bytes(b)
 }
 
 pub fn path_is_prefix_of_path(path1: &str, path2: &str) -> bool {
@@ -110,8 +117,10 @@ fn truncate_maxpgpath(s: &str) -> &str {
 // nor reaching above cwd. Frontend-side check shared by astreamer_file,
 // astreamer_tar and pg_rewind's file map.
 pub fn path_is_safe_for_extraction(path: &str) -> bool {
-    let buf = canonicalize_path(truncate_maxpgpath(path));
-    path_is_relative_and_below_cwd(&buf)
+    // strlcpy(buf, path, MAXPGPATH) cuts at the byte, not the character.
+    let b = path.as_bytes();
+    let buf = canonicalize_path_bytes(&b[..b.len().min(MAXPGPATH - 1)]);
+    path_is_relative_and_below_cwd_bytes(&buf)
 }
 
 pub fn first_path_var_separator(pathlist: &str) -> Option<usize> {
@@ -122,6 +131,15 @@ pub fn last_dir_separator(filename: &str) -> Option<usize> {
     filename.bytes().rposition(is_dir_sep)
 }
 
+// get_progname (path.c:674): the last path component of argv[0]; the
+// ".exe" strip is Windows-only.
+pub fn get_progname(argv0: &str) -> &str {
+    match last_dir_separator(argv0) {
+        Some(i) => &argv0[i + 1..],
+        None => argv0,
+    }
+}
+
 pub fn join_path_components(head: &str, tail: &str) -> String {
     let mut ret = String::with_capacity(head.len() + tail.len() + 1);
     ret.push_str(head);
@@ -130,6 +148,22 @@ pub fn join_path_components(head: &str, tail: &str) -> String {
             ret.push('/');
         }
         ret.push_str(tail);
+    }
+    let n = truncate_maxpgpath(&ret).len();
+    ret.truncate(n);
+    ret
+}
+
+// path.c:300 over raw bytes: strlcpy(ret, head, MAXPGPATH) then snprintf
+// into the remaining space, so the result never exceeds MAXPGPATH-1 bytes.
+fn join_path_components_bytes(head: &[u8], tail: &[u8]) -> Vec<u8> {
+    let mut ret: Vec<u8> = head[..head.len().min(MAXPGPATH - 1)].to_vec();
+    if !tail.is_empty() {
+        if !head.is_empty() {
+            ret.push(b'/');
+        }
+        ret.extend_from_slice(tail);
+        ret.truncate(MAXPGPATH - 1);
     }
     ret
 }
@@ -499,7 +533,11 @@ fn log_error_errno(
 }
 
 pub fn validate_exec(path: &str) -> i32 {
-    let Ok(cpath) = CString::new(path.as_bytes()) else {
+    validate_exec_bytes(path.as_bytes())
+}
+
+fn validate_exec_bytes(path: &[u8]) -> i32 {
+    let Ok(cpath) = CString::new(path) else {
         set_errno(libc::ENOENT);
         return -1;
     };
@@ -532,10 +570,10 @@ pub fn validate_exec(path: &str) -> i32 {
 // exec.c:251: realpath failure is reported at LOG level (errcode_for_file_access,
 // "%m") before -1; the Err payload only carries the same text for callers.
 fn normalize_exec_path(
-    path: &str,
+    path: &[u8],
     log_error: &mut impl FnMut(ExecLogCode, String),
 ) -> Result<String, String> {
-    let resolved = match CString::new(path.as_bytes()) {
+    let resolved = match CString::new(path) {
         // SAFETY: realpath(p, NULL) mallocs the result; freed below after copy.
         Ok(cpath) => unsafe { libc::realpath(cpath.as_ptr(), core::ptr::null_mut()) },
         Err(_) => {
@@ -545,17 +583,23 @@ fn normalize_exec_path(
     };
     if resolved.is_null() {
         let errnum = errno();
-        let prefix = format!("could not resolve path \"{path}\" to absolute form");
+        let prefix = format!(
+            "could not resolve path \"{}\" to absolute form",
+            String::from_utf8_lossy(path)
+        );
         log_error_errno(log_error, ExecLogCode::FileAccess, errnum, prefix.clone());
         return Err(format!("{prefix}: {}", strerror(errnum)));
     }
     // SAFETY: realpath returned a valid NUL-terminated string.
-    let mut out = unsafe { CStr::from_ptr(resolved) }
-        .to_string_lossy()
-        .into_owned();
+    let abspath = unsafe { CStr::from_ptr(resolved) }.to_bytes();
+    // strlcpy(path, abspath, MAXPGPATH) cuts at the byte; the lossy decode
+    // of a split trailing character is backed off below so the result still
+    // fits the callers' MAXPGPATH buffers.
+    let mut out = String::from_utf8_lossy(&abspath[..abspath.len().min(MAXPGPATH - 1)]).into_owned();
     // SAFETY: resolved was malloc'd by realpath.
     unsafe { libc::free(resolved.cast()) };
-    out.truncate(out.len().min(MAXPGPATH - 1));
+    let n = truncate_maxpgpath(&out).len();
+    out.truncate(n);
     Ok(out)
 }
 
@@ -568,7 +612,7 @@ pub fn find_my_exec(
     argv0: &str,
     mut log_error: impl FnMut(ExecLogCode, String),
 ) -> Result<String, String> {
-    let retpath = &argv0[..argv0.len().min(MAXPGPATH - 1)];
+    let retpath = truncate_maxpgpath(argv0);
 
     // wasm32: the running module is not a file in the guest namespace (the
     // host runtime loaded it) — PATH search and X_OK probes are meaningless.
@@ -587,7 +631,7 @@ pub fn find_my_exec(
 
     if first_dir_separator(retpath).is_some() {
         if validate_exec(retpath) == 0 {
-            return normalize_exec_path(retpath, &mut log_error);
+            return normalize_exec_path(retpath.as_bytes(), &mut log_error);
         }
         // exec.c:173
         let errnum = errno();
@@ -596,17 +640,21 @@ pub fn find_my_exec(
         return Err(format!("{prefix}: {}", strerror(errnum)));
     }
 
-    if let Ok(path) = std::env::var("PATH") {
+    // getenv("PATH") is raw bytes: a non-UTF-8 component must not skip the
+    // search, and the candidate under it is stat'ed byte-for-byte.
+    if let Some(path) = std::env::var_os("PATH") {
+        let path = path.as_encoded_bytes();
         if !path.is_empty() {
             let mut startp = 0usize;
             loop {
-                let endp = match first_path_var_separator(&path[startp..]) {
+                let endp = match path[startp..].iter().position(|&b| is_path_var_sep(b)) {
                     Some(off) => startp + off,
                     None => path.len(),
                 };
                 let seg = &path[startp..endp.min(startp + (MAXPGPATH - 1))];
-                let candidate = canonicalize_path(&join_path_components(seg, argv0));
-                match validate_exec(&candidate) {
+                let candidate =
+                    canonicalize_path_bytes(&join_path_components_bytes(seg, argv0.as_bytes()));
+                match validate_exec_bytes(&candidate) {
                     0 => return normalize_exec_path(&candidate, &mut log_error),
                     // exec.c:211: found but disqualified
                     -2 => {
@@ -615,7 +663,10 @@ pub fn find_my_exec(
                             &mut log_error,
                             ExecLogCode::WrongObjectType,
                             errnum,
-                            format!("could not read binary \"{candidate}\""),
+                            format!(
+                                "could not read binary \"{}\"",
+                                String::from_utf8_lossy(&candidate)
+                            ),
                         );
                     }
                     _ => {}
@@ -715,9 +766,26 @@ pub fn pipe_read_line(cmd: &str, log_error: &mut impl FnMut(ExecLogCode, String)
 
     /* Make sure popen() didn't change errno */
     set_errno(0);
+    let line = pipe_first_line(pipe_cmd, cmd, log_error);
+
+    let _ = pclose_check(pipe_cmd, log_error);
+
+    line
+}
+
+// pg_get_line(pipe_cmd, NULL) plus exec.c:371's two failure reports.
+// pg_get_line_append (pg_get_line.c:170) discards whatever it collected
+// when the stream reports an error, so a partial line before the error is
+// a read failure, not data.
+#[cfg(not(target_family = "wasm"))]
+fn pipe_first_line(
+    pipe_cmd: *mut libc::FILE,
+    cmd: &str,
+    log_error: &mut impl FnMut(ExecLogCode, String),
+) -> Option<String> {
     let mut bytes = Vec::new();
     loop {
-        // SAFETY: pipe_cmd is an open stream owned by this function.
+        // SAFETY: pipe_cmd is an open stream owned by the caller.
         let ch = unsafe { libc::fgetc(pipe_cmd) };
         if ch == libc::EOF {
             break;
@@ -727,30 +795,25 @@ pub fn pipe_read_line(cmd: &str, log_error: &mut impl FnMut(ExecLogCode, String)
             break;
         }
     }
-    let line = if bytes.is_empty() {
-        // SAFETY: pipe_cmd is an open stream.
-        if unsafe { libc::ferror(pipe_cmd) } != 0 {
-            let errnum = errno();
-            log_error_errno(
-                &mut *log_error,
-                ExecLogCode::FileAccess,
-                errnum,
-                format!("could not read from command \"{cmd}\""),
-            );
-        } else {
-            log_error(
-                ExecLogCode::NoData,
-                format!("no data was returned by command \"{cmd}\""),
-            );
-        }
+    // SAFETY: pipe_cmd is an open stream.
+    if unsafe { libc::ferror(pipe_cmd) } != 0 {
+        let errnum = errno();
+        log_error_errno(
+            &mut *log_error,
+            ExecLogCode::FileAccess,
+            errnum,
+            format!("could not read from command \"{cmd}\""),
+        );
+        None
+    } else if bytes.is_empty() {
+        log_error(
+            ExecLogCode::NoData,
+            format!("no data was returned by command \"{cmd}\""),
+        );
         None
     } else {
         Some(String::from_utf8_lossy(&bytes).into_owned())
-    };
-
-    let _ = pclose_check(pipe_cmd, log_error);
-
-    line
+    }
 }
 
 // exec.c:391: pclose() plus useful error reporting.

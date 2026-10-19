@@ -63,6 +63,12 @@ fn server_encoding_gate(encoding: i32, position: i32) -> Option<Box<types_error:
     )
 }
 
+fn errpos(pstate: Option<&ParseState<'_, '_>>, location: i32) -> i32 {
+    pstate.map_or(0, |ps| {
+        parser_small1::parser_errposition(ps, location, mbutils::GetDatabaseEncoding())
+    })
+}
+
 // collprovider_name (pg_collation.h).
 fn collprovider_name(c: u8) -> &'static str {
     match c {
@@ -492,7 +498,7 @@ fn createdb_guts<'mcx>(
                     .errcode(types_error::ERRCODE_FEATURE_NOT_SUPPORTED)
                     .errmsg("LOCATION is not supported anymore".to_string())
                     .errhint("Consider using tablespaces instead.".to_string())
-                    .errposition(defel.location + 1)
+                    .errposition(errpos(pstate, defel.location))
                     .finish(loc("createdb"))?;
                 continue;
             }
@@ -516,7 +522,7 @@ fn createdb_guts<'mcx>(
                 return Err(ereport(ERROR)
                     .errcode(ERRCODE_SYNTAX_ERROR)
                     .errmsg(format!("option \"{other}\" not recognized"))
-                    .errposition(defel.location + 1)
+                    .errposition(errpos(pstate, defel.location))
                     .into_error()
                     .into());
             }
@@ -546,7 +552,7 @@ fn createdb_guts<'mcx>(
                     return Err(ereport(ERROR)
                         .errcode(ERRCODE_UNDEFINED_OBJECT)
                         .errmsg(format!("{encoding} is not a valid encoding code"))
-                        .errposition(el.location + 1)
+                        .errposition(errpos(pstate, el.location))
                         .into_error()
                         .into());
                 }
@@ -557,13 +563,13 @@ fn createdb_guts<'mcx>(
                     return Err(ereport(ERROR)
                         .errcode(ERRCODE_UNDEFINED_OBJECT)
                         .errmsg(format!("{name} is not a valid encoding name"))
-                        .errposition(el.location + 1)
+                        .errposition(errpos(pstate, el.location))
                         .into_error()
                         .into());
                 }
             }
         }
-        if let Some(err) = server_encoding_gate(encoding, el.location + 1) {
+        if let Some(err) = server_encoding_gate(encoding, errpos(pstate, el.location)) {
             return Err(err.into());
         }
     }
@@ -1163,6 +1169,8 @@ fn createdb_guts<'mcx>(
 
     pg_depend::recordDependencyOnOwner(mcx, DATABASE_RELATION_ID, dboid, datdba)?;
     pg_shdepend::copyTemplateDependencies(mcx, src_dboid, dboid)?;
+
+    objectaccess::InvokeObjectPostCreateHook(DATABASE_RELATION_ID, dboid, 0)?;
 
     if dbstrategy == CreateDBStrategy::WalLog {
         lmgr::LockSharedObject(DATABASE_RELATION_ID, dboid, 0, AccessShareLock)?;

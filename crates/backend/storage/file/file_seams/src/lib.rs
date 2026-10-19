@@ -31,3 +31,11 @@ seam_core::seam!(
     // BasicOpenFile(fileName, fileFlags) (fd.c): fd, or -1 with errno set.
     pub fn basic_open_file(file_name: &str, file_flags: i32) -> i32
 );
+
+seam_core::seam!(
+    pub fn acquire_external_fd() -> PgResult<bool>
+);
+
+seam_core::seam!(
+    pub fn release_external_fd()
+);

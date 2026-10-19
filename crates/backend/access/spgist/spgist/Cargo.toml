@@ -28,6 +28,7 @@ postgres_seams = { path = "../../../tcop/postgres_seams" }
 fmgr_seams = { path = "../../../utils/fmgr/fmgr_seams" }
 bufmgr_seams = { path = "../../../storage/buffer/bufmgr_seams" }
 predicate_seams = { path = "../../../storage/lmgr/predicate_seams" }
+lmgr = { path = "../../../storage/lmgr/lmgr" }
 transam_xlog_seams = { path = "../../transam/transam_xlog_seams" }
 transam_xlog = { path = "../../transam/transam_xlog" }
 xloginsert = { path = "../../transam/xloginsert" }
@@ -42,3 +43,6 @@ coerce = { path = "../../../parser/coerce" }
 vacuum_seams = { path = "../../../commands/vacuum_seams" }
 procarray_seams = { path = "../../../storage/ipc/procarray_seams" }
 snapmgr_seams = { path = "../../../utils/time/snapmgr_seams" }
+
+[dev-dependencies]
+lock_seams = { path = "../../../storage/lmgr/lock_seams" }

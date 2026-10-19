@@ -214,29 +214,8 @@ fn pg_init() -> PgResult<()> {
 
     queryjumble::EnableQueryId();
 
-    {
-        let mut guard = PGSS.lock().unwrap();
-        if guard.is_none() {
-            let mut shared = PgssShared {
-                hash: HashMap::with_hasher(FxBuildHasher),
-                max: gucs::pgss_max().max(100) as usize,
-                cur_median_usage: ASSUMED_MEDIAN_INIT,
-                mean_query_len: ASSUMED_LENGTH_INIT,
-                stats: PgssGlobalStats {
-                    dealloc: 0,
-                    stats_reset: adt_timestamp::GetCurrentTimestamp(),
-                },
-            };
-            if gucs::pgss_save() {
-                store::load_dump_file(&mut shared);
-            }
-            *guard = Some(shared);
-        }
-    }
-
-    // C: on_shmem_exit(pgss_shmem_shutdown) in the postmaster; here the boot
-    // thread IS the postmaster thread, so ExitPostmaster's proc_exit runs it.
-    ipc::on_shmem_exit(store::pgss_shmem_shutdown, 0);
+    // pg_stat_statements.c:473: shmem_startup_hook = pgss_shmem_startup.
+    ipci::register_shmem_startup_hook(pgss_shmem_startup);
 
     // pg_stat_statements.c:470-471: shmem_request_hook = pgss_shmem_request.
     miscinit::register_shmem_request_hook(pgss_shmem_request);
@@ -257,6 +236,27 @@ fn pg_init() -> PgResult<()> {
     utility::dispatch::tap_process_utility_enter::install(hooks::pgss_process_utility_enter);
     utility::dispatch::tap_process_utility_leave::install(hooks::pgss_process_utility_leave);
 
+    Ok(())
+}
+
+/// `pgss_shmem_startup` (pg_stat_statements.c:511-600), at boot and after a crash cycle (ipci.c:248).
+fn pgss_shmem_startup() -> PgResult<()> {
+    let mut shared = PgssShared {
+        hash: HashMap::with_hasher(FxBuildHasher),
+        max: gucs::pgss_max().max(100) as usize,
+        cur_median_usage: ASSUMED_MEDIAN_INIT,
+        mean_query_len: ASSUMED_LENGTH_INIT,
+        stats: PgssGlobalStats {
+            dealloc: 0,
+            stats_reset: adt_timestamp::GetCurrentTimestamp(),
+        },
+    };
+    if gucs::pgss_save() {
+        store::load_dump_file(&mut shared);
+    }
+    *PGSS.lock().unwrap() = Some(shared);
+
+    ipc::on_shmem_exit(store::pgss_shmem_shutdown, 0);
     Ok(())
 }
 

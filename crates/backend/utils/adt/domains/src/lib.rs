@@ -277,7 +277,7 @@ mod tests {
         });
     }
 
-    // audit-18.6 fp-adt-domains#2: domains.c:389 domain_check_internal sets
+    // audit-18.6 regression: domains.c:389 domain_check_internal sets
     // up with binary = true, so a domain over a type without a receive
     // function (aclitem) is "no binary input function available for type
     // ..." (42883) before any constraint runs.

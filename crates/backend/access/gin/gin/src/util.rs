@@ -363,6 +363,16 @@ fn init_gin_col(rel: &Relation<'_>, i: usize) -> PgResult<GinColState> {
     };
 
     let attr = rel.rd_att.compact_attr(i);
+    let atttypid = rel.rd_att.attr(i).atttypid;
+    let key_storage = match ::syscache_seams::lookup_pg_type_shape::call(atttypid)? {
+        Some(shape) => shape.typstorage,
+        None => {
+            return Err(Box::new(
+                ::types_error::PgError::error(format!("cache lookup failed for type {atttypid}"))
+                    .with_sqlstate(::types_error::ERRCODE_INTERNAL_ERROR),
+            ))
+        }
+    };
     Ok(GinColState {
         compare,
         extract_value,
@@ -380,6 +390,7 @@ fn init_gin_col(rel: &Relation<'_>, i: usize) -> PgResult<GinColState> {
         can_partial_match: compare_partial.is_some(),
         key_byval: attr.attbyval,
         key_len: attr.attlen,
+        key_storage,
     })
 }
 

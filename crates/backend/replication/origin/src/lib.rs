@@ -551,6 +551,16 @@ fn serialize_disk_state(roident: RepOriginId, remote_lsn: XLogRecPtr) -> [u8; DI
     b
 }
 
+static CRASH_TEST_SHORT_WRITE_FIRED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+// True exactly once per process when PGRUST_CRASH_TEST_ORIGIN_SHORT_WRITE is
+// set (crash-restart harness knob, see CheckPointReplicationOrigin).
+fn crash_test_short_write_once() -> bool {
+    std::env::var_os("PGRUST_CRASH_TEST_ORIGIN_SHORT_WRITE").is_some()
+        && !CRASH_TEST_SHORT_WRITE_FIRED.swap(true, std::sync::atomic::Ordering::Relaxed)
+}
+
 // CheckPointReplicationOrigin (origin.c): MAGIC, ReplicationStateOnDisk...,
 // CRC32C. Failures are PANIC as in C.
 pub fn CheckPointReplicationOrigin() -> PgResult<()> {
@@ -591,7 +601,21 @@ pub fn CheckPointReplicationOrigin() -> PgResult<()> {
     // the just-created O_EXCL|O_WRONLY fd (relmapper precedent).
     let write_off = Cell::new(0i64);
     let write_all = |fd_: i32, bytes: &[u8]| -> PgResult<()> {
-        if fd::pg_pwrite(fd_, bytes, write_off.get()) != bytes.len() as isize {
+        // origin.c:630 `errno = 0`: a short write leaves errno untouched, so a
+        // stale value (the unlink's ENOENT) must not masquerade as its cause.
+        fd::set_errno(0);
+        // Crash-test injection (scripts/origin-checkpoint-short-write-e2e.sh):
+        // with PGRUST_CRASH_TEST_ORIGIN_SHORT_WRITE set, the first write of
+        // the process reports short without touching errno — the disk-full
+        // shape a unit test cannot provoke — so the PANIC must read ENOSPC,
+        // not the unlink's ENOENT. One-shot: the post-crash recovery
+        // checkpoint writes for real. Inert without the variable.
+        let written = if crash_test_short_write_once() {
+            bytes.len() as isize - 1
+        } else {
+            fd::pg_pwrite(fd_, bytes, write_off.get())
+        };
+        if written != bytes.len() as isize {
             let mut save_errno = errno::current_errno();
             if save_errno == 0 {
                 save_errno = libc::ENOSPC;
@@ -1259,22 +1283,33 @@ pub fn replorigin_session_get_progress(flush: bool) -> PgResult<XLogRecPtr> {
     Ok(remote_lsn)
 }
 
-// Read-only view for pg_show_replication_origin_status.
-pub(crate) fn show_status_rows() -> PgResult<Vec<(RepOriginId, XLogRecPtr, XLogRecPtr)>> {
-    let mut rows = Vec::new();
+// pg_show_replication_origin_status's walk over the in-memory states: `row`
+// runs for every live slot WHILE ReplicationOriginLock is held shared (C
+// origin.c:1551 keeps it across the loop, replorigin_by_oid included), so a
+// concurrent drop + create that reuses the RepOriginId cannot pair the new
+// name with the old progress. An Err from `row` releases the lock and
+// propagates.
+pub(crate) fn for_each_status_row(
+    mut row: impl FnMut(RepOriginId, XLogRecPtr, XLogRecPtr) -> PgResult<()>,
+) -> PgResult<()> {
     lw(origin_lock(), LW_SHARED)?;
-    for state in replication_states() {
-        // SAFETY: ReplicationState field serialized by ReplicationOriginLock
-        if unsafe { state.roident.get() } == InvalidRepOriginId {
-            continue;
+    let walked = (|| -> PgResult<()> {
+        for state in replication_states() {
+            // SAFETY: ReplicationState field serialized by ReplicationOriginLock
+            if unsafe { state.roident.get() } == InvalidRepOriginId {
+                continue;
+            }
+            lw(&state.lock, LW_SHARED)?;
+            // SAFETY: ReplicationState fields serialized by ReplicationOriginLock
+            let (roident, remote_lsn, local_lsn) =
+                unsafe { (state.roident.get(), state.remote_lsn.get(), state.local_lsn.get()) };
+            LWLockRelease(&state.lock)?;
+            row(roident, remote_lsn, local_lsn)?;
         }
-        lw(&state.lock, LW_SHARED)?;
-        // SAFETY: ReplicationState fields serialized by ReplicationOriginLock
-        rows.push(unsafe { (state.roident.get(), state.remote_lsn.get(), state.local_lsn.get()) });
-        LWLockRelease(&state.lock)?;
-    }
+        Ok(())
+    })();
     LWLockRelease(origin_lock())?;
-    Ok(rows)
+    walked
 }
 
 // ---------------------------------------------------------------------------

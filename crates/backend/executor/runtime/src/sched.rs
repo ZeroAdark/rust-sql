@@ -330,7 +330,7 @@ const DECAY_LAMBDA_DEFAULT: f64 = 0.5;
 const DECAY_QUANTUM_NS_DEFAULT: u64 = 50_000_000;
 pub(crate) const P_MIN_DEFAULT: u32 = crate::rg::INITIAL_PRIORITY / 16;
 
-/// POOL-QOS kill switch (GL-POOLDB-1 mitigation): `PGRUST_RUNTIME_POOL_QOS=0`
+/// POOL-QOS kill switch (regression mitigation): `PGRUST_RUNTIME_POOL_QOS=0`
 /// restores the pre-QoS pool exactly (no interactive demand, no serve
 /// yields, no priority permits). Default ON — but the whole mechanism only
 /// runs inside POOL serves' drives (the arms call the yieldable drive only
@@ -344,7 +344,7 @@ pub(crate) fn pool_qos_enabled() -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// POOL-QOS memory governor (GL-CONCMEM-1): the interleave the QoS tier buys
+// POOL-QOS memory governor (regression): the interleave the QoS tier buys
 // (demoted serves yielding threads / deferring permits toward interactive
 // arrivals) multiplies CONCURRENTLY-LIVE engagement working sets — N clients'
 // engagements progress round-robin with all their partial states resident,
@@ -362,7 +362,7 @@ pub(crate) fn pool_qos_enabled() -> bool {
 // (mcx global block bytes — boot glue installs it; this crate stays
 // mcx-free). Bar: `PGRUST_RUNTIME_QOS_MEM_BAR_KB` (>0 arms at that many KB;
 // `0`/`off` DISARMS the governor — the t35 kill spelling), else the
-// BOOT-DERIVED MEMORY MODEL bar (the bar-derivation law, GL-MEMCEIL-1
+// BOOT-DERIVED MEMORY MODEL bar (the bar-derivation law, regression
 // amendment): memory.max − page_cache_reserve − kernel_slack, on this
 // governor's ANON basis; unbounded hosts stay disarmed (never pay a
 // read). The model terms mirror memwatchdog::derived_memory_bar (the dep
@@ -758,7 +758,7 @@ pub struct WorkerLocal {
     /// the equal-pass pick tiebreak; set by the driving thread via
     /// [`WorkerLocal::set_session_token`].
     session_token: u64,
-    /// GL-STMTTASK-2 (wake elision): true while this pool worker carries a
+    /// regression (wake elision): true while this pool worker carries a
     /// live spin_enter mark on the park lot — woken (or fresh) and
     /// searching for work. Cleared at the claim points inside
     /// [`Scheduler::worker_step`] (a long task body must never count as a
@@ -776,7 +776,7 @@ impl WorkerLocal {
         self.session_token = token;
     }
 
-    /// GL-STMTTASK-2: live search-phase mark (see the field doc).
+    /// regression: live search-phase mark (see the field doc).
     pub fn spinning(&self) -> bool {
         self.spinning
     }
@@ -808,7 +808,7 @@ pub(crate) fn step_v2() -> bool {
     *ON.get_or_init(|| std::env::var("PGRUST_RUNTIME_STEP_V2").map_or(true, |v| v.trim() != "0"))
 }
 
-/// GL-STMTTASK-2 change-4 arming switch: `PGRUST_POOL_WAKE_SPINNER`, armed
+/// regression change-4 arming switch: `PGRUST_POOL_WAKE_SPINNER`, armed
 /// iff exactly `1`/`on` (t35 exact-spelling law; DEFAULT OFF — the
 /// measured-increment posture). ON ⇒ the new-work submission wake becomes
 /// spinner-elided + LIFO-directed ([`pgsync::ParkLot::wake_work`]) and the
@@ -1065,7 +1065,7 @@ pub(crate) struct Scheduler {
     nthreads: usize,
     next_seq: AtomicU64,
     next_rg_id: AtomicU64,
-    /// POOL-QOS interactive-demand ledger (GL-POOLDB-1 mitigation): global
+    /// POOL-QOS interactive-demand ledger (regression mitigation): global
     /// unmet-width count over live FRESH (undecayed) bound RGs. Nonzero ⇔
     /// demoted pool serves should yield threads/permits at their next
     /// morsel boundary. One Relaxed load on the demoted step path; zero on
@@ -1649,7 +1649,7 @@ impl Scheduler {
         // Wake parked workers: new work exists (external pinned drivers
         // park on the same epoch eventcount).
         //
-        // GL-STMTTASK-2 (wake elision, PGRUST_POOL_WAKE_SPINNER=1|on,
+        // regression (wake elision, PGRUST_POOL_WAKE_SPINNER=1|on,
         // DEFAULT OFF): the publish becomes epoch-bump + spinner check —
         // notify only when no searcher covers the work, and then exactly
         // ONE idle worker (LIFO; see ParkLot::wake_work). RG-specific
@@ -1856,7 +1856,7 @@ impl Scheduler {
     /// One scheduling decision + at most one task execution. The pool loop
     /// (and the loom models) drive this in a loop; on `Idle` the caller
     /// parks on an epoch captured BEFORE the call.
-    /// GL-STMTTASK-2: clear this worker's search-phase (spinner) mark at a
+    /// regression: clear this worker's search-phase (spinner) mark at a
     /// CLAIM point — work was found; a task/serve body must never count as
     /// a spinner or submissions would elide wakes while every other worker
     /// is parked. The park itself consumes the mark on the park path
@@ -2944,7 +2944,7 @@ impl Scheduler {
         // try_outcome after a wake; the completion word itself only
         // unparks registered leader waiters.
         //
-        // GL-STMTTASK-2 (wake elision): completion is NOT subject to the
+        // regression (wake elision): completion is NOT subject to the
         // submission-wake elision. The Retry-park protocol's documented
         // liveness invariant (see RETRY_PARK_AFTER) is that BOTH publish
         // AND completion wake_all, which is what makes an invalidated-slot
@@ -3118,7 +3118,7 @@ impl Scheduler {
             rg.cpu_consumed_ns.load(Ordering::Relaxed) / 1000,
             rg.priority.load(Ordering::Relaxed),
         );
-        // GL-POOLDB-1 G3 gap: class-behavior emission channels for the
+        // regression G3 gap: class-behavior emission channels for the
         // letter rig (markers_enabled-gated like RGDONE itself).
         // MORSEL|QOS| — the pool-qos snapshot at this RG's completion.
         if pool_qos_enabled() {

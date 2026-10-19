@@ -225,7 +225,7 @@ fn version_string_default_is_postgres_first() {
     assert_eq!(
         crate::introspect::pg_version_str(),
         format!(
-            "PostgreSQL 18.6 (pgrust 0.3) on {}, 64-bit",
+            "PostgreSQL 18.6 (pgrust 0.3.1) on {}, 64-bit",
             env!("PGRUST_TARGET_TRIPLE")
         )
     );
@@ -245,7 +245,7 @@ fn version_string_pgrust_first_renders_the_legacy_form() {
     assert_eq!(
         s,
         format!(
-            "pgrust 0.3 (PostgreSQL 18.6 compatible) on {}, 64-bit",
+            "pgrust 0.3.1 (PostgreSQL 18.6 compatible) on {}, 64-bit",
             env!("PGRUST_TARGET_TRIPLE")
         )
     );
@@ -346,4 +346,48 @@ fn input_is_valid_non_utf8_typname_is_the_ratified_refusal() {
         )
     );
     assert_eq!(e.hint(), Some("Use a database with encoding \"UTF8\"."));
+}
+
+// misc.c:869 text_to_cstring: the identifier string ends at the first NUL,
+// so trailing bytes past it are never seen in strict mode.
+#[test]
+fn parse_ident_stops_at_the_first_nul() {
+    let ctx = MemoryContext::new("t");
+    assert_eq!(run(ctx.mcx(), "abc\0def", true).unwrap(), vec!["abc"]);
+    assert_eq!(run(ctx.mcx(), "abc\0def", false).unwrap(), vec!["abc"]);
+    let err = run(ctx.mcx(), "abc.\0def", true).unwrap_err();
+    assert_eq!(err.message(), "string is not a valid identifier: \"abc.\"");
+}
+
+// misc.c:1013: the primary entry point reads its optional format argument
+// when the frame carries one (a one-arg internal alias of pg_current_logfile).
+#[test]
+fn pg_current_logfile_primary_reads_a_one_arg_frame() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let mut fcinfo = LocalFcinfo::<1>::new(0);
+    // SAFETY: mcx outlives the call.
+    unsafe { fcinfo.set_result_mcx(mcx) };
+    let text = varlena::cstring_to_text(mcx, b"bogus").unwrap();
+    fcinfo.set_arg(0, Datum::from_usize(text.as_bytes().as_ptr() as usize));
+    let err = crate::builtins::fc_pg_current_logfile(None, &mut fcinfo).unwrap_err();
+    assert_eq!(err.message(), "log format \"bogus\" is not supported");
+    let text = varlena::cstring_to_text(mcx, b"stderrx\0").unwrap();
+    fcinfo.set_arg(0, Datum::from_usize(text.as_bytes().as_ptr() as usize));
+    let err = crate::builtins::fc_pg_current_logfile(None, &mut fcinfo).unwrap_err();
+    assert_eq!(err.message(), "log format \"stderrx\" is not supported");
+}
+
+// xlogfuncs.c:487 and xlog.c:8138 "%s": the name bytes verbatim.
+#[test]
+fn walfile_and_restore_point_messages_keep_non_utf8_bytes() {
+    let e = crate::builtins::invalid_walfile_name(b"\xff");
+    assert_eq!(e.message_raw.as_deref(), Some(&b"invalid WAL file name \"\xff\""[..]));
+    let e = crate::builtins::invalid_walfile_name(b"nope");
+    assert_eq!(e.message_raw, None);
+    assert_eq!(e.message(), "invalid WAL file name \"nope\"");
+    assert_eq!(
+        crate::builtins::restore_point_log(b"rp\xff", 0x1_25FC_A3E0),
+        b"restore point \"rp\xff\" created at 1/25FCA3E0"
+    );
 }

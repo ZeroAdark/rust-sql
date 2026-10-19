@@ -83,6 +83,7 @@ use types_error::{
 use types_fmgr::{
     byref_result, varlena_result, FmgrInfo, FunctionCallInfoBaseData as Fcinfo, PGFunction,
 };
+use types_tuple::TupleDescData;
 use wchar::PG_UTF8;
 
 const LIBRARY: &str = "sslinfo";
@@ -187,6 +188,15 @@ fn asn1_bytes_to_text(fcinfo: &mut Fcinfo, bytes: &[u8]) -> PgResult<Datum> {
     Ok(varlena_result(t))
 }
 
+// sslinfo.c:209 errmsg("invalid X.509 field name: \"%s\"", fieldname):
+// the field-name bytes go out unchanged.
+fn invalid_field_name(field: &[u8]) -> Box<PgError> {
+    let mut msg = b"invalid X.509 field name: \"".to_vec();
+    msg.extend_from_slice(field);
+    msg.push(b'"');
+    Box::new(PgError::error_raw_message(msg).with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE))
+}
+
 // X509_NAME_field_to_text over the already-guarded peer certificate.
 fn dn_field(fcinfo: &mut Fcinfo, issuer: bool) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 of these strict fns is a non-null text varlena.
@@ -199,13 +209,7 @@ fn dn_field(fcinfo: &mut Fcinfo, issuer: bool) -> PgResult<Datum> {
     match tls::be_tls_get_peer_dn_field(&cfield, issuer) {
         // No peer: unreachable behind the callers' guards, NULL as in C.
         None | Some(DnFieldLookup::NotPresent) => null(fcinfo),
-        Some(DnFieldLookup::InvalidFieldName) => Err(Box::new(
-            PgError::error(format!(
-                "invalid X.509 field name: \"{}\"",
-                String::from_utf8_lossy(&field_bytes)
-            ))
-            .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE),
-        )),
+        Some(DnFieldLookup::InvalidFieldName) => Err(invalid_field_name(&field_bytes)),
         Some(DnFieldLookup::BioFailure) => Err(bio_err()),
         Some(DnFieldLookup::Value(v)) => asn1_bytes_to_text(fcinfo, &v),
     }
@@ -264,6 +268,27 @@ fn fc_ssl_extension_info(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
     let flinfo = flinfo.expect("ssl_extension_info: resolved FmgrInfo required");
     // SAFETY: the arming context outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
+    // sslinfo.c:380: SRF_FIRSTCALL_INIT's context check, then any
+    // non-composite declared result is 0A000 (InitMaterializedSRF's own
+    // check would elog XX000 "return type must be a row type").
+    let Some(rsinfo) = fcinfo.rsinfo_mut() else {
+        return Err(funcapi::srf_context_error());
+    };
+    // SAFETY: executor-armed expectedDesc, live for this call (same as
+    // InitMaterializedSRF).
+    let expected = rsinfo
+        .expectedDesc
+        .map(|p| unsafe { p.cast::<TupleDescData<'_>>().as_ref() });
+    if funcapi::get_call_result_type(mcx, flinfo, expected)?.class
+        != funcapi::TypeFuncClass::Composite
+    {
+        return Err(Box::new(
+            PgError::error(
+                "function returning record called in context that cannot accept type record",
+            )
+            .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
+        ));
+    }
     let mut srf = funcapi::InitMaterializedSRF(mcx, flinfo, fcinfo, 0)?;
 
     let exts = tls::be_tls_get_peer_extensions().map_err(|e| -> Box<PgError> {
@@ -322,4 +347,19 @@ pub fn init_seams() {
         // sslinfo.c's PG_MODULE_MAGIC_EXT has no _PG_init.
         pg_init: None,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::invalid_field_name;
+
+    #[test]
+    fn invalid_field_name_keeps_raw_bytes() {
+        let err = invalid_field_name(b"C\xe9");
+        assert_eq!(
+            err.message_raw.as_deref(),
+            Some(b"invalid X.509 field name: \"C\xe9\"".as_slice())
+        );
+        assert_eq!(err.sqlstate, super::ERRCODE_INVALID_PARAMETER_VALUE);
+    }
 }

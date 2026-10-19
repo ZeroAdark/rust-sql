@@ -7,7 +7,7 @@ use types_core::{
     InvalidXLogRecPtr, Oid, RepOriginId, TimestampTz, TransactionId, TransactionIdPrecedes,
     XLogRecPtr, RELPERSISTENCE_PERMANENT,
 };
-use types_error::PgResult;
+use types_error::{PgResult, DEBUG2};
 use types_rel::{RelationData, RELKIND_SEQUENCE};
 use types_snapshot::SnapshotData;
 use types_storage::SharedInvalidationMessage;
@@ -989,6 +989,10 @@ impl ReorderBuffer {
             }
             let txn = head;
             if TransactionIdPrecedes(self.txn(txn).xid, oldest_running_xid) {
+                let _ = elog::elog(
+                    DEBUG2,
+                    format!("aborting old transaction {}", self.txn(txn).xid),
+                );
                 // Notify the remote node about the crash/immediate restart.
                 if self.txn(txn).is_streamed() {
                     let cb = self

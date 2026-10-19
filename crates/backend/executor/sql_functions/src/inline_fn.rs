@@ -92,8 +92,16 @@ fn inline_sql_function<'a, 'mcx>(
     args: &'a NodeList<'mcx>,
 ) -> PgResult<Option<Node<'mcx>>> {
     let row = read_inline_proc_row(mcx, funcid)?;
+    let _errctx = inline_error_frame(&row);
     inline_body(mcx, &row, result_type, result_collid, input_collid, args)
         .map_err(|e| sql_inline_error_callback(e, row.proname.as_str(), row.prosrc.as_str()))
+}
+
+// clauses.c:4680/5221: the callback is installed across the parse/validate
+// region, so warnings raised there are decorated too.
+pub(crate) fn inline_error_frame(row: &InlineProcRow<'_>) -> crate::ContextFrame {
+    let (proname, prosrc) = (row.proname.as_str().to_string(), row.prosrc.as_str().to_string());
+    crate::ContextFrame::push(move |e| sql_inline_error_callback_in(e, &proname, &prosrc))
 }
 
 // sql_inline_error_callback (clauses.c): a body syntax error is transposed
@@ -101,21 +109,23 @@ fn inline_sql_function<'a, 'mcx>(
 // during-inlining context line.
 #[cold]
 pub(crate) fn sql_inline_error_callback(
-    e: Box<PgError>,
+    mut e: Box<PgError>,
     proname: &str,
     prosrc: &str,
 ) -> Box<PgError> {
-    let mut err = *e;
+    sql_inline_error_callback_in(&mut e, proname, prosrc);
+    e
+}
+
+fn sql_inline_error_callback_in(err: &mut PgError, proname: &str, prosrc: &str) {
     if let Some(pos) = err.cursor_position() {
         if pos > 0 {
-            err = err
-                .with_cursor_position(0)
-                .with_internal_position(pos)
-                .with_internal_query(prosrc.to_string());
+            err.cursor_position = Some(0);
+            err.internal_position = Some(pos);
+            err.internal_query = Some(prosrc.to_string());
         }
     }
     err.add_context_line(format!("SQL function \"{proname}\" during inlining"));
-    Box::new(err)
 }
 
 // prepare_sql_fn_parse_info (functions.c): resolve polymorphic declared
@@ -195,7 +205,8 @@ fn inline_body<'a, 'mcx>(
         }
     } else {
         // C pg_parse_query (PARSER bracket); the analysis below is bare
-        // transformTopLevelStmt, so no PARSE ANALYSIS bracket follows.
+        // transformTopLevelStmt (clauses.c:4719): no PARSE ANALYSIS bracket,
+        // no post_parse_analyze_hook, no query-id jumble.
         let raw_list = crate::cache::pg_parse_query(mcx, row.prosrc.as_str())?;
         if raw_list.len() != 1 {
             return Ok(None);
@@ -215,6 +226,7 @@ fn inline_body<'a, 'mcx>(
             &name_refs,
             input_collid,
             QueryEnvHandle::NULL,
+            false,
         )?;
         &parsed_query
     };

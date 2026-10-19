@@ -510,11 +510,29 @@ fn load_mcv<'mcx>(
     statoid: types_core::Oid,
     inh: bool,
 ) -> PgResult<statistics::mcv::MCVList<'mcx>> {
-    let img = syscache_seams::statext_data_blob::call(run.mcx, statoid, inh, Anum_data_stxdmcv)?
-        .unwrap_or_else(|| {
-            panic!("requested statistics kind \"m\" is not yet built for statistics object {statoid}")
-        });
+    let img = statext_data_load(run, statoid, inh, Anum_data_stxdmcv, STATS_EXT_MCV)?;
     statistics::mcv::statext_mcv_deserialize(run.mcx, &img[4..])
+}
+
+// statext_{mcv,dependencies,ndistinct}_load (mcv.c:566, dependencies.c:629,
+// mvdistinct.c:158): a vanished pg_statistic_ext_data row (DROP STATISTICS
+// committed by a stable function evaluated during estimation) and a NULL
+// stxd* attribute are distinct catchable XX000s, never a backend abort.
+fn statext_data_load<'mcx>(
+    run: &PlannerRun<'mcx>,
+    statoid: types_core::Oid,
+    inh: bool,
+    anum: i32,
+    kind: i8,
+) -> PgResult<mcx::PgVec<'mcx, u8>> {
+    match syscache_seams::statext_data_blob::call(run.mcx, statoid, inh, anum)? {
+        None => Err(crate::cache_lookup_failed("statistics object", statoid)),
+        Some(None) => Err(Box::new(types_error::PgError::error(format!(
+            "requested statistics kind \"{}\" is not yet built for statistics object {statoid}",
+            kind as u8 as char
+        )))),
+        Some(Some(img)) => Ok(img),
+    }
 }
 
 // statext_mcv_clauselist_selectivity (extended_stats.c), AND form.
@@ -1246,15 +1264,8 @@ fn dependencies_clauselist_selectivity<'mcx>(
         if nmatched + nexprs < 2 {
             continue;
         }
-        let img = syscache_seams::statext_data_blob::call(
-            run.mcx,
-            stat_oid,
-            inh,
-            Anum_data_stxddependencies,
-        )?
-        .unwrap_or_else(|| {
-            panic!("requested statistics kind \"f\" is not yet built for statistics object {stat_oid}")
-        });
+        let img =
+            statext_data_load(run, stat_oid, inh, Anum_data_stxddependencies, STATS_EXT_DEPENDENCIES)?;
         let loaded = statistics::dependencies::statext_dependencies_deserialize(run.mcx, &img[4..])?;
         'dep: for d in loaded.deps.iter() {
             let mut attrs: Vec<i16> = Vec::with_capacity(d.attributes.len());
@@ -1421,15 +1432,7 @@ pub fn estimate_multivariate_ndistinct<'mcx>(
         (info.stat_oid, clone_relids(run, &info.keys))
     };
 
-    let img = syscache_seams::statext_data_blob::call(
-        run.mcx,
-        stat_oid,
-        inh,
-        Anum_data_stxdndistinct,
-    )?
-    .unwrap_or_else(|| {
-        panic!("requested statistics kind \"d\" is not yet built for statistics object {stat_oid}")
-    });
+    let img = statext_data_load(run, stat_oid, inh, Anum_data_stxdndistinct, STATS_EXT_NDISTINCT)?;
     let nd = statistics::mvdistinct::statext_ndistinct_deserialize(run.mcx, &img[4..])?;
 
     let attnum_offset: i32 =

@@ -202,7 +202,7 @@ fn bt_page_stats_internal(
 
     let stat = get_bt_page_statistics(blkno as BlockNumber, page.bytes())?;
 
-    let tupdesc = composite_tupdesc(mcx, flinfo)?;
+    let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
     cstrings_composite_result(mcx, &tupdesc, &stat_cstrings(&stat))
 }
 
@@ -222,6 +222,13 @@ pub(crate) fn fc_bt_page_stats(
     bt_page_stats_internal(flinfo, fcinfo, PiVersion::V1_8)
 }
 
+struct MultiStatsState {
+    relid: types_core::Oid,
+    blkno: i64,
+    blk_count: i64,
+    allpages: bool,
+}
+
 pub(crate) fn fc_bt_multi_page_stats(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
@@ -229,9 +236,10 @@ pub(crate) fn fc_bt_multi_page_stats(
     let flinfo = flinfo.expect("bt_multi_page_stats: resolved FmgrInfo required");
     require_superuser("pageinspect")?;
 
-    let rows = if !flinfo.has_fn_extra() {
-        // SAFETY: the arming context outlives this call.
-        let mcx = unsafe { fcinfo.result_mcx_detached() };
+    // SAFETY: the arming context outlives this call.
+    let mcx = unsafe { fcinfo.result_mcx_detached() };
+    if !flinfo.has_fn_extra() {
+        require_set_context(fcinfo)?;
         let blkno = fcinfo.arg(1).as_i64();
         let blk_count = fcinfo.arg(2).as_i64();
 
@@ -240,30 +248,50 @@ pub(crate) fn fc_bt_multi_page_stats(
         if blk_count > 1 {
             check_relation_block_range(&rel, blkno + blk_count - 1)?;
         }
+        let relid = rel.rd_id;
+        // Keep the AccessShareLock until the set is exhausted (C reopens the
+        // index by OID on every call).
+        rel.close(types_rel::NoLock)?;
 
+        let fctx = funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
+        fctx.user_fctx = Some(Box::new(MultiStatsState {
+            relid,
+            blkno,
+            blk_count,
+            allpages: blk_count < 0,
+        }) as Box<dyn Any>);
+    }
+
+    let fctx = funcapi::per_MultiFuncCall(flinfo);
+    let st = fctx
+        .user_fctx
+        .as_mut()
+        .expect("bt_multi_page_stats: state set at first call")
+        .downcast_mut::<MultiStatsState>()
+        .expect("bt_multi_page_stats: user_fctx is MultiStatsState");
+
+    let rel = relation::relation_open(mcx, st.relid, types_rel::NoLock)?;
+    if st.allpages {
         let nblocks =
-            bufmgr::RelationGetNumberOfBlocksInFork(&rel, types_core::ForkNumber::MAIN_FORKNUM)?
-                as i64;
-        let count = if blk_count < 0 { nblocks - blkno } else { blk_count };
+            bufmgr::RelationGetNumberOfBlocksInFork(&rel, types_core::ForkNumber::MAIN_FORKNUM)?;
+        st.blk_count = nblocks as i64 - st.blkno;
+    }
 
-        let tupdesc = composite_tupdesc(mcx, flinfo)?;
-        let mut rows = Vec::new();
-        for i in 0..count {
-            postgres_seams::check_for_interrupts::call()?;
-            let cur = blkno + i;
-            if cur as BlockNumber >= nblocks as BlockNumber {
-                break;
-            }
-            let page = read_rel_page(&rel, cur as BlockNumber)?;
-            let stat = get_bt_page_statistics(cur as BlockNumber, page.bytes())?;
-            rows.push(cstrings_tuple_image(mcx, &tupdesc, &stat_cstrings(&stat))?);
-        }
-        rel.close(types_rel::AccessShareLock)?;
-        Some(rows)
-    } else {
-        None
-    };
-    srf_stream(flinfo, fcinfo, rows)
+    if st.blk_count > 0 {
+        let cur = st.blkno as BlockNumber;
+        let page = read_rel_page(&rel, cur)?;
+        let stat = get_bt_page_statistics(cur, page.bytes())?;
+        rel.close(types_rel::NoLock)?;
+        st.blkno += 1;
+        st.blk_count -= 1;
+        let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
+        let img = cstrings_tuple_image(mcx, &tupdesc, &stat_cstrings(&stat))?;
+        let d = byref_result(mcx, &img)?;
+        return Ok(funcapi::srf_return_next(flinfo, fcinfo, d));
+    }
+
+    rel.close(types_rel::AccessShareLock)?;
+    Ok(funcapi::srf_return_done(flinfo, fcinfo))
 }
 
 /// bt_page_print_tuples: one output row for the index tuple at `offnum`.
@@ -276,9 +304,6 @@ fn bt_page_print_tuple(
     rightmost: bool,
 ) -> PgResult<Vec<u8>> {
     let id = page_item_id(b, offnum);
-    if !id.is_valid() {
-        return Err(Box::new(PgError::error("invalid ItemId")));
-    }
     let pos = id.off as usize;
     if pos + 8 > b.len() {
         return Err(Box::new(PgError::error("invalid ItemId")));
@@ -286,15 +311,17 @@ fn bt_page_print_tuple(
     // SAFETY: itup header reads bounded above; data reads bounded below.
     let itup = unsafe { b.as_ptr().add(pos) };
     let size = unsafe { nbtree::itup::index_tuple_size(itup) };
-    if pos + size > b.len() || size < 8 {
+    if pos + size > b.len() {
         return Err(Box::new(PgError::error(format!(
             "invalid tuple length {size} for tuple at offset number {offnum}"
         ))));
     }
 
+    // C fills fixed nine-slot arrays and heap_form_tuple consumes as many as
+    // the declared result type has (btreefuncs.c:487).
     let natts = tupdesc.natts as usize;
-    let mut values = vec![Datum::null(); natts];
-    let mut nulls = vec![false; natts];
+    let mut values = vec![Datum::null(); natts.max(9)];
+    let mut nulls = vec![false; natts.max(9)];
     let mut j = 0usize;
 
     let t_info = unsafe { nbtree::itup::t_info(itup) };
@@ -323,18 +350,17 @@ fn bt_page_print_tuple(
         // number) are decoded from attacker-controlled tuple bytes: a crafted
         // bytea reaching bt_page_items_bytea can set nposting up to
         // BT_OFFSET_MASK (4095), so nposting * sizeof(ItemPointerData) is
-        // ~24KB. Bound the whole posting-list byte extent within the tuple size
-        // (and thus the BLCKSZ page buffer, since pos + size <= b.len() is
-        // checked above) before any posting entry -- or the posting heap-TID
-        // metadata read via bt_tuple_get_heap_tid below, which decodes element 0
-        // -- is read out of bounds. C performs no such check; this is an
-        // engine-level guard for corrupt/crafted input.
+        // ~24KB. C (btreefuncs.c:541) reads the posting TIDs wherever the
+        // offset points without comparing against IndexTupleSize; bound the
+        // whole extent within the page image only, before any posting entry
+        // -- or the posting heap-TID read via bt_tuple_get_heap_tid below,
+        // which decodes element 0 -- is read out of bounds.
         let ip_size = core::mem::size_of::<types_tuple::itemptr::ItemPointerData>();
         // At least one entry is always read (element 0, for the heap TID).
         let extent = nposting.max(1).checked_mul(ip_size);
         let posting_end = extent.and_then(|e| posting_off.checked_add(e));
         match posting_end {
-            Some(end) if posting_off <= size && end <= size && pos + end <= b.len() => {}
+            Some(end) if pos + end <= b.len() => {}
             _ => {
                 return Err(Box::new(
                     PgError::error(format!(
@@ -345,7 +371,10 @@ fn bt_page_print_tuple(
             }
         }
         dlen -= size as isize - posting_off as isize;
-    } else if is_pivot && unsafe { nbtree::itup::bt_tuple_get_heap_tid(itup) }.is_some() {
+    } else if is_pivot
+        && size >= 8
+        && unsafe { nbtree::itup::bt_tuple_get_heap_tid(itup) }.is_some()
+    {
         dlen -= 8; // MAXALIGN(sizeof(ItemPointerData))
     }
 
@@ -370,71 +399,107 @@ fn bt_page_print_tuple(
     values[j] = text_datum(mcx, dump.as_bytes())?;
     j += 1;
 
-    if j < natts {
-        // 1.9 columns: dead, htid, tids.
-        let ispivottuple = !leafpage || (!rightmost && offnum == P_HIKEY as usize);
+    // 1.9 columns: dead, htid, tids.
+    let ispivottuple = !leafpage || (!rightmost && offnum == P_HIKEY as usize);
 
-        if !ispivottuple {
-            values[j] = Datum::from_bool(id.is_dead());
-        } else {
-            nulls[j] = true;
-        }
-        j += 1;
-
-        let mut htid = unsafe { nbtree::itup::bt_tuple_get_heap_tid(itup) };
-        if ispivottuple && !is_pivot {
-            // Don't show bogus heap TID in !heapkeyspace pivot tuple.
-            htid = None;
-        }
-        match htid {
-            Some(ip) => values[j] = tid_datum(mcx, &tid_bytes(ip))?,
-            None => nulls[j] = true,
-        }
-        j += 1;
-
-        if is_posting {
-            let nposting = unsafe { nbtree::itup::bt_tuple_get_nposting(itup) };
-            let mut tids = Vec::with_capacity(nposting);
-            for n in 0..nposting {
-                let ip = unsafe { nbtree::itup::bt_tuple_get_posting_n(itup, n) };
-                tids.push(tid_datum(mcx, &tid_bytes(ip))?);
-            }
-            values[j] = tid_array_datum(mcx, &tids)?;
-        } else {
-            nulls[j] = true;
-        }
-        j += 1;
+    if !ispivottuple {
+        values[j] = Datum::from_bool(id.is_dead());
+    } else {
+        nulls[j] = true;
     }
+    j += 1;
 
-    debug_assert!(j == natts);
-    tuple_image(mcx, tupdesc, &values, &nulls)
+    let mut htid = if size >= 8 {
+        unsafe { nbtree::itup::bt_tuple_get_heap_tid(itup) }
+    } else {
+        None
+    };
+    if ispivottuple && !is_pivot {
+        // Don't show bogus heap TID in !heapkeyspace pivot tuple.
+        htid = None;
+    }
+    match htid {
+        Some(ip) => values[j] = tid_datum(mcx, &tid_bytes(ip))?,
+        None => nulls[j] = true,
+    }
+    j += 1;
+
+    if is_posting {
+        let nposting = unsafe { nbtree::itup::bt_tuple_get_nposting(itup) };
+        let mut tids = Vec::with_capacity(nposting);
+        for n in 0..nposting {
+            let ip = unsafe { nbtree::itup::bt_tuple_get_posting_n(itup, n) };
+            tids.push(tid_datum(mcx, &tid_bytes(ip))?);
+        }
+        values[j] = tid_array_datum(mcx, &tids)?;
+    } else {
+        nulls[j] = true;
+    }
+    j += 1;
+
+    debug_assert!(j == 9);
+    tuple_image(mcx, tupdesc, &values[..natts], &nulls[..natts])
 }
 
-fn bt_page_items_rows(
-    mcx: Mcx<'_>,
-    flinfo: &FmgrInfo,
-    page: &RawPage,
-    deleted_notice: &str,
-) -> PgResult<Vec<Vec<u8>>> {
-    let b = page.bytes();
-    let o = opaque_data(&bt_opaque(b));
-    let leafpage = P_ISLEAF(&o);
-    let rightmost = P_RIGHTMOST(&o);
+struct ItemsState {
+    page: RawPage,
+    leafpage: bool,
+    rightmost: bool,
+}
 
-    let maxoff = if !P_ISDELETED(&o) {
-        page_max_offset_number(b)
-    } else {
-        // Don't interpret BTDeletedPageData as index tuples.
-        notice(deleted_notice)?;
-        0
-    };
-
-    let tupdesc = composite_tupdesc(mcx, flinfo)?;
-    let mut rows = Vec::with_capacity(maxoff);
-    for offnum in 1..=maxoff {
-        rows.push(bt_page_print_tuple(mcx, &tupdesc, b, offnum, leafpage, rightmost)?);
+/// First call: copy the page and count the items (a deleted page yields
+/// `deleted_notice` and no rows). Every call: decode the next item only, as
+/// C's bt_page_print_tuples does, so an invalid later tuple is not reached by
+/// a caller that stops early.
+fn bt_page_items_stream(
+    flinfo: &mut FmgrInfo,
+    fcinfo: &mut Fcinfo,
+    first_call: Option<(RawPage, &str)>,
+) -> PgResult<Datum> {
+    if let Some((page, deleted_notice)) = first_call {
+        let b = page.bytes();
+        let o = opaque_data(&bt_opaque(b));
+        let max_calls = if !P_ISDELETED(&o) {
+            page_max_offset_number(b)
+        } else {
+            // Don't interpret BTDeletedPageData as index tuples.
+            notice(deleted_notice)?;
+            0
+        };
+        let st = ItemsState {
+            page,
+            leafpage: P_ISLEAF(&o),
+            rightmost: P_RIGHTMOST(&o),
+        };
+        let fctx = funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
+        fctx.max_calls = max_calls as u64;
+        fctx.user_fctx = Some(Box::new(st) as Box<dyn Any>);
     }
-    Ok(rows)
+
+    // SAFETY: the arming context outlives this call.
+    let mcx = unsafe { fcinfo.result_mcx_detached() };
+    let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
+    let fctx = funcapi::per_MultiFuncCall(flinfo);
+    if fctx.call_cntr >= fctx.max_calls {
+        return Ok(funcapi::srf_return_done(flinfo, fcinfo));
+    }
+    let offnum = fctx.call_cntr as usize + 1;
+    let st = fctx
+        .user_fctx
+        .as_ref()
+        .expect("bt_page_items: state set at first call")
+        .downcast_ref::<ItemsState>()
+        .expect("bt_page_items: user_fctx is ItemsState");
+    let img = bt_page_print_tuple(
+        mcx,
+        &tupdesc,
+        st.page.bytes(),
+        offnum,
+        st.leafpage,
+        st.rightmost,
+    )?;
+    let d = byref_result(mcx, &img)?;
+    Ok(funcapi::srf_return_next(flinfo, fcinfo, d))
 }
 
 fn bt_page_items_internal(
@@ -444,7 +509,9 @@ fn bt_page_items_internal(
 ) -> PgResult<Datum> {
     require_superuser("pageinspect")?;
 
-    let rows = if !flinfo.has_fn_extra() {
+    let mut deleted_notice = String::new();
+    let first_call = if !flinfo.has_fn_extra() {
+        require_set_context(fcinfo)?;
         // SAFETY: the arming context outlives this call.
         let mcx = unsafe { fcinfo.result_mcx_detached() };
         let blkno: i64 = if version == PiVersion::V1_8 {
@@ -456,16 +523,16 @@ fn bt_page_items_internal(
         bt_index_block_validate(&rel, blkno)?;
         let page = read_rel_page(&rel, blkno as BlockNumber)?;
         rel.close(types_rel::AccessShareLock)?;
-        Some(bt_page_items_rows(
-            mcx,
-            flinfo,
-            &page,
-            &format!("page from block {blkno} is deleted"),
-        )?)
+        deleted_notice = format!("page from block {blkno} is deleted");
+        Some(page)
     } else {
         None
     };
-    srf_stream(flinfo, fcinfo, rows)
+    bt_page_items_stream(
+        flinfo,
+        fcinfo,
+        first_call.map(|p| (p, deleted_notice.as_str())),
+    )
 }
 
 pub(crate) fn fc_bt_page_items_1_9(
@@ -491,9 +558,8 @@ pub(crate) fn fc_bt_page_items_bytea(
     let flinfo = flinfo.expect("bt_page_items_bytea: resolved FmgrInfo required");
     require_superuser("raw page")?;
 
-    let rows = if !flinfo.has_fn_extra() {
-        // SAFETY: the arming context outlives this call.
-        let mcx = unsafe { fcinfo.result_mcx_detached() };
+    let first_call = if !flinfo.has_fn_extra() {
+        require_set_context(fcinfo)?;
         let page = RawPage::arg(fcinfo, 0)?;
         let b = page.bytes();
 
@@ -524,11 +590,11 @@ pub(crate) fn fc_bt_page_items_bytea(
             notice("page is deleted")?;
         }
 
-        Some(bt_page_items_rows(mcx, flinfo, &page, "page from block is deleted")?)
+        Some((page, "page from block is deleted"))
     } else {
         None
     };
-    srf_stream(flinfo, fcinfo, rows)
+    bt_page_items_stream(flinfo, fcinfo, first_call)
 }
 
 pub(crate) fn fc_bt_metap(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -565,7 +631,7 @@ pub(crate) fn fc_bt_metap(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) ->
     let btm_last_cleanup_num_heap_tuples = f64::from_bits(r_u64(b, m + 32));
     let btm_allequalimage = b[m + 40] != 0;
 
-    let tupdesc = composite_tupdesc(mcx, flinfo)?;
+    let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
 
     // Versions before 1.8 used int4 for columns the C code prints as int64;
     // insist on the 1.8+ definition, as C does.

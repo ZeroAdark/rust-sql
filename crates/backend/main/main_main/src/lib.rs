@@ -297,7 +297,16 @@ pub fn pg_main(argv: &[String]) -> PgResult<()> {
             write_stdout_ignoring_errors(&mut std::io::stdout(), &help(&progname));
             std::process::exit(0);
         }
-        if arg1 == "--version" || arg1 == "-V" {
+        if arg1 == "--version" {
+            let version = format!(
+                "pgrust {} (PostgreSQL {} compatible)\n",
+                guc_tables::consts::PGRUST_VERSION,
+                guc_tables::consts::PG_COMPAT_VERSION,
+            );
+            write_stdout_ignoring_errors(&mut std::io::stdout(), &version);
+            std::process::exit(0);
+        }
+        if arg1 == "-V" {
             write_stdout_ignoring_errors(&mut std::io::stdout(), PG_BACKEND_VERSIONSTR);
             std::process::exit(0);
         }
@@ -448,6 +457,7 @@ pub fn help(progname: &str) -> String {
     s.push_str("  -h HOSTNAME        host name or IP address to listen on\n");
     s.push_str("  -i                 enable TCP/IP connections (deprecated)\n");
     s.push_str("  -k DIRECTORY       Unix-domain socket location\n");
+    s.push_str("  -l                 enable SSL connections\n");
     s.push_str("  -N MAX-CONNECT     maximum number of allowed connections\n");
     s.push_str("  -p PORT            port number to listen on\n");
     s.push_str("  -s                 show statistics after each query\n");
@@ -488,6 +498,16 @@ pub fn help(progname: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // main.c:400 under USE_SSL (be_secure's default-on ssl feature).
+    #[test]
+    fn help_lists_the_ssl_switch() {
+        let h = help("postgres");
+        let k = h.find("  -k DIRECTORY       Unix-domain socket location\n").unwrap();
+        assert!(h[k..].starts_with(
+            "  -k DIRECTORY       Unix-domain socket location\n  -l                 enable SSL connections\n  -N MAX-CONNECT"
+        ));
+    }
 
     #[test]
     fn dispatch_names_match_c() {

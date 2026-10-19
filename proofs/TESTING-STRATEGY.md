@@ -447,7 +447,7 @@ mock like typcache); xml: verify pgrust ships xml before spending anything.
 
 - **selectivity estimators (46 + planner-node 4) → estimate-diff-monitor.** They
   affect plan choice, not results. Assert only outputs ∈ [0,1] and non-NaN (NaN
-  poisons cost comparison — GL-TAIL-2 precedent). Beyond that: EXPLAIN-estimate
+  poisons cost comparison — regression precedent). Beyond that: EXPLAIN-estimate
   comparison (same schema + ANALYZE both sides, per-node estimated rows within
   tolerance), alert-don't-fail. Not worth CGF depth. Note these are *also* Shape
   A-able against vendored C selfuncs with mocked stats tuples if drift monitoring

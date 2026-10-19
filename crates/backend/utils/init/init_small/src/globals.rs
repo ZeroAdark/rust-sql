@@ -54,6 +54,10 @@ pub fn set_data_directory_mode(mode: i32) {
     DATA_DIRECTORY_MODE.store(mode, std::sync::atomic::Ordering::Relaxed);
 }
 
+// PGC_INTERNAL: checkDataDir sets the value (miscinit.c:428); GUC
+// initialization publishing the 0700 boot value must not clobber it.
+pub fn guc_ignores_data_directory_mode(_mode: i32) {}
+
 // C backends setsid() at start, so a popen'd COPY PROGRAM child sits in the
 // backend's process group and kill(-pid, sig) from pg_signal_backend /
 // signal_child reaches it. One process here: each backend's live children
@@ -312,17 +316,29 @@ pub fn SetDataDir(value: &str) {
     DATA_DIR.set(Some(String::from(value).leak()));
 }
 
+pub fn InheritDataDir(value: &'static str) {
+    DATA_DIR.set(Some(value));
+}
+
 pub fn DatabasePath() -> Option<&'static str> {
     DATABASE_PATH.get()
 }
 
 pub fn SetDatabasePath(value: &str) {
-    DATABASE_PATH.set(Some(String::from(value).leak()));
+    DATABASE_PATH.set(Some(Box::leak(Box::<str>::from(value))));
 }
 
-// `DatabasePath = NULL` (inval.c's recovery-only poke via miscinit).
+// `pfree(DatabasePath); DatabasePath = NULL` (inval.c:1163, the recovery
+// poke via miscinit, once per replayed init-file invalidation).
 pub fn ClearDatabasePath() {
-    DATABASE_PATH.set(None);
+    drop(TakeDatabasePath());
+}
+
+pub fn TakeDatabasePath() -> Option<Box<str>> {
+    let path = DATABASE_PATH.take()?;
+    // SAFETY: the only writer is SetDatabasePath, which stores a
+    // Box::<str>::leak'd allocation, and take() removed the only handle.
+    Some(unsafe { Box::from_raw(path as *const str as *mut str) })
 }
 
 // miscadmin.h / c.h interrupt macros over the counters above. Per-query hot
@@ -420,7 +436,7 @@ pub fn process_id() -> u32 {
 /// independent guards keeping workers away from temp relations, not on the
 /// expression being right. Spelled out here so the sites stop asserting a macro
 /// they did not implement, and so wiring the setter is the only remaining step
-/// rather than one of two. See notes/GL-VACGUARD-1-letter.md §10.
+/// rather than one of two. See notes/regression-letter.md §10.
 #[inline]
 pub fn ProcNumberForTempRelations() -> ProcNumber {
     let leader = ParallelLeaderProcNumber();

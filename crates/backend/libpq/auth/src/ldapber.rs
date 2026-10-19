@@ -39,7 +39,22 @@ pub const LDAP_LOCAL_ERROR: i32 = -2;
 pub const LDAP_DECODING_ERROR: i32 = -4;
 pub const LDAP_TIMEOUT: i32 = -5;
 pub const LDAP_FILTER_ERROR: i32 = -7;
+pub const LDAP_PARAM_ERROR: i32 = -9;
 pub const LDAP_CONNECT_ERROR: i32 = -11;
+pub const LDAP_REFERRAL_LIMIT_EXCEEDED: i32 = -17;
+// ldap-int.h LDAP_DEFAULT_REFHOPLIMIT: ld_refhoplimit's initial value.
+const LDAP_DEFAULT_REFHOPLIMIT: u32 = 5;
+
+// Whether an LDAP URL spells a scope segment (`ldap://h/dn?attrs?scope...`):
+// url.c leaves lud_scope at LDAP_SCOPE_DEFAULT when it does not, and
+// re_encode_request then keeps the original request's scope.
+fn ldap_url_has_scope(url: &str) -> bool {
+    url.find("://")
+        .map(|p| &url[p + 3..])
+        .and_then(|rest| rest.find('/').map(|s| &rest[s + 1..]))
+        .and_then(|sections| sections.split('?').nth(2))
+        .is_some_and(|scope| !scope.is_empty())
+}
 
 /// LDAP_EXOP_START_TLS (RFC 4511).
 pub const LDAP_EXOP_START_TLS: &[u8] = b"1.3.6.1.4.1.1466.20037";
@@ -856,10 +871,11 @@ impl LdapConn {
         Ok(rc)
     }
 
-    /// ldap_simple_bind_s.
-    pub fn simple_bind(&mut self, dn: &str, passwd: &[u8]) -> i32 {
+    /// ldap_simple_bind_s. `dn` is the raw name bytes (a search entry's DN
+    /// comes back from the server as an OCTET STRING and is bound verbatim).
+    pub fn simple_bind(&mut self, dn: &[u8], passwd: &[u8]) -> i32 {
         let mut body = ber_int(TAG_INTEGER, LDAP_VERSION3);
-        body.extend_from_slice(&tlv(TAG_OCTET_STRING, dn.as_bytes()));
+        body.extend_from_slice(&tlv(TAG_OCTET_STRING, dn));
         body.extend_from_slice(&tlv(0x80, passwd)); // simple auth (raw bytes)
         let op = tlv(TAG_BIND_REQUEST, &body);
         let msgid = match self.send_op(&op) {
@@ -879,16 +895,33 @@ impl LdapConn {
         }
     }
 
-    /// ldap_search_s with attrsonly=0; returns the entry DNs. derefAliases,
-    /// sizeLimit and timeLimit come from the DEREF / SIZELIMIT / TIMELIMIT
-    /// options as ldap_search_ext's -1 defaults do.
+    /// ldap_search_s with attrsonly=0; returns the entry DNs (raw bytes: the
+    /// DN is bound as-is and becomes the authn id). derefAliases, sizeLimit
+    /// and timeLimit come from the DEREF / SIZELIMIT / TIMELIMIT options as
+    /// ldap_search_ext's -1 defaults do. SearchResultReferences are chased
+    /// as libldap does with its LDAP_OPT_REFERRALS default (on; C never
+    /// turns it off): the entries the referenced servers return join the
+    /// result, so ldap_count_entries sees them.
     pub fn search(
         &mut self,
         base: &str,
         scope: i32,
         filter: &Filter,
         attrs: &[&str],
-    ) -> Result<Vec<String>, i32> {
+    ) -> Result<Vec<Vec<u8>>, i32> {
+        self.search_hop(base, scope, filter, attrs, 0, &mut Vec::new())
+    }
+
+    // One search request at referral depth `hops` (0 = the original).
+    fn search_hop(
+        &mut self,
+        base: &str,
+        scope: i32,
+        filter: &Filter,
+        attrs: &[&str],
+        hops: u32,
+        visited: &mut Vec<String>,
+    ) -> Result<Vec<Vec<u8>>, i32> {
         let mut body = tlv(TAG_OCTET_STRING, base.as_bytes());
         body.extend_from_slice(&ber_int(TAG_ENUMERATED, scope as i64));
         body.extend_from_slice(&ber_int(TAG_ENUMERATED, self.opts.deref as i64));
@@ -914,9 +947,24 @@ impl LdapConn {
                     if t != TAG_OCTET_STRING {
                         return Err(LDAP_DECODING_ERROR);
                     }
-                    entries.push(String::from_utf8_lossy(dn).into_owned());
+                    entries.push(dn.to_vec());
                 }
-                TAG_SEARCH_REFERENCE => continue,
+                TAG_SEARCH_REFERENCE => {
+                    // SearchResultReference ::= SEQUENCE SIZE (1..MAX) OF uri
+                    // LDAPURL. result.c try_read1msg chases each URI as it
+                    // arrives (ldap_chase_v3referrals) and folds the
+                    // referenced server's entries into this result.
+                    let mut r = BerReader::new(&body);
+                    while let Ok((t, url)) = r.read_tlv() {
+                        if t != TAG_OCTET_STRING {
+                            return Err(LDAP_DECODING_ERROR);
+                        }
+                        let url = String::from_utf8_lossy(url).into_owned();
+                        entries.extend(self.chase_reference(
+                            &url, base, scope, filter, attrs, hops, visited,
+                        )?);
+                    }
+                }
                 TAG_SEARCH_DONE => {
                     let rc = self.parse_result(&body)?;
                     if rc != LDAP_SUCCESS {
@@ -927,6 +975,67 @@ impl LdapConn {
                 _ => return Err(LDAP_DECODING_ERROR),
             }
         }
+    }
+
+    // request.c ldap_chase_v3referrals for one search continuation URI: a
+    // URI already chased on this request chain is skipped; past
+    // LDAP_DEFAULT_REFHOPLIMIT hops the chase fails with
+    // LDAP_REFERRAL_LIMIT_EXCEEDED; a URI the parser rejects is
+    // LDAP_PARAM_ERROR; the referenced server is reached on a fresh
+    // connection bound anonymously (no rebind proc is ever installed:
+    // ldap_new_connection's empty simple bind — a bind refusal is that
+    // bind's result code, no connection is LDAP_SERVER_DOWN); the URI's DN,
+    // scope and filter replace the request's own only where present
+    // (re_encode_request). The chased search's entries are the return; its
+    // failure is the whole search's failure (merge_error_info).
+    #[allow(clippy::too_many_arguments)]
+    fn chase_reference(
+        &self,
+        url: &str,
+        base: &str,
+        scope: i32,
+        filter: &Filter,
+        attrs: &[&str],
+        hops: u32,
+        visited: &mut Vec<String>,
+    ) -> Result<Vec<Vec<u8>>, i32> {
+        if visited.iter().any(|v| v == url) {
+            return Ok(Vec::new());
+        }
+        if hops >= LDAP_DEFAULT_REFHOPLIMIT {
+            return Err(LDAP_REFERRAL_LIMIT_EXCEEDED);
+        }
+        visited.push(url.to_string());
+        let desc = hba::ldapurl::ldap_url_parse(url).map_err(|_| LDAP_PARAM_ERROR)?;
+        let ldaps = match desc.scheme.as_str() {
+            "ldap" => false,
+            "ldaps" => true,
+            // ldapi / cldap transports are not in this client: no connection.
+            _ => return Err(LDAP_SERVER_DOWN),
+        };
+        let mut conn = LdapConn::new(
+            vec![(desc.host.clone().unwrap_or_default(), desc.port)],
+            ldaps,
+            self.opts.clone(),
+        );
+        let rc = conn.simple_bind(b"", b"");
+        if rc != LDAP_SUCCESS {
+            conn.unbind();
+            return Err(rc);
+        }
+        let base = desc.dn.as_deref().unwrap_or(base);
+        let scope = if ldap_url_has_scope(url) { desc.scope } else { scope };
+        let parsed;
+        let filter = match desc.filter.as_deref() {
+            Some(f) => {
+                parsed = parse_search_filter(f).map_err(|()| LDAP_FILTER_ERROR)?;
+                &parsed
+            }
+            None => filter,
+        };
+        let r = conn.search_hop(base, scope, filter, attrs, hops + 1, visited);
+        conn.unbind();
+        r
     }
 
     /// ldap_unbind: fire the notification and drop the connection.

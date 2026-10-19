@@ -112,7 +112,7 @@ pub struct Instrumentation {
     pub walusage: WalUsage,
 }
 
-/// EA-on-morsels pipeline report (pgrust-fast docs/design/ea-morsels.md §4;
+/// EA-on-morsels pipeline report (pgrust docs/design/ea-morsels.md §4;
 /// no C counterpart). One record per engaged runtime pipeline phase,
 /// constructed by the arm's leader merge on a clean Completed outcome and
 /// read by EXPLAIN through the query_desc_runtime_ea_pipeline seam. All
@@ -161,7 +161,7 @@ pub struct RuntimeEaPipeline {
     pub morsel_max_ns: u64,
 }
 
-/// EXPLAIN (ENGINE) wire vocabulary (pgrust-fast single-executor Phase 0.2;
+/// EXPLAIN (ENGINE) wire vocabulary (pgrust single-executor Phase 0.2;
 /// no C counterpart): which engine owned a plan node's execution. Mirror of
 /// `executils::EngineKind` — the seam crate cannot depend on executils, so
 /// this repr(u8) twin rides the seam (`query_desc_engine_events`), the same

@@ -111,7 +111,10 @@ fn relation_open_by_text_arg<'m>(
 ) -> PgResult<types_rel::Relation<'m>> {
     // SAFETY: arg i is a non-null text (STRICT).
     let v = unsafe { fcinfo.arg_varlena_packed(i)? };
-    let rawname = String::from_utf8_lossy(v.data()).into_owned();
+    let raw = v.data();
+    // text_to_cstring: SplitIdentifierString stops at the first NUL.
+    let raw = &raw[..raw.iter().position(|&b| b == 0).unwrap_or(raw.len())];
+    let rawname = String::from_utf8_lossy(raw).into_owned();
     let encoding = if mbutils_seams::get_database_encoding::is_installed() {
         mbutils_seams::get_database_encoding::call()
     } else {
@@ -161,7 +164,6 @@ fn fc_pgrowlocks(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult
     let mcx = unsafe { fcinfo.result_mcx_detached() };
 
     let mut srf = funcapi::InitMaterializedSRF(mcx, flinfo, fcinfo, 0)?;
-    let mut attinmeta = att_in_metadata(&srf.tupdesc)?;
 
     let rel = relation_open_by_text_arg(mcx, fcinfo, 0, types_rel::AccessShareLock)?;
 
@@ -208,6 +210,8 @@ fn fc_pgrowlocks(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult
     let tableam::TableScanDesc::Heap(mut hscan) = scan else {
         unreachable!("heap AM checked above");
     };
+
+    let mut attinmeta = att_in_metadata(&srf.tupdesc)?;
 
     loop {
         let (t_len, t_self, t_table_oid, hdr) =

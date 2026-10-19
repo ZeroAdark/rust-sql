@@ -1,0 +1,54 @@
+\set VERBOSITY verbose
+DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_am WHERE amname = 'pgrcolumnar2') THEN CREATE ACCESS METHOD pgrcolumnar2 TYPE TABLE HANDLER heap_tableam_handler; END IF; END $$;
+-- Lane S: sqe over heap, a table whose rows are all NULL packs 291 rows per page
+CREATE TABLE zn (a int4, b int8);
+INSERT INTO zn SELECT NULL, NULL FROM generate_series(1, 70000);
+INSERT INTO zn SELECT i, i FROM generate_series(1, 10) i;
+SELECT pg_relation_size('zn') / 8192 AS pages;
+ pages 
+-------
+   241
+(1 row)
+
+SET max_parallel_workers_per_gather = 0;
+SET pgrust.sqe_heap = off;
+SELECT count(*) FROM zn;
+ count 
+-------
+ 70010
+(1 row)
+
+SELECT count(*) FROM zn WHERE a > 0;
+ count 
+-------
+    10
+(1 row)
+
+SET pgrust.sqe_heap = on;
+SELECT count(*) FROM zn;
+ count 
+-------
+ 70010
+(1 row)
+
+SELECT count(*) FROM zn WHERE a > 0;
+ count 
+-------
+    10
+(1 row)
+
+SELECT a, count(*) FROM zn GROUP BY a ORDER BY 2 DESC, 1 LIMIT 2;
+ a | count 
+---+-------
+   | 70000
+ 1 |     1
+(2 rows)
+
+CREATE TABLE z0 ();
+INSERT INTO z0 SELECT FROM generate_series(1, 70000);
+SELECT count(*) FROM z0;
+ count 
+-------
+ 70000
+(1 row)
+

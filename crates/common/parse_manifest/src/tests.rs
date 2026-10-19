@@ -160,8 +160,8 @@ fn roundtrips_encoded_path() {
     InitializeBackupManifest(mcx, &mut m, MANIFEST_OPTION_FORCE_ENCODE, PgChecksumType::None)
         .unwrap();
     // Non-UTF8 path: always hex-encoded, and FORCE_ENCODE hex-encodes even
-    // clean paths.
-    let raw: &[u8] = b"base/1/bad\xff\x00name";
+    // clean paths. (No NUL: C pathnames are C strings on both sides.)
+    let raw: &[u8] = b"base/1/bad\xffname";
     let mut cc = PgChecksumContext::init(PgChecksumType::None);
     AddFileToBackupManifest(&mut m, 0, raw, 42, 1_700_000_000, &mut cc).unwrap();
     let mut cc = PgChecksumContext::init(PgChecksumType::None);
@@ -301,6 +301,24 @@ fn files_manifest(file_obj: &str) -> Vec<u8> {
         "{{\"PostgreSQL-Backup-Manifest-Version\": 2, \"Files\": [{file_obj}]}}"
     )
     .into_bytes()
+}
+
+#[test]
+fn encoded_path_is_cut_at_the_first_nul_like_a_c_string() {
+    // parse_manifest.c:723 passes the decoded pathname as a NUL-terminated
+    // string, so "610062" names the same file as "a".
+    let body = concat!(
+        "{ \"PostgreSQL-Backup-Manifest-Version\": 2,\n",
+        "\"Files\": [\n",
+        "{ \"Encoded-Path\": \"610062\", \"Size\": 1 },\n",
+        "{ \"Path\": \"a\", \"Size\": 2 }\n",
+        "],\n",
+    );
+    let m = parse(&with_checksum(body)).unwrap();
+    assert_eq!(m.files.len(), 2);
+    assert_eq!(m.files[0].pathname, b"a");
+    assert_eq!(m.files[0].size, 1);
+    assert_eq!(m.files[1].pathname, b"a");
 }
 
 #[test]

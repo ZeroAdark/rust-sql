@@ -19,10 +19,10 @@ stringinfo = { path = "../../../../_support/types/stringinfo" }
 types_core = { path = "../../../../_support/types/types_core" }
 types_error = { path = "../../../../_support/types/types_error" }
 types_fmgr = { path = "../../../../_support/types/fmgr" }
+elog = { path = "../../error/elog" }
+guc_tables = { path = "../../misc/guc_tables" }
 
 [dev-dependencies]
-elog = { path = "../../error/elog" }
 fd = { path = "../../../storage/file/fd" }
-guc_tables = { path = "../../misc/guc_tables" }
 pgtz = { path = "../../../timezone/pgtz" }
 xact_seams = { path = "../../../access/transam/xact_seams" }

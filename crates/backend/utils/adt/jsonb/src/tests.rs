@@ -1290,3 +1290,18 @@ fn refinalize_object_agg_skip_nulls_leading_null() {
         assert_eq!(String::from_utf8(image_out_text(mcx, &img)).unwrap(), r#"{"b": true}"#);
     }
 }
+
+// jsonb_util.c appendElement/appendKey double the JsonbValue (32B) / JsonbPair
+// (72B) buffer through repalloc, so C's MaxAllocSize boundary falls at 2^25
+// elements / 2^24 pairs regardless of the Rust struct sizes.
+#[test]
+fn arena_vec_growth_admits_at_c_struct_sizes() {
+    use crate::build::{c_buffer_admitted, JsonbPair, JsonbValue};
+    assert!(c_buffer_admitted::<JsonbValue>(1 << 24).is_ok());
+    let err = c_buffer_admitted::<JsonbValue>(1 << 25).unwrap_err();
+    assert_eq!(err.message(), "invalid memory alloc request size 1073741824");
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+    assert!(c_buffer_admitted::<JsonbPair>(1 << 23).is_ok());
+    let err = c_buffer_admitted::<JsonbPair>(1 << 24).unwrap_err();
+    assert_eq!(err.message(), "invalid memory alloc request size 1207959552");
+}

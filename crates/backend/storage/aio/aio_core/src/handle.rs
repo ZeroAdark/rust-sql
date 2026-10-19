@@ -433,6 +433,9 @@ fn pgaio_io_reclaim(index: u32) {
     // reset: concurrent viewers see either the old generation or IDLE.
     h.generation.fetch_add(1, Ordering::Relaxed);
     h.set_state(PGAIO_HS_IDLE);
+    // aio.c:735 pg_write_barrier: the Release store orders nothing after it,
+    // so the field reset below could otherwise become visible first.
+    types_storage::latch::pg_memory_barrier();
 
     d.op = PGAIO_OP_INVALID;
     d.target = PGAIO_TID_INVALID;

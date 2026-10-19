@@ -58,6 +58,13 @@ pub struct PgBackendStatus {
     pub st_progress_param: [SyncCell<i64>; PGSTAT_NUM_PROGRESS_PARAM],
     pub st_query_id: SyncCell<i64>,
     pub st_plan_id: SyncCell<i64>,
+    /// pgrust-only: the backend_type a standing (pool) worker thread shows
+    /// while it serves one parallel operation — C's parallel workers are
+    /// bgworkers registered as "parallel worker" (parallel.c
+    /// bgw_type) for the operation's lifetime; a pool thread has no
+    /// registry slot, so the view reads this instead. `None` = look the
+    /// bgworker registry up by pid, as C does.
+    pub st_bgw_type_override: SyncCell<Option<&'static str>>,
 }
 
 // PgBackendSSLStatus (backend_status.h); contents only meaningful while
@@ -254,12 +261,20 @@ fn name_to_string(name: &[u8; NAMELEN]) -> String {
     String::from_utf8_lossy(&name[..len]).into_owned()
 }
 
+// C's sizeof(PgBackendStatus) / sizeof(PgBackendSSLStatus) (backend_status.h,
+// 64-bit): the ShmemIndex rows carry C's sizes, not the Rust layouts'.
+pub const C_SIZEOF_PG_BACKEND_STATUS: usize = 440;
+pub const C_SIZEOF_PG_BACKEND_SSL_STATUS: usize = 324;
+
 pub fn BackendStatusShmemSize() -> PgResult<usize> {
     let slots = NumBackendStatSlots() as usize;
-    let mut size = shmem::mul_size(std::mem::size_of::<PgBackendStatus>(), slots)?;
+    let mut size = shmem::mul_size(C_SIZEOF_PG_BACKEND_STATUS, slots)?;
     size = shmem::add_size(size, shmem::mul_size(NAMELEN, slots)?)?;
     size = shmem::add_size(size, shmem::mul_size(NAMELEN, slots)?)?;
     size = shmem::add_size(size, shmem::mul_size(query_size(), slots)?)?;
+    if cfg!(feature = "ssl") {
+        size = shmem::add_size(size, shmem::mul_size(C_SIZEOF_PG_BACKEND_SSL_STATUS, slots)?)?;
+    }
     Ok(size)
 }
 
@@ -269,9 +284,30 @@ pub fn BackendStatusShmemInit() -> PgResult<()> {
     }
     let slots = NumBackendStatSlots();
     let qsize = query_size();
+    // backend_status.c:124-200: every buffer is a named ShmemInitStruct; the
+    // status array and SSL buffer stay Rust-side, their C-sized rows are
+    // registered so pg_shmem_allocations lists them.
+    shmem::ShmemInitStruct(
+        "Backend Status Array",
+        shmem::mul_size(C_SIZEOF_PG_BACKEND_STATUS, slots as usize)?,
+    )?;
+    shmem::ShmemInitStruct(
+        "Backend Application Name Buffer",
+        shmem::mul_size(NAMELEN, slots as usize)?,
+    )?;
+    shmem::ShmemInitStruct(
+        "Backend Client Host Name Buffer",
+        shmem::mul_size(NAMELEN, slots as usize)?,
+    )?;
     let total = shmem::mul_size(qsize, slots as usize)?;
-    let base = shmem::ShmemAlloc(total)?;
+    let (base, _) = shmem::ShmemInitStruct("Backend Activity Buffer", total)?;
     let _ = BACKEND_ACTIVITY_BUFFER.set(ActivityBuffer { base, query_size: qsize, total });
+    if cfg!(feature = "ssl") {
+        shmem::ShmemInitStruct(
+            "Backend SSL Status Buffer",
+            shmem::mul_size(C_SIZEOF_PG_BACKEND_SSL_STATUS, slots as usize)?,
+        )?;
+    }
 
     let array: Vec<PgBackendStatus> = (0..slots)
         .map(|slot| PgBackendStatus {
@@ -279,6 +315,7 @@ pub fn BackendStatusShmemInit() -> PgResult<()> {
             slot,
             st_procpid: SyncCell::new(0),
             st_backendType: SyncCell::new(BackendType::Invalid),
+            st_bgw_type_override: SyncCell::new(None),
             st_proc_start_timestamp: SyncCell::new(0),
             st_xact_start_timestamp: SyncCell::new(0),
             st_activity_start_timestamp: SyncCell::new(0),
@@ -316,6 +353,7 @@ pub fn BackendStatusShmemResetAfterCrash() {
         unsafe {
             e.st_procpid.set(0);
             e.st_backendType.set(BackendType::Invalid);
+            e.st_bgw_type_override.set(None);
             e.st_proc_start_timestamp.set(0);
             e.st_xact_start_timestamp.set(0);
             e.st_activity_start_timestamp.set(0);
@@ -392,6 +430,7 @@ pub fn pgstat_bestart_initial() -> PgResult<()> {
     unsafe {
         beentry.st_procpid.set(g::MyProcPid());
         beentry.st_backendType.set(miscinit::GetMyBackendType());
+        beentry.st_bgw_type_override.set(None);
         beentry.st_proc_start_timestamp.set(g::MyStartTimestamp());
         beentry.st_activity_start_timestamp.set(0);
         beentry.st_state_start_timestamp.set(0);
@@ -532,6 +571,78 @@ fn pgstat_beshutdown_hook(_code: i32, _arg: usize) {
     unsafe { beentry.st_procpid.set(0) };
     end_write_activity(beentry);
     MY_BE_ENTRY.set(None);
+}
+
+/// One parallel operation served by a standing (pool) worker thread, as C's
+/// pg_stat_activity would show it.
+///
+/// A C parallel worker is a process: registered as bgw_type "parallel
+/// worker" (parallel.c:1408 / the port's parallel::LaunchParallelWorkers
+/// registration), it appears in pg_stat_activity for exactly the span of
+/// the operation (backend_type "parallel worker", leader_pid from its lock
+/// group, the leader's query text via pgstat_report_activity) and vanishes
+/// at exit (pgstat_beshutdown_hook: st_procpid = 0). A pgrust pool thread
+/// keeps one PGPROC and one beentry across many serves, so a serve is
+/// bracketed instead: `begin` shows the entry as a parallel worker,
+/// `Drop` clears the activity and hides it again (the parked thread has
+/// no C counterpart, so it has no row).
+///
+/// `pooled == false` (a launched bgworker, which really exits) is a no-op:
+/// its registry slot already names it and its exit hides it.
+pub struct PoolWorkerServe {
+    pooled: bool,
+}
+
+impl PoolWorkerServe {
+    pub fn begin(pooled: bool) -> PoolWorkerServe {
+        if pooled {
+            if let Some(beentry) = MY_BE_ENTRY.get() {
+                begin_write_activity(beentry);
+                // SAFETY: own-backend write / cross-backend read serialized by the st_changecount protocol
+                unsafe {
+                    beentry.st_procpid.set(g::MyProcPid());
+                    beentry.st_bgw_type_override.set(Some("parallel worker"));
+                    beentry.st_state.set(BackendState::STATE_UNDEFINED);
+                    beentry.st_query_id.set(0);
+                    beentry.st_plan_id.set(0);
+                }
+                end_write_activity(beentry);
+            }
+        }
+        PoolWorkerServe { pooled }
+    }
+}
+
+impl Drop for PoolWorkerServe {
+    fn drop(&mut self) {
+        if self.pooled {
+            pgstat_pool_worker_park();
+        }
+    }
+}
+
+/// Hide a standing (pool) worker thread's entry while it is parked: the
+/// thread has no C counterpart between serves (a C parallel worker has
+/// exited — pgstat_beshutdown_hook's st_procpid = 0), so pg_stat_activity
+/// shows no row. Its own InitPostgres (a warm connect or a first serve)
+/// showed the entry as a plain background worker; `PoolWorkerServe::begin`
+/// shows it again for the next serve. Idempotent.
+pub fn pgstat_pool_worker_park() {
+    let Some(beentry) = MY_BE_ENTRY.get() else { return };
+    begin_write_activity(beentry);
+    // SAFETY: own-backend write / cross-backend read serialized by the st_changecount protocol
+    unsafe {
+        write_activity(beentry.slot, b"");
+        beentry.st_state.set(BackendState::STATE_UNDEFINED);
+        beentry.st_state_start_timestamp.set(0);
+        beentry.st_activity_start_timestamp.set(0);
+        beentry.st_xact_start_timestamp.set(0);
+        beentry.st_query_id.set(0);
+        beentry.st_plan_id.set(0);
+        beentry.st_bgw_type_override.set(None);
+        beentry.st_procpid.set(0);
+    }
+    end_write_activity(beentry);
 }
 
 pub fn pgstat_report_activity(state: BackendState, cmd_str: Option<&str>) {
@@ -720,14 +831,19 @@ pub fn pgstat_get_crashed_backend_activity(pid: i32) -> Option<String> {
             if raw.is_empty() {
                 return None;
             }
-            let safe: String = raw
-                .iter()
-                .map(|&b| if (32..127).contains(&b) { b as char } else { '?' })
-                .collect();
-            return Some(safe);
+            return Some(ascii_safe(&raw));
         }
     }
     None
+}
+
+// ascii_safe_strlcpy (ascii.c:187-194): printable ASCII and DEL kept, the
+// three whitespace controls kept, everything else replaced by '?'.
+pub fn ascii_safe(raw: &[u8]) -> String {
+    raw.iter()
+        .take_while(|&&b| b != 0)
+        .map(|&b| if (32..=127).contains(&b) || matches!(b, b'\n' | b'\r' | b'\t') { b as char } else { '?' })
+        .collect()
 }
 
 // Multibyte-aware truncation of a possibly mid-character truncated buffer.
@@ -770,12 +886,13 @@ pub struct LocalPgBackendStatus {
     pub st_gss: bool,
     pub st_state: BackendState,
     pub st_appname: String,
-    pub st_activity_raw: String,
+    pub st_activity_raw: Vec<u8>,
     pub st_progress_command: i32,
     pub st_progress_command_target: Oid,
     pub st_progress_param: [i64; PGSTAT_NUM_PROGRESS_PARAM],
     pub st_query_id: i64,
     pub st_plan_id: i64,
+    pub st_bgw_type_override: Option<&'static str>,
     pub proc_number: ProcNumber,
     pub backend_xid: TransactionId,
     pub backend_xmin: TransactionId,
@@ -828,13 +945,16 @@ fn pgstat_read_current_status() {
                     st_gss: beentry.st_gss.get(),
                     st_state: beentry.st_state.get(),
                     st_appname: name_to_string(&beentry.st_appname.get()),
-                    st_activity_raw: String::from_utf8_lossy(&read_activity(beentry.slot))
-                        .into_owned(),
+                    // Raw bytes, as C (backend_status.c:911): the readers'
+                    // pgstat_clip_activity drops an incomplete trailing
+                    // character instead of showing a replacement char.
+                    st_activity_raw: read_activity(beentry.slot),
                     st_progress_command: beentry.st_progress_command.get(),
                     st_progress_command_target: beentry.st_progress_command_target.get(),
                     st_progress_param: std::array::from_fn(|i| beentry.st_progress_param[i].get()),
                     st_query_id: beentry.st_query_id.get(),
                     st_plan_id: beentry.st_plan_id.get(),
+                    st_bgw_type_override: beentry.st_bgw_type_override.get(),
                     proc_number: slot as ProcNumber,
                     backend_xid: InvalidTransactionId,
                     backend_xmin: InvalidTransactionId,

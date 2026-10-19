@@ -3257,6 +3257,7 @@ pub fn transformWindowDefinitions<'mcx>(
         let mut wc = WindowClause {
             name: windef.name,
             refname: windef.refname,
+            inRangeAsc: false,
             ..WindowClause::default()
         };
 

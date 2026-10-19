@@ -386,7 +386,8 @@ fn rescan_mark_initplans<'mcx>(
     base: &'mcx types_nodes::plannodes::Plan<'mcx>,
     estate: &mut EStateData<'mcx>,
     chg: &types_nodes::bitmapset::Bitmapset<'mcx>,
-    chg_owned: &mut Option<types_nodes::bitmapset::Bitmapset<'mcx>>,
+    scratch: &mut types_nodes::bitmapset::Bitmapset<'mcx>,
+    owned: &mut bool,
 ) -> PgResult<()> {
     for sp_node in base.initPlan.iter() {
         let sp = sp_node.as_sub_plan().expect("initPlan cell is a SubPlan");
@@ -412,7 +413,7 @@ fn rescan_mark_initplans<'mcx>(
             // initplan whose output is never read (an untaken CASE arm)
             // never re-runs.
             if !init_base.extParam.is_empty() {
-                let parm = chg_owned.as_ref().unwrap_or(chg);
+                let parm = if *owned { &*scratch } else { chg };
                 let mcx = estate.es_query_cxt;
                 let mut x = parm.next_member(-1);
                 while x >= 0 {
@@ -426,7 +427,7 @@ fn rescan_mark_initplans<'mcx>(
                 continue;
             }
         } else {
-            if !chg_owned.as_ref().unwrap_or(chg).overlap(&init_base.extParam) {
+            if !(if *owned { &*scratch } else { chg }).overlap(&init_base.extParam) {
                 continue;
             }
             // nodeCtescan drives this subplan itself: the eager rescan is
@@ -442,7 +443,7 @@ fn rescan_mark_initplans<'mcx>(
                 &mut ps,
                 init_plan,
                 estate,
-                chg_owned.as_ref().unwrap_or(chg),
+                if *owned { &*scratch } else { chg },
             );
             *slot = Some(ps);
             r?;
@@ -455,19 +456,16 @@ fn rescan_mark_initplans<'mcx>(
             }
         }
         let mcx = estate.es_query_cxt;
-        let owned = match chg_owned.as_mut() {
-            Some(o) => o,
-            None => {
-                *chg_owned = Some(chg.clone_in(mcx)?);
-                chg_owned.as_mut().unwrap()
-            }
-        };
+        if !*owned {
+            scratch.replace_members(mcx, chg)?;
+            *owned = true;
+        }
         for pid in sp.setParam.iter() {
             if !is_cte {
                 estate.es_param_exec_vals[pid as usize].exec_plan = true;
                 debug_assert!(estate.es_param_subplans[pid as usize].is_some());
             }
-            owned.add_member(mcx, pid)?;
+            scratch.add_member(mcx, pid)?;
         }
     }
     Ok(())
@@ -502,11 +500,28 @@ pub(crate) fn exec_re_scan_chg_forced<'mcx>(
     // The initplan mark/rescan walk and the hashed-SubPlan stale sweep are
     // outlined cold: this function runs per Memoize probe (200k/q on
     // memoize_lat) and the common shape has no initplans and no SubPlans.
-    let mut chg_owned: Option<types_nodes::bitmapset::Bitmapset<'mcx>> = None;
-    if !base.initPlan.is_nil() {
-        rescan_mark_initplans(base, estate, chg, &mut chg_owned)?;
+    if base.initPlan.is_nil() {
+        return rescan_chg_forced_walk(node, plan, estate, chg);
     }
-    let chg: &types_nodes::bitmapset::Bitmapset<'mcx> = chg_owned.as_ref().unwrap_or(chg);
+    let mut scratch = estate
+        .es_rescan_chg_scratch
+        .pop()
+        .unwrap_or(types_nodes::bitmapset::Bitmapset::empty());
+    let mut owned = false;
+    let r = rescan_mark_initplans(base, estate, chg, &mut scratch, &mut owned).and_then(|()| {
+        rescan_chg_forced_walk(node, plan, estate, if owned { &scratch } else { chg })
+    });
+    estate.es_rescan_chg_scratch.push(scratch);
+    r
+}
+
+fn rescan_chg_forced_walk<'mcx>(
+    node: &mut PlanStateNode<'mcx>,
+    plan: Node<'mcx>,
+    estate: &mut EStateData<'mcx>,
+    chg: &types_nodes::bitmapset::Bitmapset<'mcx>,
+) -> PgResult<()> {
+    let base = plan.as_plan().expect("plan-tree node");
     if !estate.es_subplan_expr_states.is_empty() {
         crate::nodesubplan::mark_hashed_subplans_stale(estate, chg)?;
     }
@@ -753,6 +768,8 @@ pub(crate) fn exec_re_scan_chg_forced<'mcx>(
                 exec_re_scan_with_chg(sub, sub_plan, estate, chg)?;
             }
         }
+        // ExecReScanNestLoop: the inner is rescanned per outer tuple by
+        // ExecNestLoop, never here (nodeNestloop.c:389); its chgParam waits.
         PlanStateNode::NestLoop(nl) => {
             exec_re_scan_with_chg(
                 &mut nl.outer,
@@ -760,12 +777,7 @@ pub(crate) fn exec_re_scan_chg_forced<'mcx>(
                 estate,
                 chg,
             )?;
-            exec_re_scan_with_chg(
-                &mut nl.inner,
-                base.righttree.expect("NestLoop inner plan"),
-                estate,
-                chg,
-            )?;
+            nl.state.defer_inner_chg(estate.es_query_cxt, chg)?;
             ::nodenestloop::exec_rescan_nest_loop(&mut nl.state);
         }
         PlanStateNode::HashJoin(hj) => {
@@ -870,22 +882,21 @@ pub(crate) fn exec_re_scan_chg_forced<'mcx>(
                 .expect("SubqueryScan subplan");
             exec_re_scan_with_chg(&mut s.subplan, sub_plan, estate, chg)?;
         }
-        // Changed params force the full SetOp rebuild (C's chgParam-nonnull arm).
+        // Changed params force the full SetOp rebuild (C's chgParam-nonnull arm);
+        // a child with changed params is left for its next pull (nodeSetOp.c:742).
         PlanStateNode::SetOp(s) => {
             let s = &mut **s;
             ::nodesetop::exec_rescan_set_op_chg(&mut s.state, estate);
-            exec_re_scan_with_chg(
-                &mut s.outer,
-                base.lefttree.expect("SetOp outer plan"),
-                estate,
-                chg,
-            )?;
-            exec_re_scan_with_chg(
-                &mut s.inner,
-                base.righttree.expect("SetOp inner plan"),
-                estate,
-                chg,
-            )?;
+            let outer_plan = base.lefttree.expect("SetOp outer plan");
+            accumulate_outer_chg(&mut s.outer_chg, outer_plan, estate, chg, -1)?;
+            if s.outer_chg.is_empty() {
+                exec_re_scan(&mut s.outer, estate)?;
+            }
+            let inner_plan = base.righttree.expect("SetOp inner plan");
+            accumulate_outer_chg(&mut s.inner_chg, inner_plan, estate, chg, -1)?;
+            if s.inner_chg.is_empty() {
+                exec_re_scan(&mut s.inner, estate)?;
+            }
         }
         // ExecReScanGather: chg lands on the child via UpdateChangedParamSet
         // (∩ its allParam) plus rescan_param (no intersection); a non-empty

@@ -185,7 +185,7 @@ fn not_equal_descends_through_truncated_internal_keys() {
     assert!(num::consistent::<Int4>((3, 7), 5, BT_NOT_EQUAL, false, c).unwrap());
 }
 
-// bug-inventory 2026-09-13 batch-46 (fp-contrib-btree_gist-b3#1): the
+// bug-inventory 2026-09-13 batch-46 (regression): the
 // var_entries!("numeric", ..) arm matched "gbt_numeric_penalty" first and
 // handed out the byte-prefix var_penalty instead of btree_numeric.c's
 // range-width penalty, changing GiST subtree choices and page layout.
@@ -196,7 +196,7 @@ fn numeric_penalty_dispatches_to_the_numeric_specific_penalty() {
     assert_ne!(f, var_penalty::<NumericV> as PGFunction as usize);
 }
 
-// bug-inventory 2026-09-13 batch-46 (fp-contrib-btree_gist-b1#1): the short-
+// bug-inventory 2026-09-13 batch-46 (regression): the short-
 // header expansion of each compared key was allocated in tuplesort's context
 // and never freed, so a sorted bytea/bit GiST build grew with the comparison
 // count. C detoasts and pfrees per comparison (btree_bytea.c:177).
@@ -225,4 +225,19 @@ fn var_ssup_cmp_leaves_nothing_in_the_sort_context() {
         BitV::ssup_cmp(dva, dvb, 0, ctx.mcx()).unwrap();
     }
     assert_eq!(ctx.stats().used, before);
+}
+
+// btree_gist.c:28 gbtreekey_in: a direct one-argument SQL call still raises
+// the 0A000 error instead of indexing past the frame.
+#[test]
+fn gbtreekey_in_direct_call_has_no_typioparam() {
+    let input = b"x\0";
+    let err = ::types_fmgr::direct_function_call1_coll(
+        fc_gbtreekey_in,
+        0,
+        Datum::from_usize(input.as_ptr() as usize),
+    )
+    .unwrap_err();
+    assert_eq!(err.message(), "cannot accept a value of type -");
+    assert_eq!(err.sqlstate(), ERRCODE_FEATURE_NOT_SUPPORTED);
 }

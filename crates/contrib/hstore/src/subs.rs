@@ -58,6 +58,7 @@ pub(crate) fn assign<'m>(
     } else {
         // hstore_concat with the single new pair (s2 wins ties).
         let hs = hstore_view(mcx, source.value)?;
+        ::mcx::check_alloc_size(crate::repr::c_int32_alloc_size(assign_alloc_size(&hs, &p)))?;
         let one = build_hstore(&[p]);
         let s2 = HstoreView::from_vardata(&one[4..]);
         build_hstore(&crate::concat_pairs(&hs, &s2)?)
@@ -67,6 +68,11 @@ pub(crate) fn assign<'m>(
     let d = Datum::from_usize(out.as_ptr() as usize);
     core::mem::forget(out);
     Ok(d)
+}
+
+// hstore_subs.c:204: CALCDATASIZE(s1count + 1, VARSIZE(hs) + keylen + vallen).
+pub(crate) fn assign_alloc_size(hs: &HstoreView<'_>, p: &Pair) -> usize {
+    (hs.count() + 1) * 8 + 8 + crate::varsize(hs) + p.key.len() + p.val.as_ref().map_or(0, |v| v.len())
 }
 
 // The handler function exists only for CREATE EXTENSION's C-symbol

@@ -2,8 +2,6 @@
 //! the crate root. recv/send ride the binary-wire fmgr frame
 //! (types_fmgr::wire).
 
-use alloc::borrow::Cow;
-use alloc::string::String;
 
 use ::datum::Datum;
 use ::types_core::Oid;
@@ -24,17 +22,17 @@ pub fn fc_boolsend(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
     Ok(varlena_result(crate::boolsend(mcx, a.value.as_bool())?))
 }
 
-fn in_arg<'a>(fcinfo: &'a Fcinfo) -> Cow<'a, str> {
+// Raw server-encoding bytes: C quotes the cstring as-is in its message.
+fn in_arg<'a>(fcinfo: &'a Fcinfo) -> &'a [u8] {
     // SAFETY: catalog arg 0 of boolin is cstring (typlen -2).
-    let s = unsafe { fcinfo.arg_cstring(0) };
-    String::from_utf8_lossy(s.to_bytes())
+    unsafe { fcinfo.arg_cstring(0) }.to_bytes()
 }
 
 pub fn fc_boolin(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let s = in_arg(fcinfo);
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
-    Ok(Datum::from_bool(crate::boolin(&s, esc)?))
+    Ok(Datum::from_bool(crate::boolin(s, esc)?))
 }
 
 pub fn fc_boolout(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
@@ -117,15 +115,16 @@ fn bool_non_agg_context() -> alloc::boxed::Box<::types_error::PgError> {
 fn bool_agg_common(fcinfo: &mut Fcinfo, inverse: bool) -> PgResult<Datum> {
     use crate::BoolAggState;
     let [a, b] = *fcinfo.args_n::<2>();
+    let val = if b.isnull { None } else { Some(b.value.as_bool()) };
+    // bool.c:370: the NULL-state elog precedes any aggregate-context check.
+    if inverse && a.isnull {
+        return crate::bool_accum_inv(None, val).map(|_| unreachable!());
+    }
     // SAFETY: fcinfo.context is the executor's live AggStateNode.
     let Some(agg_mcx) = (unsafe { fcinfo.agg_context() }) else {
         return Err(bool_non_agg_context());
     };
-    let val = if b.isnull { None } else { Some(b.value.as_bool()) };
     let stp: *mut BoolAggState = if a.isnull {
-        if inverse {
-            return crate::bool_accum_inv(None, val).map(|_| unreachable!());
-        }
         let layout = core::alloc::Layout::new::<BoolAggState>();
         let raw = ::mcx::Allocator::allocate(&agg_mcx, layout)
             .map_err(|_| agg_mcx.oom(layout.size()))?;

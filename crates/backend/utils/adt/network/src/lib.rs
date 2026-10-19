@@ -123,20 +123,35 @@ impl<'a> InetRef<'a> {
     }
 }
 
+// network.c:99/:110: the input bytes verbatim in the message (a SQL_ASCII
+// database or a byteain alias can hand over non-UTF-8 bytes).
+fn quoted(prefix: &str, input: &[u8], suffix: &str) -> PgError {
+    match core::str::from_utf8(input) {
+        Ok(s) => PgError::error(format!("{prefix}{s}{suffix}")),
+        Err(_) => {
+            let mut msg = prefix.as_bytes().to_vec();
+            msg.extend_from_slice(input);
+            msg.extend_from_slice(suffix.as_bytes());
+            PgError::error_raw_message(msg)
+        }
+    }
+}
+
 #[cold]
 #[inline(never)]
-fn invalid_input_err(is_cidr: bool, src: &str) -> PgError {
-    PgError::error(format!(
-        "invalid input syntax for type {}: \"{src}\"",
-        if is_cidr { "cidr" } else { "inet" }
-    ))
+fn invalid_input_err(is_cidr: bool, src: &[u8]) -> PgError {
+    quoted(
+        &format!("invalid input syntax for type {}: \"", if is_cidr { "cidr" } else { "inet" }),
+        src,
+        "\"",
+    )
     .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
 }
 
 #[cold]
 #[inline(never)]
-fn invalid_cidr_err(src: &str) -> PgError {
-    PgError::error(format!("invalid cidr value: \"{src}\""))
+fn invalid_cidr_err(src: &[u8]) -> PgError {
+    quoted("invalid cidr value: \"", src, "\"")
         .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
         .with_detail("Value has bits set to right of mask.")
 }
@@ -176,11 +191,12 @@ fn recv_err(msg: String) -> PgError {
 }
 
 pub fn network_in(
-    src: &str,
+    src: impl AsRef<[u8]>,
     is_cidr: bool,
     escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<Option<InetValue>> {
-    let family = if src.contains(':') {
+    let src = src.as_ref();
+    let family = if src.contains(&b':') {
         PGSQL_AF_INET6
     } else {
         PGSQL_AF_INET
@@ -192,7 +208,7 @@ pub fn network_in(
     };
     let size: isize = if is_cidr { dst.addrsize() as isize } else { -1 };
     let maxbits = dst.maxbits() as i32;
-    let bits = match pton::pg_inet_net_pton(family as i32, src.as_bytes(), &mut dst.ipaddr, size) {
+    let bits = match pton::pg_inet_net_pton(family as i32, src, &mut dst.ipaddr, size) {
         Some(b) if (0..=maxbits).contains(&b) => b,
         _ => return ereturn(escontext, None, invalid_input_err(is_cidr, src)),
     };

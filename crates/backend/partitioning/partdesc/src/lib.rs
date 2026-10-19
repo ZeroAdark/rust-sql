@@ -330,6 +330,8 @@ fn RelationBuildPartitionDesc(
     let oids = inhoids;
 
     let ctx = std::boxed::Box::new(with_state(|st| st.root).new_child("partition descriptor"));
+    // partdesc.c:321: MemoryContextCopyAndSetIdentifier(new_pdcxt, relname).
+    ctx.set_ident(Some(rel.name()));
     // SAFETY: 'static stands for "as long as the Box in _ctx lives"; the box
     // pins the context address across the move into the descriptor.
     let cmcx: Mcx<'static> = unsafe { core::mem::transmute::<Mcx<'_>, Mcx<'static>>(ctx.mcx()) };

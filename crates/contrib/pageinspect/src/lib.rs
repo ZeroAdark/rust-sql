@@ -183,11 +183,6 @@ impl ItemIdView {
     pub(crate) fn is_used(&self) -> bool {
         self.flags != LP_UNUSED as u8
     }
-    pub(crate) fn is_valid(&self) -> bool {
-        // C ItemIdIsValid: lp_flags != LP_UNUSED covers used items; unused
-        // entries with lp_len 0 are invalid.
-        self.flags != LP_UNUSED as u8 || self.len != 0
-    }
     pub(crate) fn is_dead(&self) -> bool {
         self.flags == LP_DEAD as u8
     }
@@ -270,8 +265,13 @@ pub(crate) fn int8_array_datum(mcx: Mcx<'_>, elems: &[Datum]) -> PgResult<Datum>
 pub(crate) fn composite_tupdesc<'m>(
     mcx: Mcx<'m>,
     flinfo: &FmgrInfo,
+    fcinfo: &mut Fcinfo,
 ) -> PgResult<TupleDescData<'m>> {
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
+    let expected_desc = fcinfo.rsinfo_mut().and_then(|rsi| rsi.expectedDesc);
+    // SAFETY: expectedDesc contract — the executor armed it with the scan
+    // tupdesc, live for the duration of this call.
+    let expected = expected_desc.map(|p| unsafe { p.cast::<TupleDescData<'_>>().as_ref() });
+    let resolved = funcapi::get_call_result_type(mcx, flinfo, expected)?;
     if resolved.class != funcapi::TypeFuncClass::Composite {
         return Err(Box::new(PgError::error("return type must be a row type")));
     }
@@ -348,6 +348,15 @@ pub(crate) fn cstrings_composite_result(
 /// sets, bare datum images for scalar sets), streamed one per call.
 pub(crate) struct RowSet {
     rows: Vec<Vec<u8>>,
+}
+
+/// init_MultiFuncCall's ReturnSetInfo test, for entry points that C runs it
+/// in before reading any argument.
+pub(crate) fn require_set_context(fcinfo: &mut Fcinfo) -> PgResult<()> {
+    if fcinfo.rsinfo_mut().is_none() {
+        return Err(funcapi::srf_context_error());
+    }
+    Ok(())
 }
 
 pub(crate) fn srf_stream(
@@ -585,9 +594,9 @@ mod tests {
         let p = synthetic_page();
         let id = page_item_id(&p.0, 1);
         assert_eq!((id.off, id.flags as u32, id.len), (0x1f40, LP_NORMAL, 60));
-        assert!(id.is_normal() && id.is_used() && id.is_valid() && id.has_storage());
+        assert!(id.is_normal() && id.is_used() && id.has_storage());
         let unused = page_item_id(&p.0, 2);
-        assert!(!unused.is_used() && !unused.is_valid());
+        assert!(!unused.is_used() && !unused.has_storage());
         // Beyond-buffer offsets decode as unused instead of overreading.
         let clamped = page_item_id(&p.0, BLCKSZ);
         assert!(!clamped.is_used());

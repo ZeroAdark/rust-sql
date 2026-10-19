@@ -334,6 +334,10 @@ fn shmem_size_matches_layout() {
     let _s = serial();
     setup();
     let slots = num_proc_state_slots();
+    // sinvaladt.c:222 offsetof(SISeg, procState) on LP64: three ints, the
+    // spinlock, MAXNUMMESSAGES 16-byte messages, numProcs, the pgprocnos
+    // pointer = 65568 (pg_shmem_allocations' shmInvalBuffer size term).
+    assert_eq!(size_of::<SISegHdr>(), 65568);
     assert_eq!(
         SharedInvalShmemSize().unwrap(),
         size_of::<SISegHdr>() + slots * size_of::<ProcState>() + slots * size_of::<i32>()

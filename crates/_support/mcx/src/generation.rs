@@ -82,9 +82,9 @@ impl GenArena {
             return self.alloc_dedicated(layout, acct);
         }
         let csize = (layout.size() + 7) & !7;
-        // wrapping_sub folds the ZST case into the unusual branch.
+        // wrapping_sub folds the ZST case into the dedicated branch.
         if csize.wrapping_sub(1) >= GEN_CHUNK_LIMIT {
-            return self.alloc_unusual(layout, csize, acct);
+            return self.alloc_dedicated(layout, acct);
         }
         let req = GEN_CHUNKHDRSZ + csize;
         let avail = (self.cur_end as usize).wrapping_sub(self.cur_ptr as usize);
@@ -198,25 +198,8 @@ impl GenArena {
         Ok(addr)
     }
 
-    // ZST or over-chunk-limit request (C's GenerationAllocLarge lane).
-    #[cold]
-    #[inline(never)]
-    fn alloc_unusual(
-        &mut self,
-        layout: Layout,
-        csize: usize,
-        acct: &Acct,
-    ) -> Result<NonNull<[u8]>, AllocError> {
-        if csize == 0 {
-            let dangling = layout.align() as *mut u8;
-            // SAFETY: align is a non-zero power of two, hence non-null.
-            let nn = unsafe { NonNull::new_unchecked(dangling) };
-            return Ok(NonNull::slice_from_raw_parts(nn, 0));
-        }
-        self.alloc_dedicated(layout, acct)
-    }
-
-    // Single-chunk dedicated block; the chunk header still finds it for free.
+    // ZST, over-aligned or over-chunk-limit request (C's GenerationAllocLarge
+    // lane); a ZST of any alignment is dangling and uncharged.
     #[cold]
     #[inline(never)]
     fn alloc_dedicated(
@@ -224,8 +207,14 @@ impl GenArena {
         layout: Layout,
         acct: &Acct,
     ) -> Result<NonNull<[u8]>, AllocError> {
+        if layout.size() == 0 {
+            let dangling = layout.align() as *mut u8;
+            // SAFETY: align is a non-zero power of two, hence non-null.
+            let nn = unsafe { NonNull::new_unchecked(dangling) };
+            return Ok(NonNull::slice_from_raw_parts(nn, 0));
+        }
         let align = layout.align().max(POOL_MAX_ALIGN);
-        let csize = (layout.size().max(1) + 7) & !7;
+        let csize = (layout.size() + 7) & !7;
         let data_off = (GEN_BLKHDRSZ + GEN_CHUNKHDRSZ + align - 1) & !(align - 1);
         let blksize = data_off.checked_add(csize).ok_or(AllocError)?;
         let addr = self.push_block(blksize, align, acct)?;
@@ -536,10 +525,12 @@ mod tests {
     fn zero_sized_alloc_is_dangling_and_uncharged() {
         let mut a = GenArena::new();
         let acct = acct();
-        for align in [1usize, 2, 4, 8] {
+        for align in [1usize, 2, 4, 8, 16, 32, 4096] {
             let zl = Layout::from_size_align(0, align).unwrap();
             let p = a.alloc(zl, &acct).unwrap();
             assert_eq!(p.len(), 0);
+            assert_eq!(p.cast::<u8>().as_ptr() as usize % align, 0);
+            assert_eq!((a.footprint(), a.nblocks()), (0, 0), "align={align}");
             // SAFETY: ZST dealloc is a no-op by contract.
             unsafe { a.dealloc(p.cast(), zl, &acct) };
         }

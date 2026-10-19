@@ -184,25 +184,25 @@ pub fn brin_minmax_multi_consistent(
 
             let matches = match key.sk_strategy {
                 s @ (BTLessStrategyNumber | BTLessEqualStrategyNumber) => {
-                    let finfo = minmax_multi_get_strategy_procinfo(bdesc, attno, subtype, s)?;
-                    call_bool(mcx, &finfo, colloid, minval, value)?
+                    let mut finfo = minmax_multi_get_strategy_procinfo(bdesc, attno, subtype, s)?;
+                    call_bool(mcx, &mut finfo, colloid, minval, value)?
                 }
                 BTEqualStrategyNumber => {
-                    let gt = minmax_multi_get_strategy_procinfo(
+                    let mut gt = minmax_multi_get_strategy_procinfo(
                         bdesc, attno, subtype, BTGreaterStrategyNumber,
                     )?;
-                    if call_bool(mcx, &gt, colloid, minval, value)? {
+                    if call_bool(mcx, &mut gt, colloid, minval, value)? {
                         false
                     } else {
-                        let lt = minmax_multi_get_strategy_procinfo(
+                        let mut lt = minmax_multi_get_strategy_procinfo(
                             bdesc, attno, subtype, BTLessStrategyNumber,
                         )?;
-                        !call_bool(mcx, &lt, colloid, maxval, value)?
+                        !call_bool(mcx, &mut lt, colloid, maxval, value)?
                     }
                 }
                 s @ (BTGreaterEqualStrategyNumber | BTGreaterStrategyNumber) => {
-                    let finfo = minmax_multi_get_strategy_procinfo(bdesc, attno, subtype, s)?;
-                    call_bool(mcx, &finfo, colloid, maxval, value)?
+                    let mut finfo = minmax_multi_get_strategy_procinfo(bdesc, attno, subtype, s)?;
+                    call_bool(mcx, &mut finfo, colloid, maxval, value)?
                 }
                 other => return Err(invalid_strategy(other)),
             };
@@ -231,8 +231,8 @@ pub fn brin_minmax_multi_consistent(
 
             let matches = match key.sk_strategy {
                 s @ 1..=BTMaxStrategyNumber => {
-                    let finfo = minmax_multi_get_strategy_procinfo(bdesc, attno, subtype, s)?;
-                    call_bool(mcx, &finfo, colloid, val, value)?
+                    let mut finfo = minmax_multi_get_strategy_procinfo(bdesc, attno, subtype, s)?;
+                    call_bool(mcx, &mut finfo, colloid, val, value)?
                 }
                 other => return Err(invalid_strategy(other)),
             };
@@ -274,7 +274,7 @@ pub fn brin_minmax_multi_union(
     let n_a = (ranges_a.nranges + ranges_a.nvalues) as usize;
     let n_b = (ranges_b.nranges + ranges_b.nvalues) as usize;
 
-    let cmp = minmax_multi_get_strategy_procinfo(bdesc, attno, atttypid, BTLessStrategyNumber)?;
+    let mut cmp = minmax_multi_get_strategy_procinfo(bdesc, attno, atttypid, BTLessStrategyNumber)?;
 
     {
         let ctx = ::mcx::MemoryContext::new_bump("minmax-multi context");
@@ -289,12 +289,12 @@ pub fn brin_minmax_multi_union(
         fill_expanded_ranges(&mut eranges[..n_a], n_a, &ranges_a);
         fill_expanded_ranges(&mut eranges[n_a..], n_b, &ranges_b);
 
-        let mut neranges = sort_expanded_ranges(cmcx, &cmp, colloid, &mut eranges)?;
-        neranges = merge_overlapping_ranges(cmcx, &cmp, colloid, &mut eranges, neranges)?;
+        let mut neranges = sort_expanded_ranges(cmcx, &mut cmp, colloid, &mut eranges)?;
+        neranges = merge_overlapping_ranges(cmcx, &mut cmp, colloid, &mut eranges, neranges)?;
         assert_check_expanded_ranges(cmcx, bdesc, colloid, attno, atttypid, &eranges[..neranges])?;
 
-        let distance_fn = minmax_multi_get_procinfo(bdesc, attno, PROCNUM_DISTANCE)?;
-        let distances = build_distances(cmcx, &distance_fn, colloid, &eranges[..neranges])?;
+        let mut distance_fn = minmax_multi_get_procinfo(bdesc, attno, PROCNUM_DISTANCE)?;
+        let distances = build_distances(cmcx, &mut distance_fn, colloid, &eranges[..neranges])?;
 
         neranges = reduce_expanded_ranges(
             cmcx,
@@ -302,7 +302,7 @@ pub fn brin_minmax_multi_union(
             neranges,
             distances.as_deref(),
             ranges_a.maxvalues,
-            &cmp,
+            &mut cmp,
             colloid,
         )?;
         assert_check_expanded_ranges(cmcx, bdesc, colloid, attno, atttypid, &eranges[..neranges])?;
@@ -347,7 +347,7 @@ fn minmax_multi_get_procinfo(
     if proc == 0 {
         return Err(invalid_opclass(procnum, attno));
     }
-    let finfo = fmgr_core::fmgr_info(proc)?;
+    let mut finfo = fmgr_core::fmgr_info(proc)?;
     *cache.borrow_mut() = Some(finfo.clone());
     Ok(finfo)
 }
@@ -383,7 +383,7 @@ fn minmax_multi_get_strategy_procinfo(
     }
     let proc = lsyscache::get_opcode(oprid)?;
     debug_assert!(proc != 0);
-    let finfo = fmgr_core::fmgr_info(proc)?;
+    let mut finfo = fmgr_core::fmgr_info(proc)?;
     opaque.strategy_procinfos.borrow_mut()[strategynum as usize - 1] = Some(finfo.clone());
     Ok(finfo)
 }

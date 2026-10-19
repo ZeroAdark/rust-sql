@@ -249,11 +249,15 @@ fn handout_one(spare: &SpareEntry, p: &PendingEnsure) -> PgResult<HandoutVerdict
         return Ok(HandoutVerdict::OwnerMissing);
     }
 
-    // Catalog-only rename: preserves the oid (and with it the datadir path
-    // and the spare's copied pg_db_role_setting rows, which are keyed by
-    // oid — no re-copy needed); its own checks enforce the zero-connection
-    // requirement (CountOtherDBBackends) under the database object's
-    // AccessExclusiveLock, held to commit.
+    // Settings rows copied at pre-mint may be stale (ALTER DATABASE/ROLE SET
+    // changes neither the template oid nor datallowconn): re-copy them now.
+    pg_db_role_setting::DropSetting(mcx, spare.oid, InvalidOid)?;
+    xact::CommandCounterIncrement()?;
+    pg_db_role_setting::copy_database_settings(mcx, spare.template_oid, spare.oid)?;
+    xact::CommandCounterIncrement()?;
+    // Catalog-only rename: preserves the oid; its own checks enforce the
+    // zero-connection requirement (CountOtherDBBackends) under the database
+    // object's AccessExclusiveLock, held to commit.
     dbcommands::RenameDatabase(mcx, &spare.name, &p.name)?;
     // AlterDatabaseOwner re-scans pg_database by the NEW name: without a
     // CommandCounterIncrement the scan misses the just-renamed tuple
@@ -271,7 +275,7 @@ fn handout_one(spare: &SpareEntry, p: &PendingEnsure) -> PgResult<HandoutVerdict
     // multi-statement-transaction convention as the rename->chown CCI).
     xact::CommandCounterIncrement()?;
     let alter = crate::mint::build_alterdb_allowconn_stmt(mcx, &p.name, true)?;
-    dbcommands::AlterDatabase(mcx, &alter, false)?;
+    dbcommands::AlterDatabase(mcx, None, &alter, false)?;
     xact::CommitTransactionCommand()?;
     Ok(HandoutVerdict::Renamed)
 }
@@ -412,10 +416,7 @@ pub(crate) fn replenish_pass(prefix: &str) -> PgResult<()> {
         return Ok(());
     }
 
-    let quotas = mint_quotas(&targets, &haves, POOL_REPLENISH_MAX);
-    if quotas.iter().all(|&q| q == 0) {
-        return Ok(());
-    }
+    let mut quotas = mint_quotas(&targets, &haves, POOL_REPLENISH_MAX);
     // Waiters outrank refill, EXTENDED to the dispatch shadow (the
     // tick-quantized-dispatch fix's replenish lever): a replenish cycle
     // blocks this single-threaded loop for its whole copy + checkpoint
@@ -427,12 +428,15 @@ pub(crate) fn replenish_pass(prefix: &str) -> PgResult<()> {
     // half the refill proceeds regardless — sustained load must never
     // starve the pool — and that residual shadow under drain pressure is
     // accepted and documented here.
-    if should_defer_refill(
-        targets.iter().sum(),
-        haves.iter().sum(),
+    // Per template: a deep sibling must not mask a cold pool's fill.
+    apply_refill_deferral(
+        &targets,
+        &haves,
+        &mut quotas,
         pg_clock::mono_ns(),
         registry::last_ensure_post_ns(),
-    ) {
+    );
+    if quotas.iter().all(|&q| q == 0) {
         return Ok(());
     }
 
@@ -617,6 +621,22 @@ fn should_defer_refill(total_target: usize, have: usize, now_ns: u64, last_post_
     have * 2 >= total_target
         && last_post_ns != 0
         && now_ns.saturating_sub(last_post_ns) < REFILL_DEFER_TRAFFIC_NS
+}
+
+/// The deferral applied template by template: a quota survives iff its
+/// own pool is below half its own target (or traffic is quiet).
+fn apply_refill_deferral(
+    targets: &[usize],
+    haves: &[usize],
+    quotas: &mut [usize],
+    now_ns: u64,
+    last_post_ns: u64,
+) {
+    for (i, q) in quotas.iter_mut().enumerate() {
+        if should_defer_refill(targets[i], haves[i], now_ns, last_post_ns) {
+            *q = 0;
+        }
+    }
 }
 
 /// One read-only transaction: probe every pooled template's identity plus
@@ -815,5 +835,30 @@ mod tests {
         // Odd target boundary: have*2 >= target (integer half-up).
         assert!(should_defer_refill(7, 4, now, fresh));
         assert!(!should_defer_refill(7, 3, now, fresh));
+    }
+
+    /// The deferral is per template: a full sibling never masks a cold
+    /// pool (aggregate 8/16 would have deferred the whole pass).
+    #[test]
+    fn refill_deferral_is_per_template() {
+        let now = 10 * REFILL_DEFER_TRAFFIC_NS;
+        let fresh = now - 1;
+        let stale = now - REFILL_DEFER_TRAFFIC_NS;
+        let targets = [8usize, 8];
+        let haves = [8usize, 0];
+        let mut quotas = mint_quotas(&targets, &haves, POOL_REPLENISH_MAX);
+        assert_eq!(quotas, [0, 8]);
+        apply_refill_deferral(&targets, &haves, &mut quotas, now, fresh);
+        assert_eq!(quotas, [0, 8], "the cold template still fills");
+        // Both at/above half under fresh traffic: the whole pass defers.
+        let haves = [8usize, 4];
+        let mut quotas = mint_quotas(&targets, &haves, POOL_REPLENISH_MAX);
+        assert_eq!(quotas, [0, 4]);
+        apply_refill_deferral(&targets, &haves, &mut quotas, now, fresh);
+        assert_eq!(quotas, [0, 0]);
+        // Quiet traffic: nothing defers.
+        let mut quotas = mint_quotas(&targets, &haves, POOL_REPLENISH_MAX);
+        apply_refill_deferral(&targets, &haves, &mut quotas, now, stale);
+        assert_eq!(quotas, [0, 4]);
     }
 }

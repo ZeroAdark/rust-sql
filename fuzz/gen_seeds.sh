@@ -2,7 +2,7 @@
 # Generate a starter seed corpus for the fuzz targets. Hand-built well-formed
 # inputs so libFuzzer starts from valid structure (coverage-guided fuzzing pays
 # compounding returns on an accumulated corpus — persist corpus/ to S3 between
-# runs: s3://${PGRUST_FLEET_BUCKET}/fuzz-corpora/).
+# runs: s3://${PGRUST_CORPUS_BUCKET}/fuzz-corpora/).
 #
 # For a richer WAL seed corpus, harvest real records in-pod after a workload:
 #   split pg_wal segment bytes into per-record slices (post-page-header,

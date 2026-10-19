@@ -236,7 +236,7 @@ fn text_array_elems<'mcx>(
     let raw = unsafe { core::slice::from_raw_parts(p, types_tuple::varatt::varsize_any(p)) };
     // C: PG_GETARG_ARRAYTYPE_P — a flat 4B-header image for the ARR_* reads.
     let array: &'mcx [u8] = detoast_seams::detoast_attr::call(mcx, raw)?.leak();
-    if !skip_nulls && arrayfuncs::array_contains_nulls(array) {
+    if !skip_nulls && arrayfuncs::array_contains_nulls(array)? {
         return Ok(None);
     }
     let (elems, nulls) = arrayfuncs::deconstruct_array_builtin(mcx, array, TEXTOID, true)?;

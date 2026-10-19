@@ -1,0 +1,72 @@
+\set VERBOSITY verbose
+CREATE ACCESS METHOD pgrcolumnar2 TYPE TABLE HANDLER heap_tableam_handler;
+CREATE TABLE percentile_integer_order(g smallint, s smallint, i integer, b bigint) USING pgrcolumnar2;
+-- Empty groups do not finalize either valid or invalid percentile fractions.
+SELECT g, percentile_cont(2.0) WITHIN GROUP (ORDER BY i) FROM percentile_integer_order WHERE i < 0 GROUP BY g;
+ g | percentile_cont 
+---+-----------------
+(0 rows)
+
+SELECT g, percentile_cont(0.5) WITHIN GROUP (ORDER BY i) FROM percentile_integer_order WHERE i < 0 GROUP BY g;
+ g | percentile_cont 
+---+-----------------
+(0 rows)
+
+COPY percentile_integer_order FROM STDIN;
+-- Integer inputs are implicitly cast to float8 before PostgreSQL orders them.
+SELECT g, percentile_cont(0.25) WITHIN GROUP (ORDER BY s) FROM percentile_integer_order GROUP BY g ORDER BY g;
+ g | percentile_cont 
+---+-----------------
+ 1 |            1.75
+ 2 |           -3.25
+(2 rows)
+
+SELECT g, percentile_cont(0.25) WITHIN GROUP (ORDER BY i) FROM percentile_integer_order GROUP BY g ORDER BY g;
+ g | percentile_cont 
+---+-----------------
+ 1 |            17.5
+ 2 |           -32.5
+(2 rows)
+
+SELECT g, percentile_cont(0.25) WITHIN GROUP (ORDER BY b) FROM percentile_integer_order GROUP BY g ORDER BY g;
+ g |  percentile_cont  
+---+-------------------
+ 1 |  1099511627777.75
+ 2 | -1099511627779.25
+(2 rows)
+
+SELECT g, percentile_cont(0.25) WITHIN GROUP (ORDER BY s DESC) FROM percentile_integer_order GROUP BY g ORDER BY g;
+ g | percentile_cont 
+---+-----------------
+ 1 |            3.25
+ 2 |           -1.75
+(2 rows)
+
+SELECT g, percentile_cont(0.25) WITHIN GROUP (ORDER BY i DESC) FROM percentile_integer_order GROUP BY g ORDER BY g;
+ g | percentile_cont 
+---+-----------------
+ 1 |            32.5
+ 2 |           -17.5
+(2 rows)
+
+SELECT g, percentile_cont(0.25) WITHIN GROUP (ORDER BY b DESC) FROM percentile_integer_order GROUP BY g ORDER BY g;
+ g |  percentile_cont  
+---+-------------------
+ 1 |  1099511627779.25
+ 2 | -1099511627777.75
+(2 rows)
+
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY i) FROM percentile_integer_order;
+ percentile_cont 
+-----------------
+               0
+(1 row)
+
+SELECT g, percentile_cont(2.0) WITHIN GROUP (ORDER BY i) FROM percentile_integer_order WHERE i > 100 GROUP BY g;
+ g | percentile_cont 
+---+-----------------
+(0 rows)
+
+SELECT g, percentile_cont(2.0) WITHIN GROUP (ORDER BY i) FROM percentile_integer_order GROUP BY g;
+ERROR:  22003: percentile value 2 is not between 0 and 1
+DROP TABLE percentile_integer_order;

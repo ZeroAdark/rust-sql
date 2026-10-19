@@ -241,7 +241,7 @@ fn insert_flush_smoke() {
     XLOGShmemInit();
     // xlog.c:4985-4991: "XLOG Ctl" and "Control File" are ShmemIndex rows
     // (pg_shmem_allocations); a second ShmemInitStruct finds them
-    // (audit fp-transam-xlog-p2#7).
+    // (audit regression).
     let (_, found) = shmem::ShmemInitStruct("XLOG Ctl", XLOGShmemSize()).unwrap();
     assert!(found, "XLOG Ctl is missing from the ShmemIndex");
     let (_, found) =
@@ -530,6 +530,48 @@ fn insert_flush_smoke() {
     assert!(rem > 0 && (rem as usize) < tot_len2);
     let magic = u16::from_ne_bytes(file[page2..page2 + 2].try_into().unwrap());
     assert_eq!(magic, XLOG_PAGE_MAGIC);
+
+    // xlog.c:3225/3347/3357: XLogFileInitInternal brackets segment creation
+    // with DEBUG2 messages — creating, then done creating (installed) or
+    // abandoned (InstallXLogFileSegment declined). The pre-fix port was silent.
+    {
+        static WAL_FILE_MSGS: std::sync::Mutex<Vec<(types_error::ErrorLevel, String)>> =
+            std::sync::Mutex::new(Vec::new());
+        fn capture(err: &types_error::PgError, _out: &mut bool) {
+            WAL_FILE_MSGS.lock().unwrap().push((err.level, err.message().to_string()));
+        }
+        let prev_min = elog::config::log_min_messages();
+        elog::config::set_log_min_messages(types_error::DEBUG2);
+        let prev = elog::set_emit_log_hook(Some(capture));
+        let next_seg = XLByteToSeg(end_of_log, seg) + 1;
+        let f = XLogFileInit(next_seg, 1).unwrap();
+        assert!(f >= 0);
+        assert_eq!(fd::pg_close(f), 0);
+        crate::startup::ResetInstallXLogFileSegmentActive().unwrap();
+        let err = XLogFileInit(next_seg + 1, 1).unwrap_err();
+        crate::startup::SetInstallXLogFileSegmentActive().unwrap();
+        elog::set_emit_log_hook(prev);
+        elog::config::set_log_min_messages(prev_min);
+        assert!(err.message().starts_with("could not open file"), "{}", err.message());
+        assert!(dir.join(format!("pg_wal/{}", XLogFileName(1, next_seg, seg))).exists());
+        assert!(!dir.join(format!("pg_wal/{}", XLogFileName(1, next_seg + 1, seg))).exists());
+        let msgs: Vec<String> = WAL_FILE_MSGS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(level, m)| *level == types_error::DEBUG2 && m.ends_with("new WAL file"))
+            .map(|(_, m)| m.clone())
+            .collect();
+        assert_eq!(
+            msgs,
+            [
+                "creating and filling new WAL file",
+                "done creating and filling new WAL file",
+                "creating and filling new WAL file",
+                "abandoned new WAL file",
+            ]
+        );
+    }
 
     // Crash-cycle reset over the maximally dirty XLogCtl: boot image restored.
     XLOGShmemResetAfterCrash();
@@ -1292,7 +1334,7 @@ fn wal_read_from_buffers_serves_hot_pages_like_c() {
 
 // xlog.c:7211 / 7228 (wait_event_names.txt IPC class: CheckpointDelayComplete
 // = 9, CheckpointDelayStart = 10): the checkpoint-delay sleeps report their
-// wait event so pg_stat_activity names the wait. Audit fp-transam-xlog-p3#1.
+// wait event so pg_stat_activity names the wait. Audit regression.
 #[test]
 fn delay_chkpt_wait_events_are_c_exact() {
     use crate::startup::*;
@@ -1328,4 +1370,43 @@ fn checkpoint_phase_milliseconds_saturate_at_int_max() {
 fn write_rs_never_calls_std_process_id_outside_tests() {
     let body = include_str!("write.rs").split("#[cfg(test)]").next().unwrap();
     assert!(!body.contains("std::process::id()"), "write.rs: use init_small::globals::process_id()");
+}
+
+// xlog.c:7603: with unresolved invalid-page references RecoveryRestartPoint
+// records nothing and says so at DEBUG2, "%X/%X" of the checkpoint's redo;
+// the pre-fix port returned silently.
+#[test]
+fn restartpoint_declined_for_invalid_pages_is_logged_at_debug2_like_c() {
+    use types_core::ForkNumber;
+    use types_storage::RelFileLocator;
+    let _gate = control_file_lock_gate();
+    static MSGS: std::sync::Mutex<Vec<(types_error::ErrorLevel, String)>> =
+        std::sync::Mutex::new(Vec::new());
+    fn capture(err: &types_error::PgError, _out: &mut bool) {
+        MSGS.lock().unwrap().push((err.level, err.message().to_string()));
+    }
+    if !xlogrecovery_seams::reached_consistency::is_installed() {
+        xlogrecovery_seams::reached_consistency::set(|| false);
+    }
+    let rel = RelFileLocator::new(1663, 5, 987654);
+    xlogutils::log_invalid_page(rel, ForkNumber::MAIN_FORKNUM, 0, false).unwrap();
+    assert!(xlogutils::XLogHaveInvalidPages());
+
+    let prev_min = elog::config::log_min_messages();
+    elog::config::set_log_min_messages(types_error::DEBUG2);
+    let prev = elog::set_emit_log_hook(Some(capture));
+    let mut ckpt = CheckPoint::ZEROED;
+    ckpt.redo = 0x1_0000_0028;
+    crate::redo::RecoveryRestartPoint(&ckpt, &xlogreader_seams::XLogReaderState::default());
+    elog::set_emit_log_hook(prev);
+    elog::config::set_log_min_messages(prev_min);
+    // The invalid-page table is thread-local: it dies with this test thread.
+
+    let expected = (
+        types_error::DEBUG2,
+        "could not record restart point at 1/28 because there are unresolved references to invalid pages"
+            .to_string(),
+    );
+    let msgs = MSGS.lock().unwrap();
+    assert!(msgs.contains(&expected), "got {msgs:?}");
 }

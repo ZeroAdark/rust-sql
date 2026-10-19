@@ -20,6 +20,9 @@ thread_local! {
     static WIRE: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     static INPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     static INPUT_POS: Cell<usize> = const { Cell::new(0) };
+    // param_text_is_kept_when_the_input_function_enables_logging: int4in
+    // flips log_parameter_max_length_on_error, int4out errors.
+    static PARAM_LOG_PROBE: Cell<bool> = const { Cell::new(false) };
     static CURRENT_RESOWNER: Cell<types_resowner::ResourceOwner> =
         const { Cell::new(types_resowner::ResourceOwner::NULL) };
     static SNAPSHOT_REFS: RefCell<Vec<(types_resowner::ResourceOwner, usize)>> =
@@ -35,6 +38,38 @@ pub(crate) static LOCK_TIMEOUT_INDICATOR: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 pub(crate) static STMT_TIMEOUT_INDICATOR: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+
+// Timer-thread stand-in for ProcessTimeoutInterrupt: armed, the first drain
+// "posts" (the SIGALRM edge lands right after it); the next drain fires the
+// pended StatementTimeoutHandler.
+pub(crate) static TIMER_POST_ON_DRAIN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+pub(crate) static TIMER_POSTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+// The arming test's thread: the flags are process-global, the drains per
+// session thread.
+pub(crate) static TIMER_ARMED_THREAD: std::sync::Mutex<Option<std::thread::ThreadId>> =
+    std::sync::Mutex::new(None);
+
+pub(crate) fn install_timeout_drain_stub() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| timeout_seams::process_timeout_interrupt::set(timeout_drain_stub));
+}
+
+fn timeout_drain_stub() {
+    use std::sync::atomic::Ordering::SeqCst;
+    if *TIMER_ARMED_THREAD.lock().unwrap() != Some(std::thread::current().id()) {
+        return;
+    }
+    if TIMER_POSTED.swap(false, SeqCst) {
+        STMT_TIMEOUT_INDICATOR.store(true, SeqCst);
+        init_small::globals::SetQueryCancelPending(true);
+        init_small::globals::SetInterruptPending(true);
+    } else if TIMER_POST_ON_DRAIN.swap(false, SeqCst) {
+        TIMER_POSTED.store(true, SeqCst);
+        init_small::globals::SetInterruptPending(true);
+    }
+}
 
 pub(crate) fn install_shared_stubs() {
     static ONCE: Once = Once::new();
@@ -121,9 +156,9 @@ pub(crate) fn install_shared_proc_fixture() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         use init_small::globals as g;
-        g::SetMaxConnections(16);
+        g::SetMaxConnections(64);
         g::set_max_worker_processes(2);
-        g::SetMaxBackends(16 + 3 + 2 + 2 + 2);
+        g::SetMaxBackends(64 + 3 + 2 + 2 + 2);
         g::SetMyProcPid(778);
         g::SetMyDatabaseId(5);
 
@@ -315,6 +350,12 @@ fn install_catalog_fixture() {
     // Pre-SRF stubs kept verbatim (the trace fixture pins their exact cost
     // accounting); everything else resolves off the real builtin table.
     fmgr_seams::fmgr_info::set(|oid| match oid {
+        INT4IN if PARAM_LOG_PROBE.get() => {
+            Ok(FmgrInfo::new(int4in_enabling_param_logging, INT4IN, 1, true, false))
+        }
+        INT4OUT if PARAM_LOG_PROBE.get() => {
+            Ok(FmgrInfo::new(int4out_failing, INT4OUT, 1, true, false))
+        }
         INT4IN => Ok(FmgrInfo::new(adt_int::builtins::fc_int4in, INT4IN, 1, true, false)),
         INT4OUT => Ok(FmgrInfo::new(adt_int::builtins::fc_int4out, INT4OUT, 1, true, false)),
         2406 => Ok(FmgrInfo::new(adt_int::builtins::fc_int4recv, 2406, 1, true, false)),
@@ -478,7 +519,7 @@ fn install_catalog_fixture() {
     mbutils_seams::pg_server_to_client::set(|_, _| Ok(None));
 }
 
-fn install_fixtures() {
+pub(crate) fn install_fixtures() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
         std::env::set_var("PGRUST_TZDIR", "/usr/share/zoneinfo");
@@ -958,6 +999,54 @@ fn generic_plan_reads_param_extern_from_bind() {
     assert_eq!((generic, custom), (1, 0), "plan cache chose the generic plan");
 }
 
+fn int4in_enabling_param_logging(
+    flinfo: Option<&mut FmgrInfo>,
+    fcinfo: &mut types_fmgr::FunctionCallInfoBaseData,
+) -> types_error::PgResult<datum::Datum> {
+    guc_tables::backing::set_log_parameter_max_length_on_error(-1);
+    adt_int::builtins::fc_int4in(flinfo, fcinfo)
+}
+
+fn int4out_failing(
+    _flinfo: Option<&mut FmgrInfo>,
+    _fcinfo: &mut types_fmgr::FunctionCallInfoBaseData,
+) -> types_error::PgResult<datum::Datum> {
+    elog::ereport(types_error::ERROR)
+        .errcode(types_error::ERRCODE_INTERNAL_ERROR)
+        .errmsg("int4out fixture refuses")
+        .finish(types_error::ErrorLocation::new("int.c", 1, "int4out"))?;
+    unreachable!()
+}
+
+// postgres.c:1879: the "save the parameter text for later logging" decision
+// follows the input call, so an input function that itself enables
+// log_parameter_max_length_on_error still gets the original spelling logged.
+#[test]
+fn param_text_is_kept_when_the_input_function_enables_logging() {
+    install_fixtures();
+    PARAM_LOG_PROBE.set(true);
+    guc_tables::backing::set_log_parameter_max_length_on_error(0);
+
+    let input: Vec<u8> = [
+        parse_msg("k1", "SELECT $1", &[INT4OID]),
+        bind_msg("", "k1", &[b"007"]),
+        execute_msg("", 0),
+        sync_msg(),
+    ]
+    .concat();
+    let wire = run_session(input);
+    PARAM_LOG_PROBE.set(false);
+    guc_tables::backing::set_log_parameter_max_length_on_error(0);
+    let all = frames(&wire);
+    let err = all.iter().find(|(t, _)| *t == b'E').expect("int4out fixture error");
+    assert_eq!(error_field(&err.1, b'M').as_deref(), Some("int4out fixture refuses"));
+    assert_eq!(
+        error_field(&err.1, b'W').as_deref(),
+        Some("unnamed portal with parameters: $1 = '007'"),
+        "C keeps the client's spelling once the input call has run"
+    );
+}
+
 fn install_generate_series_fixture() {
     install_fixtures();
 }
@@ -1225,6 +1314,82 @@ fn simple_query_cursor_fetch_move_close_round_trip() {
     );
 }
 
+// postgres.c:2263/2304: ParamsErrorCallback is on the stack during
+// PortalRun (the 25P01 WARNING carries the parameter context), and the
+// portal's params are forgotten once the commit destroyed their storage.
+#[test]
+fn execute_commit_with_bound_param_logs_context_and_survives_commit() {
+    install_generate_series_fixture();
+    guc_tables::backing::set_log_parameter_max_length_on_error(-1);
+    guc_tables::backing::set_log_min_duration_statement(0);
+
+    let input: Vec<u8> = [
+        parse_msg("", "COMMIT", &[INT4OID]),
+        bind_msg("", "", &[b"42"]),
+        execute_msg("", 0),
+        sync_msg(),
+        msg(b'X', &[]),
+    ]
+    .concat();
+    let wire = run_session(input);
+    guc_tables::backing::set_log_parameter_max_length_on_error(0);
+    guc_tables::backing::set_log_min_duration_statement(-1);
+    let all = frames(&wire);
+
+    let types: Vec<u8> = all.iter().map(|f| f.0).collect();
+    assert_eq!(types, vec![b'Z', b'1', b'2', b'N', b'C', b'Z'], "frame types: {types:?}");
+    let notice = &all[3].1;
+    assert_eq!(error_field(notice, b'C').as_deref(), Some("25P01"));
+    assert_eq!(
+        error_field(notice, b'W').as_deref(),
+        Some("unnamed portal with parameters: $1 = '42'")
+    );
+}
+
+// postgres.c:1804: the Bind context callback names the portal by its stored
+// (63-byte) name, not the wire name.
+#[test]
+fn bind_context_uses_stored_portal_name() {
+    install_generate_series_fixture();
+    guc_tables::backing::set_log_parameter_max_length_on_error(-1);
+    let long = "p".repeat(70);
+    let input: Vec<u8> = [
+        parse_msg("", "SELECT $1", &[INT4OID]),
+        bind_msg(&long, "", &[b"abc"]),
+        sync_msg(),
+        msg(b'X', &[]),
+    ]
+    .concat();
+    let wire = run_session(input);
+    guc_tables::backing::set_log_parameter_max_length_on_error(0);
+    let all = frames(&wire);
+
+    let errs: Vec<&Vec<u8>> = all.iter().filter(|(t, _)| *t == b'E').map(|(_, b)| b).collect();
+    assert_eq!(errs.len(), 1, "frame types: {:?}", all.iter().map(|f| f.0 as char).collect::<Vec<_>>());
+    let stored = "p".repeat(63);
+    assert_eq!(error_field(errs[0], b'C').as_deref(), Some("22P02"));
+    assert_eq!(
+        error_field(errs[0], b'W').as_deref(),
+        Some(format!("portal \"{stored}\" parameter $1 = 'abc'").as_str())
+    );
+}
+
+// postgres.c:1475: the multi-command Parse error carries C's source location.
+#[test]
+fn parse_multiple_commands_error_carries_c_location() {
+    install_generate_series_fixture();
+    let input: Vec<u8> =
+        [parse_msg("", "SELECT 1; SELECT 2", &[]), sync_msg(), msg(b'X', &[])].concat();
+    let wire = run_session(input);
+    let all = frames(&wire);
+    let errs: Vec<&Vec<u8>> = all.iter().filter(|(t, _)| *t == b'E').map(|(_, b)| b).collect();
+    assert_eq!(errs.len(), 1);
+    assert_eq!(error_field(errs[0], b'C').as_deref(), Some("42601"));
+    assert_eq!(error_field(errs[0], b'F').as_deref(), Some("postgres.c"));
+    assert_eq!(error_field(errs[0], b'L').as_deref(), Some("1475"));
+    assert_eq!(error_field(errs[0], b'R').as_deref(), Some("exec_parse_message"));
+}
+
 #[test]
 fn explain_generate_series_matches_live_pg_shape() {
     install_generate_series_fixture();
@@ -1251,7 +1416,7 @@ fn explain_generate_series_matches_live_pg_shape() {
     );
 }
 
-// Antithesis r20 rowsfrom-cdate (run 267fff0cefb579e92d1c6a7736b1e55d-59-13,
+// regression test rowsfrom-cdate (recorded run,
 // seed 3900666266787178552; reduced repro `explain ( select from lateral rows
 // from ( current_date , current_date ) for update ) ;`): cost_qual_eval_walker
 // charged nothing for SQLValueFunction, so a ROWS FROM (current_date,

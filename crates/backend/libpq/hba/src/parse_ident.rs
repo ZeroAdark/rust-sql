@@ -82,12 +82,13 @@ pub fn parse_ident_line(
     }))
 }
 
-// (found, error) out-flags of the C void fn.
+// (found, error) out-flags of the C void fn. `system_user` is the
+// authenticated identity's bytes (see check_usermap).
 pub fn check_ident_usermap(
     ident_line: &IdentLine,
     usermap_name: &str,
     pg_user: &str,
-    system_user: &str,
+    system_user: &[u8],
     case_insensitive: bool,
 ) -> PgResult<(bool, bool)> {
     if ident_line.usermap != usermap_name {
@@ -103,10 +104,10 @@ pub fn check_ident_usermap(
 
     // Not a regular expression, so make a complete match.
     if case_insensitive {
-        if !token_matches_insensitive(&ident_line.system_user, system_user.as_bytes()) {
+        if !token_matches_insensitive(&ident_line.system_user, system_user) {
             return Ok((false, false));
         }
-    } else if !token_matches(&ident_line.system_user, system_user.as_bytes()) {
+    } else if !token_matches(&ident_line.system_user, system_user) {
         return Ok((false, false));
     }
 
@@ -125,7 +126,7 @@ pub fn check_ident_usermap(
 fn check_ident_usermap_regexp(
     ident_line: &IdentLine,
     pg_user: &str,
-    system_user: &str,
+    system_user: &[u8],
     case_insensitive: bool,
     roleid: types_core::Oid,
 ) -> PgResult<(bool, bool)> {
@@ -148,10 +149,13 @@ fn check_ident_usermap_regexp(
     }
 
     let pg_tok = &ident_line.pg_user;
+    // strstr(identLine->pg_user->string, "\\1") over the token's file bytes.
+    let hay = crate::token_bytes(pg_tok);
+    let backref = hay.windows(2).position(|w| w == b"\\1");
     let expanded: AuthToken;
     let check_tok = if !crate::token_is_member_check(pg_tok)
         && !token_has_regexp(pg_tok)
-        && pg_tok.string.contains("\\1")
+        && backref.is_some()
     {
         if matches[1].rm_so < 0 {
             elog::ereport(LOG)
@@ -165,21 +169,18 @@ fn check_ident_usermap_regexp(
             return Ok((false, true));
         }
         // C copies the byte string at the wchar match offsets (single-byte and
-        // ASCII coincide pre-auth, so the offsets are byte positions). Rust
-        // &str range indexing would PANIC if an offset lands inside a multibyte
-        // character, so operate on the byte slice and bounds-check the range;
-        // an out-of-range capture is treated as no match rather than a panic.
-        let sys_bytes = system_user.as_bytes();
+        // ASCII coincide pre-auth, so the offsets are byte positions); operate
+        // on the byte slice and bounds-check the range — an out-of-range
+        // capture is treated as no match rather than a panic.
         let so = matches[1].rm_so as usize;
         let eo = matches[1].rm_eo as usize;
-        if so > eo || eo > sys_bytes.len() {
+        if so > eo || eo > system_user.len() {
             return Ok((false, false));
         }
-        let cap = &sys_bytes[so..eo];
+        let cap = &system_user[so..eo];
         // Substitute the first "\\1" in pg_user with the captured bytes,
         // mirroring C's memcpy-based expansion at the byte level.
-        let ofs = pg_tok.string.find("\\1").unwrap();
-        let hay = pg_tok.string.as_bytes();
+        let ofs = backref.expect("checked above");
         let mut expanded_bytes = Vec::with_capacity(hay.len() - 2 + cap.len());
         expanded_bytes.extend_from_slice(&hay[..ofs]);
         expanded_bytes.extend_from_slice(cap);

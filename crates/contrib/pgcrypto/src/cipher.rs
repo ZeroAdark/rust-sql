@@ -202,11 +202,11 @@ fn prepare_key(kind: CipherKind, key: &[u8]) -> Option<Vec<u8>> {
             k[..n].copy_from_slice(&key[..n]);
             k
         }
+        // px.c:206 combo_init passes a zeroed key buffer with klen 0:
+        // BF_set_key cycles key[0] and CAST_set_key zero-fills, so an empty
+        // key schedules like the one-byte zero key.
         CipherKind::Bf => {
-            if key.is_empty() {
-                return None;
-            }
-            let key = &key[..key.len().min(56)];
+            let key = if key.is_empty() { &[0u8][..] } else { &key[..key.len().min(56)] };
             // OpenSSL BF_set_key cycles the key through the P-array; RustCrypto
             // rejects len<4. Repeat to the smallest multiple >=4 to reproduce
             // the exact cycling (period = orig len) byte-for-byte.
@@ -226,10 +226,7 @@ fn prepare_key(kind: CipherKind, key: &[u8]) -> Option<Vec<u8>> {
             }
         }
         CipherKind::Cast5 => {
-            if key.is_empty() {
-                return None;
-            }
-            let key = &key[..key.len().min(16)];
+            let key = if key.is_empty() { &[0u8][..] } else { &key[..key.len().min(16)] };
             // OpenSSL CAST5 zero-pads a <=10-byte "small key" to 16; RustCrypto
             // rejects len<5. Zero-pad up to 5 to keep the small-key schedule.
             if key.len() >= 5 {
@@ -348,6 +345,8 @@ macro_rules! do_decrypt {
 
 pub fn encrypt(spec: &str, key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>, CipherError> {
     let spec = parse_spec(spec)?;
+    // pgcrypto.c:272: palloc(VARHDRSZ + combo_encrypt_len) precedes px_combo_init.
+    ::mcx::check_alloc_size(data.len() + 4 + 512).map_err(CipherError::Pg)?;
     let k = prepare_key(spec.kind, key).ok_or(CipherError::EncryptFailed)?;
     let v = prepare_iv(spec.kind, iv);
     match spec.kind {
@@ -392,6 +391,16 @@ mod tests {
     // PGDG C build computes when its OpenSSL legacy provider IS available, and
     // the pg-side output observed on the CI cluster. bf/cast5/des are not e2e-gated
     // (PGDG's OpenSSL-3 legacy provider is off, so live C errors on them).
+    #[test]
+    fn oversized_input_is_refused_at_the_result_palloc() {
+        let data = vec![0u8; 1073741308];
+        match encrypt("aes", &[0u8; 16], &[], &data) {
+            Err(CipherError::Pg(e)) => assert_eq!(e.message, "invalid memory alloc request size 1073741824"),
+            _ => panic!("expected the alloc-size error"),
+        }
+        assert!(matches!(encrypt("nope", &[0u8; 16], &[], &data), Err(CipherError::NoCipher(_))));
+    }
+
     #[test]
     fn blowfish_ecb_known_answer() {
         let ct = encrypt("bf-ecb/pad:none", &[0u8; 8], &[], &[0u8; 8]).map_err(|_| ()).unwrap();

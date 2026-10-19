@@ -375,6 +375,50 @@ fn build_accumulator_compressed_keys_group_and_sort_detoasted() {
     assert_eq!(acc.nentries(), 2);
 }
 
+// ginbulk.c:166 identifies keys through the comparator, which detoasts: a
+// compressed key and a flat key whose payload is byte-identical to that
+// compressed image are two different keys (a hash over raw bytes merged
+// them and dropped one key's postings under the other).
+#[test]
+fn build_accumulator_keeps_flat_key_equal_to_a_compressed_image_apart() {
+    let ctx = MemoryContext::new_bump("t");
+    let mcx = ctx.mcx();
+    let mut acc = crate::bulk::BuildAccumulator::new(mcx, one_col_state(ts_col()));
+    let ka = pglz_key(mcx, &b"y".repeat(2100));
+    // SAFETY: ka is a live 4B_C varlena built above.
+    let image = unsafe {
+        let p = ka.as_usize() as *const u8;
+        core::slice::from_raw_parts(p, ::types_tuple::varatt::varsize_any(p))
+    };
+    let kb = flat_key(mcx, image);
+    acc.insert_entries(&tid(1, 1), 1, &[ka], &[GIN_CAT_NORM_KEY]).unwrap();
+    acc.insert_entries(&tid(2, 1), 1, &[kb], &[GIN_CAT_NORM_KEY]).unwrap();
+    assert_eq!(acc.nentries(), 2, "flat payload == compressed image is a different key");
+    acc.begin_scan().unwrap();
+    let mut lists = Vec::new();
+    while let Some((_, _, _, l)) = acc.next_entry() {
+        lists.push(l.to_vec());
+    }
+    lists.sort_by(|a, b| ::gin_vocab::ginCompareItemPointers(&a[0], &b[0]).cmp(&0));
+    assert_eq!(lists, vec![vec![tid(1, 1)], vec![tid(2, 1)]]);
+}
+
+// ginAllocEntryAccumulator charges GetMemoryChunkSpace of
+// palloc(sizeof(GinEntryAccumulator) * DEF_NENTRY) = 64 * 2048 + 8 per
+// 2048 entries; the first entry also charges its 5-TID list (30 bytes ->
+// 32-byte freelist chunk + 8-byte header) and a by-value key copies nothing.
+#[test]
+fn build_accumulator_charges_c_entry_accumulator_chunk() {
+    let ctx = MemoryContext::new_bump("t");
+    let mcx = ctx.mcx();
+    let state = one_col_state(GinColState::array_ops(GinCompareFn::Int4, true, 4));
+    let mut acc = crate::bulk::BuildAccumulator::new(mcx, state);
+    assert_eq!(acc.allocated_memory, 0);
+    acc.insert_entries(&tid(1, 1), 1, &[::datum::Datum::from_i32(7)], &[GIN_CAT_NORM_KEY])
+        .unwrap();
+    assert_eq!(acc.allocated_memory, 64 * 2048 + 8 + 40);
+}
+
 // A per-thread fake buffer manager shared by every gin unit test that reads
 // pages through the bufmgr seams (a seam installs once per process): buffer
 // b is page b-1 of the calling thread's page table, pins are counted, content
@@ -517,6 +561,10 @@ mod posting_tree_vacuum {
     }
 
     fn index_rel(mcx: Mcx<'_>) -> Relation<'_> {
+        index_rel_with(mcx, int4_tupdesc(mcx))
+    }
+
+    fn index_rel_with<'m>(mcx: Mcx<'m>, tupdesc: TupleDescData<'m>) -> Relation<'m> {
         let mut relname = ::types_tuple::NameData::default();
         relname.namestrcpy("t_gin");
         let mut indkey = PgVec::new_in(mcx);
@@ -566,7 +614,7 @@ mod posting_tree_vacuum {
                 relfrozenxid: 3,
                 relminmxid: 1,
             },
-            rd_att: Rc::new(int4_tupdesc(mcx)),
+            rd_att: Rc::new(tupdesc),
             rd_index: Some(FormData_pg_index {
                 indexrelid: 6000,
                 indrelid: 5999,
@@ -610,6 +658,72 @@ mod posting_tree_vacuum {
 
     fn int4_col() -> GinColState {
         GinColState::array_ops(GinCompareFn::Int4, true, 4)
+    }
+
+    // ginutil.c:125-128 builds the multicolumn key attribute with
+    // TupleDescInitEntry: attstorage = pg_type.typstorage and no compression
+    // method, regardless of the index column's own STORAGE/COMPRESSION.
+    #[test]
+    fn multicol_key_tupdesc_uses_type_storage() {
+        use ::types_tuple::{
+            FormData_pg_attribute, InvalidCompressionMethod, TYPSTORAGE_EXTENDED,
+            TYPSTORAGE_EXTERNAL,
+        };
+        let ctx = ::mcx::MemoryContext::new("t");
+        let mcx = ctx.mcx();
+        let int4 = FormData_pg_attribute {
+            atttypid: ::types_core::INT4OID,
+            attlen: 4,
+            attnum: 1,
+            atttypmod: -1,
+            attbyval: true,
+            attalign: b'i' as i8,
+            attstorage: b'p' as i8,
+            ..Default::default()
+        };
+        let text = FormData_pg_attribute {
+            atttypid: ::types_core::TEXTOID,
+            attlen: -1,
+            attnum: 2,
+            atttypmod: -1,
+            attbyval: false,
+            attalign: b'i' as i8,
+            attstorage: TYPSTORAGE_EXTERNAL,
+            attcompression: b'l' as i8,
+            ..Default::default()
+        };
+        let mut attrs = PgVec::new_in(mcx);
+        attrs.push(int4);
+        attrs.push(text);
+        let mut compact = PgVec::new_in(mcx);
+        compact.push(CompactAttribute::populate_from(&attrs[0]));
+        compact.push(CompactAttribute::populate_from(&attrs[1]));
+        let rel = index_rel_with(
+            mcx,
+            TupleDescData {
+                natts: 2,
+                tdtypeid: 0,
+                tdtypmod: -1,
+                tdrefcount: 1,
+                constr: None,
+                compact_attrs: compact,
+                attrs,
+            },
+        );
+        let mut cols = [int4_col(); GIN_MAX_KEY_COLS];
+        cols[1] = GinColState::btree_ops(
+            ::gin_vocab::GinBtreeType::Text,
+            ::types_core::catalog::DEFAULT_COLLATION_OID,
+            false,
+            -1,
+        );
+        let state = GinState { natts: 2, one_col: false, cols };
+        let desc = crate::entrypage::gin_col_tupdesc(mcx, &rel, &state, 2).unwrap();
+        assert_eq!(desc.natts, 2);
+        assert_eq!(desc.attr(1).attnum, 2);
+        assert_eq!(desc.attr(1).atttypid, ::types_core::TEXTOID);
+        assert_eq!(desc.attr(1).attstorage, TYPSTORAGE_EXTENDED);
+        assert_eq!(desc.attr(1).attcompression, InvalidCompressionMethod);
     }
 
     // upstream 7becb647da74 (18.5): Restore vacuum_delay_point() in GIN

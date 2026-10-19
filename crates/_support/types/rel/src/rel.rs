@@ -126,6 +126,7 @@ pub struct RdAmCacheGinCol {
     pub can_partial_match: bool,
     pub key_byval: bool,
     pub key_len: i16,
+    pub key_storage: i8,
 }
 
 /// GIN's resolved opclass state (gin's GinState mirror; INDEX_MAX_KEYS slots).

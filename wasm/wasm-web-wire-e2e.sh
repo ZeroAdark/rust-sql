@@ -65,7 +65,7 @@ done
 [ -n "${TZSRC:-}" ] || { echo "no timezone share dir under $PGBIN/../share"; exit 2; }
 
 . "$REPO/wasm/lib/scratch.sh"
-WORK="${WASM_WIRE_E2E_DIR:-$(scratch_datadir pgrust-fast-wasm-wire-e2e)}"
+WORK="${WASM_WIRE_E2E_DIR:-$(scratch_datadir pgrust-wasm-wire-e2e)}"
 scratch_adopt "$WORK"
 rm -rf "$WORK"; mkdir -p "$WORK"
 

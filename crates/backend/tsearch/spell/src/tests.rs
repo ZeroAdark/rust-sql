@@ -4,14 +4,17 @@ use ::types_error::{PgResult, ERRCODE_CONFIG_FILE_ERROR};
 
 use crate::dict_ispell::{dispell_init, dispell_lexize, DictISpell};
 
-fn opts<'m>(mcx: Mcx<'m>, pairs: &[(&str, &str)]) -> PgVec<'m, (PgVec<'m, u8>, PgVec<'m, u8>)> {
+fn opts<'m>(
+    mcx: Mcx<'m>,
+    pairs: &[(&str, &str)],
+) -> PgVec<'m, (PgVec<'m, u8>, Option<PgVec<'m, u8>>)> {
     let mut v = PgVec::new_in(mcx);
     for (k, val) in pairs {
         let mut kb = PgVec::new_in(mcx);
         kb.extend_from_slice(k.as_bytes());
         let mut vb = PgVec::new_in(mcx);
         vb.extend_from_slice(val.as_bytes());
-        v.push((kb, vb));
+        v.push((kb, Some(vb)));
     }
     v
 }
@@ -462,4 +465,67 @@ fn regexec_failure_is_no_match_not_an_error() {
     assert!(!crate::normalize::regexec_applies(&RegexecResult::Failed(RegexFailure {
         message: "regular expression is too complex".to_string(),
     })));
+}
+
+// strtol: a positive magnitude of exactly 2^63 is ERANGE (LONG_MAX), not a
+// wrapped LONG_MIN; NISortDictionary then reports the alias as invalid.
+#[test]
+fn strtol_positive_two_to_the_63_overflows() {
+    assert_eq!(crate::strtol(b"9223372036854775808"), (i64::MAX, 19, false));
+    assert_eq!(crate::strtol(b"9223372036854775807"), (i64::MAX, 19, true));
+    assert_eq!(crate::strtol(b"-9223372036854775808"), (i64::MIN, 20, true));
+    assert_eq!(crate::strtol(b"-9223372036854775809"), (i64::MIN, 20, false));
+}
+
+// spell.c get_nextfield copies a field into a char[BUFSIZ]: an AF alias
+// whose flags run past BUFSIZ - 1 bytes loses its tail, so the flag there
+// never applies. Fixture: 'AF ' + 8191 'A' + 'B' (past BUFSIZ - 1 on every
+// platform's BUFSIZ, 1024 or 8192). Oracle: C 18.6 ts_lexize.
+#[test]
+fn affix_field_is_truncated_to_bufsiz() {
+    std::env::set_var(
+        "PGRUST_PGSHAREDIR",
+        format!("{}/fixtures", env!("CARGO_MANIFEST_DIR")),
+    );
+    let mcx = static_mcx();
+    let d = make_dict(mcx, "spell_b109_buf", "spell_b109_buf").unwrap();
+    assert_eq!(lexize(mcx, &d, "cats"), None);
+    assert_eq!(lexize(mcx, &d, "cat"), Some(vec!["cat".to_string()]));
+}
+
+// spell.h SPNodeData.affix is a 19-bit field: mkSPNode stores an alias
+// index modulo 2^19, so alias 524288 lands on the empty alias 0.
+#[test]
+fn spnode_affix_index_is_nineteen_bits() {
+    let mcx = static_mcx();
+    let leaf_affix = |alias: &[u8], naliases: usize| -> u32 {
+        let mut d = crate::IspellDict::new(mcx);
+        d.use_flag_aliases = true;
+        for i in 0..=naliases {
+            let mut v = PgVec::new_in(mcx);
+            if i == naliases {
+                v.extend_from_slice(b"B");
+            }
+            d.affix_data.push(v);
+        }
+        let mut word = PgVec::new_in(mcx);
+        word.extend_from_slice(b"cat");
+        let mut flag = PgVec::new_in(mcx);
+        flag.extend_from_slice(alias);
+        d.spell.push(crate::Spell { word, flag, affix: 0, len: 0 });
+        d.ni_sort_dictionary().unwrap();
+        let mut node = d.dictionary.unwrap();
+        let mut data = None;
+        for ch in b"cat" {
+            let nd = d.sp_arena[node].data.iter().find(|nd| nd.val == *ch).unwrap();
+            data = Some(*nd);
+            node = nd.node.unwrap_or(node);
+        }
+        let data = data.unwrap();
+        assert!(data.isword);
+        data.affix
+    };
+    assert_eq!(leaf_affix(b"5", 5), 5);
+    assert_eq!(leaf_affix(b"524287", 524287), 524287);
+    assert_eq!(leaf_affix(b"524288", 524288), 0);
 }

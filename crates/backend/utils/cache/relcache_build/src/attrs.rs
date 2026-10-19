@@ -76,15 +76,15 @@ pub(crate) fn relation_build_tuple_desc(
         &keys,
     )?;
     let mut rows: PgVec<'_, FormData_pg_attribute> = PgVec::new_in(smcx);
-    let mut missing_pairs: PgVec<'static, (i16, Datum)> = PgVec::new_in(mcx);
+    let mut missing_pairs: Vec<(i16, Datum, Option<PgVec<'_, u8>>)> = Vec::new();
     while let Some(tup) = genam::systable_getnext(smcx, &mut scan)? {
         let a = decode(rel.descr(), tup, relid)?;
         if a.attnum <= 0 || a.attnum > relnatts {
             return Err(invalid_attribute_number(a.attnum, form));
         }
         if a.atthasmissing {
-            if let Some(v) = attr_missing_fetch(mcx, smcx, rel.descr(), tup, &a)? {
-                missing_pairs.push((a.attnum, v));
+            if let Some((v, image)) = attr_missing_fetch(smcx, rel.descr(), tup, &a)? {
+                missing_pairs.push((a.attnum, v, image));
             }
         }
         rows.push(a);
@@ -158,23 +158,25 @@ pub(crate) fn relation_build_tuple_desc(
                 }
             }
         }
-        let mut missing: PgVec<'static, types_tuple::AttrMissing> = PgVec::new_in(mcx);
-        if has_missing {
-            missing
-                .try_reserve_exact(natts)
-                .map_err(|_| Box::new(mcx.oom(natts * core::mem::size_of::<types_tuple::AttrMissing>())))?;
-            missing.resize(
-                natts,
-                types_tuple::AttrMissing { am_present: false, am_value: Datum::null() },
-            );
-            for &(attnum, v) in missing_pairs.iter() {
-                missing[attnum as usize - 1] =
-                    types_tuple::AttrMissing { am_present: true, am_value: v };
-            }
-        }
+        let (missing, missing_store) = if has_missing {
+            let values: Vec<(usize, tupdesc::MissingValue<'_>)> = missing_pairs
+                .iter()
+                .map(|(attnum, v, image)| {
+                    let value = match image {
+                        Some(b) => tupdesc::MissingValue::ByRef(b),
+                        None => tupdesc::MissingValue::ByVal(*v),
+                    };
+                    (*attnum as usize - 1, value)
+                })
+                .collect();
+            tupdesc::build_missing(mcx, natts, &values)?
+        } else {
+            (PgVec::new_in(mcx), PgVec::new_in(mcx))
+        };
         td.constr = Some(mcx::box_new_in(
             mcx,
             TupleConstr {
+                missing_store,
                 num_defval: defval.len() as u16,
                 num_check: check.len() as u16,
                 relchecks,
@@ -476,15 +478,15 @@ fn extract_not_null_column(
     Ok(elems[0].as_i16())
 }
 
-// relcache.c attrmiss arm: unwrap the 1-element attmissingval array; by-ref
-// values are datumCopy'd into the cache context (the tuple dies with smcx).
-fn attr_missing_fetch(
-    mcx: Mcx<'static>,
-    smcx: Mcx<'_>,
+// relcache.c attrmiss arm: unwrap the 1-element attmissingval array; a by-ref
+// image is copied out of the scan tuple (datumCopy lands in the descriptor's
+// missing store at build time).
+fn attr_missing_fetch<'s>(
+    smcx: Mcx<'s>,
     td: &TupleDescData<'_>,
     tup: &HeapTupleData<'_>,
     a: &FormData_pg_attribute,
-) -> PgResult<Option<Datum>> {
+) -> PgResult<Option<(Datum, Option<PgVec<'s, u8>>)>> {
     const Anum_pg_attribute_attmissingval: i32 = 25;
     let (val, isnull) = getattr(td, tup, Anum_pg_attribute_attmissingval);
     if isnull {
@@ -509,7 +511,7 @@ fn attr_missing_fetch(
     assert!(elems.len() == 1, "attmissingval with {} entries", elems.len());
     let v = elems[0];
     if a.attbyval {
-        return Ok(Some(v));
+        return Ok(Some((v, None)));
     }
     let src = v.as_usize() as *const u8;
     let len = if a.attlen > 0 {
@@ -521,8 +523,9 @@ fn attr_missing_fetch(
     };
     // SAFETY: `len` bytes readable at src per the array image layout.
     let bytes = unsafe { std::slice::from_raw_parts(src, len) };
-    let copy = mcx::slice_borrow_in(mcx, bytes)?;
-    Ok(Some(Datum::from_usize(copy.as_ptr() as usize)))
+    let mut image: PgVec<'s, u8> = mcx::vec_with_capacity_in(smcx, len)?;
+    mcx::vec_append_bytes(&mut image, bytes)?;
+    Ok(Some((Datum::null(), Some(image))))
 }
 
 pub(crate) fn decode(

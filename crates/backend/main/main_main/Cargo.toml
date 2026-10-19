@@ -65,7 +65,7 @@ pg_locale = { path = "../../utils/adt/pg_locale" }
 pg_path = { path = "../../../port/pg_path" }
 postmaster = { path = "../../postmaster/postmaster" }
 memwatchdog = { path = "../../postmaster/memwatchdog" }
-# GL-CONCMEM-1: the POOL-QOS memory governor's fallback usage probe
+# regression: the POOL-QOS memory governor's fallback usage probe
 # (install_qos_mem_probe) — install-only dep, mirroring memwatchdog's
 # allocator-stats install above it in bin/postgres.rs.
 runtime = { path = "../../executor/runtime" }

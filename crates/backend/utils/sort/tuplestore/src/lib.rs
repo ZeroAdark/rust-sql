@@ -116,6 +116,18 @@ impl Drop for Tuplestore {
     }
 }
 
+// BufFileClose flushes the dirty buffer, so an ENOSPC/EIO/temp_file_limit
+// failure at tuplestore_end is a C ereport; this sits under the infallible
+// executor end/rescan plumbing, so the PgError unwinds as a panic payload
+// (the shim_cmp convention) and surfaces verbatim.
+fn close_file(st: &mut TuplestoreData<'_>) {
+    if let Some(file) = st.myfile.take() {
+        if let Err(e) = file.close() {
+            std::panic::panic_any(e);
+        }
+    }
+}
+
 #[inline]
 fn cfi() -> PgResult<()> {
     if init_small::globals::InterruptPending() {
@@ -150,6 +162,8 @@ mod ts_pool {
         // tls-dtor: ManuallyDrop — a parked store's drop reaches FD.with.
         static SLOT: core::cell::RefCell<core::mem::ManuallyDrop<Option<super::Tuplestore>>> =
             const { core::cell::RefCell::new(core::mem::ManuallyDrop::new(None)) };
+        // One session-teardown cleanup per thread (re-armed after it runs).
+        static CLEANUP_ARMED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
     }
 
     pub(crate) fn take() -> Option<super::Tuplestore> {
@@ -163,6 +177,22 @@ mod ts_pool {
                 **slot = Some(ts);
             }
         });
+        // The parked shell (two contexts: an aset with the 1024-entry
+        // memtuples slab + a generation arena block, ~40 KiB) is the last
+        // statement's store; C frees it with the process. A dead backend
+        // thread's ManuallyDrop TLS never does, so release it at session
+        // teardown (State phase: the thread and its fd table are alive,
+        // unlike a TLS destructor). Registered once per thread, re-armed by
+        // the cleanup itself for a reused thread.
+        if !CLEANUP_ARMED.with(|c| c.replace(true)) {
+            ::mcx::register_session_cleanup(Box::new(|| {
+                CLEANUP_ARMED.with(|c| c.set(false));
+                if let Some(ts) = take() {
+                    drop(ts);
+                }
+                super::hold::release_registry();
+            }));
+        }
     }
 }
 
@@ -369,10 +399,7 @@ impl Tuplestore {
     pub fn clear(&mut self) {
         self.0.with_mut(|st| {
             st.updatemax();
-            if let Some(file) = st.myfile.take() {
-                file.close()
-                    .expect("tuplestore_clear: closing temp file failed");
-            }
+            close_file(st);
             st.tuplecontext.reset();
             st.avail_mem = st.allowed_mem - aset_chunk_space(st.memtuples.capacity() * PTR_SIZE);
             st.status = TupStoreStatus::InMem;
@@ -426,6 +453,8 @@ impl Tuplestore {
         if park {
             self.clear();
             ts_pool::park(self);
+        } else {
+            self.0.with_mut(close_file);
         }
     }
 

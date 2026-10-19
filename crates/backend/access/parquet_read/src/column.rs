@@ -436,6 +436,9 @@ impl ColumnCursor {
                     continue;
                 }
                 PageKind::Data { num_values, encoding, def_encoding } => {
+                    if num_values == 0 {
+                        continue;
+                    }
                     let (in_chunk, start, end) = self.page_payload(
                         payload_start,
                         head.compressed_size,

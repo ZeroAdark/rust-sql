@@ -525,16 +525,6 @@ pub fn ProcedureCreateWithTransforms<'mcx>(
         ),
         None => nulls[Anum_pg_proc_proconfig - 1] = true,
     }
-    let proacl = aclchk_seams::get_user_default_acl::call(mcx, b'f', a.proowner, a.procNamespace)?;
-    match proacl.as_deref() {
-        Some(img) => set(
-            &mut values,
-            Anum_pg_proc_proacl,
-            Datum::from_usize(img.as_ptr() as usize),
-        ),
-        None => nulls[Anum_pg_proc_proacl - 1] = true,
-    }
-
     let rel = table::table_open(mcx, PROCEDURE_RELATION_ID, RowExclusiveLock)?;
 
     // SAFETY: Oid is u32; viewing the slice as bytes for the oidvector cache
@@ -549,6 +539,7 @@ pub fn ProcedureCreateWithTransforms<'mcx>(
         cache_syscache::SysCacheKey::Value(Datum::from_oid(a.procNamespace)),
     )?;
 
+    let mut proacl = None;
     let (retval, is_update) = if let Some(oldtup) = oldtup {
         let t = oldtup.tuple();
         let desc = rel.descr();
@@ -843,6 +834,15 @@ pub fn ProcedureCreateWithTransforms<'mcx>(
         cache_syscache::ReleaseSysCache(oldtup);
         (old_oid, true)
     } else {
+        proacl = aclchk_seams::get_user_default_acl::call(mcx, b'f', a.proowner, a.procNamespace)?;
+        match proacl.as_deref() {
+            Some(img) => set(
+                &mut values,
+                Anum_pg_proc_proacl,
+                Datum::from_usize(img.as_ptr() as usize),
+            ),
+            None => nulls[Anum_pg_proc_proacl - 1] = true,
+        }
         let newOid =
             catalog::GetNewOidWithIndex(mcx, &rel, ProcedureOidIndexId, Anum_pg_proc_oid)?;
         values[Anum_pg_proc_oid as usize - 1] = Datum::from_oid(newOid);
@@ -984,7 +984,7 @@ pub fn function_parse_error_transpose(e: &mut types_error::PgError, prosrc: &str
     // sourceText.
     let query = pquery::ActivePortal()
         .filter(|p| p.borrow().status == types_portal::PortalStatus::PORTAL_ACTIVE)
-        .and_then(|p| p.borrow().sourceText.as_ref().map(|s| s.as_str().to_string()));
+        .and_then(|p| p.borrow().sourceText.map(|s| s.to_string()));
     if let Some(q) = query {
         let newpos = match_prosrc_to_query(prosrc, &q, origpos);
         if newpos > 0 {
@@ -1001,7 +1001,11 @@ pub fn function_parse_error_transpose(e: &mut types_error::PgError, prosrc: &str
 }
 
 fn mbstrlen_with_len(s: &str, byte_len: usize) -> i32 {
-    s[..byte_len.min(s.len())].chars().count() as i32
+    let prefix = &s[..byte_len.min(s.len())];
+    if mbutils::pg_database_encoding_max_length() == 1 {
+        return prefix.len() as i32;
+    }
+    prefix.chars().count() as i32
 }
 
 fn match_prosrc_to_query(prosrc: &str, query_text: &str, cursorpos: i32) -> i32 {
@@ -1177,7 +1181,7 @@ fn fc_fmgr_c_validator(
         .ok_or_else(|| null_proc_column_err("prosrc"))?;
     let probin = syscache_seams::lookup_pg_proc_probin::call(cx.mcx(), funcoid)?
         .ok_or_else(|| null_proc_column_err("probin"))?;
-    dfmgr::load_external_function(&probin, &prosrc, true)?;
+    dfmgr::load_sql_callable_function(&probin, &prosrc)?;
     Ok(Datum::null())
 }
 

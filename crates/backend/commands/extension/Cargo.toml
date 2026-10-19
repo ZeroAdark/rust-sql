@@ -60,8 +60,11 @@ utility_seams = { path = "../../tcop/utility_seams" }
 schemacmds = { path = "../schemacmds" }
 commands_comment = { path = "../comment" }
 explain = { path = "../explain" }
+commands_define = { path = "../commands_define" }
+parser_small1 = { path = "../../parser/parser_small1" }
 extension_seams = { path = "../extension_seams" }
 objectaddress_seams = { path = "../../catalog/objectaddress_seams" }
 objectaccess = { path = "../../catalog/objectaccess" }
+postgres = { path = "../../tcop/postgres" }
 adt_quote = { path = "../../utils/adt/quote" }
 format_type = { path = "../../utils/adt/format_type" }

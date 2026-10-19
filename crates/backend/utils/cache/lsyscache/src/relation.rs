@@ -15,6 +15,12 @@ fn index_lookup_failed(index_oid: Oid) -> Box<types_error::PgError> {
 }
 
 pub fn get_relname_relid(relname: &str, relnamespace: Oid) -> PgResult<Oid> {
+    get_relname_relid_bytes(relname.as_bytes(), relnamespace)
+}
+
+// get_relname_relid over C's char* bytes: a makeObjectName-generated name
+// (index_create) may not be UTF-8 in a SQL_ASCII database.
+pub fn get_relname_relid_bytes(relname: &[u8], relnamespace: Oid) -> PgResult<Oid> {
     syscache_seams::lookup_pg_class_relid_by_name::call(relname, relnamespace)
 }
 

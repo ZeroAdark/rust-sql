@@ -1220,7 +1220,7 @@ fn commit_record_reader<'a>(
 // TimestampDifferenceMilliseconds, which rounds a positive fraction UP, so a
 // commit 500 us short of its apply deadline still waits one millisecond; the
 // pre-fix port truncated it to 0 and replayed the record at once.
-// Audit fp-transam-xlogrecovery-p2#4 / Detail bug_7b44423a.
+// Audit regression / Detail bug_7b44423a.
 #[test]
 fn recovery_apply_delay_rounds_a_sub_millisecond_remainder_up_like_c() {
     let _g = datadir_lock();
@@ -1588,4 +1588,271 @@ fn wal_retry_wait_ms_clamps_a_backward_clock_step() {
     assert_eq!(wal_retry_wait_ms(0, 4_000_000, 5000), Some(1000));
     assert_eq!(wal_retry_wait_ms(0, 4_000_001, 5000), Some(999));
     assert_eq!(wal_retry_wait_ms(0, 5_000_000, 5000), None);
+}
+
+#[test]
+fn reread_walrcv_config_requests_one_restart_per_change() {
+    // startup.c:136-151 (audit regression): a reload that changes
+    // primary_conninfo requests the restart once; the next unchanged reload
+    // (restart still pending) compares against the reloaded values and
+    // requests nothing.
+    install_startup_process_seams();
+    WALRCV_UP.store(true, Relaxed);
+    CURRENT_SOURCE.with(|c| c.set(XLogSource::Stream));
+    PENDING_WALRCV_RESTART.with(|c| c.set(false));
+    WALRCV_STARTED_WITH.with(|c| {
+        *c.borrow_mut() = Some(("host=old-primary".to_string(), String::new(), false));
+    });
+
+    StartupRereadWalRcvConfig();
+    assert!(PENDING_WALRCV_RESTART.with(Cell::get));
+
+    PENDING_WALRCV_RESTART.with(|c| c.set(false));
+    StartupRereadWalRcvConfig();
+    assert!(!PENDING_WALRCV_RESTART.with(Cell::get));
+    WALRCV_UP.store(false, Relaxed);
+}
+
+static RESCAN_FORK_WAKES: AtomicU32 = AtomicU32::new(0);
+static RESCAN_FORK_DIR: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+// Every startup-interrupt pass wakes the recovery latch: the first (after the
+// archive/pg_wal miss) brings the walreceiver stand-in up, the second (back
+// from the idle stream wait) takes it down so the stream source fails, and the
+// third (that failure) brings it back for the XLogShutdownWalRcv arm that
+// precedes rescanLatestTimeLine, and makes the segment appear so the retry
+// from the archive succeeds whichever timeline was chosen.
+fn rescan_fork_interrupt() {
+    let wake = RESCAN_FORK_WAKES.fetch_add(1, Relaxed) + 1;
+    match wake {
+        1 => WALRCV_UP.store(true, Relaxed),
+        2 => WALRCV_UP.store(false, Relaxed),
+        3 => {
+            WALRCV_UP.store(true, Relaxed);
+            let dir = RESCAN_FORK_DIR.lock().unwrap().clone().unwrap();
+            let loc: XLogRecPtr = SEG as u64 + SizeOfXLogLongPHD as u64;
+            let commit =
+                record_bytes(loc, xact::RM_XACT_ID, xact::XLOG_XACT_COMMIT, &0i64.to_ne_bytes());
+            write_segment_with_record(&dir, loc, &commit);
+        }
+        _ => {}
+    }
+    latch::SetLatch(targets::recovery_wakeup_latch());
+}
+
+// xlogrecovery.c:3388: XLogPageRead hands WaitForWALToBecomeAvailable the
+// reader's EndRecPtr as the replay LSN that rescanLatestTimeLine checks the
+// fork point against. The pre-fix port passed XLogRecoveryCtl->replayEndRecPtr,
+// still 0 while the checkpoint record is being fetched, so a timeline that
+// forked off before the checkpoint was adopted ("new target timeline is 2")
+// where C rejects it. Audit regression.
+#[test]
+fn checkpoint_fetch_rejects_a_timeline_forked_before_the_reader_position_like_c() {
+    let _g = datadir_lock();
+    let dir = boot_fixture("rescan_fork_before_ckpt");
+    // existsTimeLineHistory opens the DataDir-relative pg_wal.
+    let prev_cwd = std::env::current_dir().ok();
+    std::env::set_current_dir(&dir).unwrap();
+    install_startup_process_seams();
+    // readTimeLineHistory brackets its file read with a wait event.
+    if !waitevent_seams::pgstat_report_wait_start::is_installed() {
+        waitevent_seams::pgstat_report_wait_start::set(record_wait_start);
+        waitevent_seams::pgstat_report_wait_end::set(|| {});
+    }
+    *RESCAN_FORK_DIR.lock().unwrap() = Some(dir.clone());
+    *INTERRUPT_HOOK.lock().unwrap() = Some(rescan_fork_interrupt);
+    RESCAN_FORK_WAKES.store(0, Relaxed);
+    WALRCV_UP.store(false, Relaxed);
+    WALRCV_FLUSHED_UPTO.store(InvalidXLogRecPtr, Relaxed);
+    PROMOTE_SIGNALED.store(false, Relaxed);
+    RECOVERY_TARGET_TLI.store(1, Relaxed);
+    REPLAY_END_REC_PTR.store(InvalidXLogRecPtr, Relaxed);
+    IN_ARCHIVE_RECOVERY.store(true, Relaxed);
+    STANDBY_MODE.store(true, Relaxed);
+    PENDING_WALRCV_RESTART.with(|c| c.set(false));
+    // Timeline 2 forks from timeline 1 at the segment start, before the
+    // checkpoint record the reader is positioned on; the segment is absent
+    // until the interrupt hook supplies it.
+    std::fs::write(dir.join("pg_wal").join("00000002.history"), b"1\t0/1000000\tno reason\n")
+        .unwrap();
+    latch::OwnLatch(targets::recovery_wakeup_latch()).unwrap();
+    latch::SetLatch(targets::recovery_wakeup_latch());
+    REPORTS.lock().unwrap().clear();
+    let prev_min = elog::config::log_min_messages();
+    elog::config::set_log_min_messages(types_error::DEBUG2);
+    let prev = elog::set_emit_log_hook(Some(capture_report));
+
+    let loc: XLogRecPtr = SEG as u64 + SizeOfXLogLongPHD as u64;
+    let cx = mcx::MemoryContext::new("rescan fork witness");
+    let mut reader = XLogReaderState::allocate(cx.mcx(), SEG).unwrap();
+    reader.system_identifier = SYS_ID;
+    reader.XLogReaderSetDecodeBuffer(guc_tables::vars::wal_decode_buffer_size.read() as usize);
+    reader.XLogBeginRead(loc);
+    let mut src = PageSource::new();
+    src.replay_tli = 1;
+    src.fetching_ckpt = true;
+    let read = reader.XLogReadRecord(&mut src);
+    src.close_read_file();
+
+    elog::set_emit_log_hook(prev);
+    elog::config::set_log_min_messages(prev_min);
+    latch::DisownLatch(targets::recovery_wakeup_latch());
+    *INTERRUPT_HOOK.lock().unwrap() = None;
+    *RESCAN_FORK_DIR.lock().unwrap() = None;
+    WALRCV_UP.store(false, Relaxed);
+    IN_ARCHIVE_RECOVERY.store(false, Relaxed);
+    STANDBY_MODE.store(false, Relaxed);
+    let target_tli = RECOVERY_TARGET_TLI.swap(1, Relaxed);
+    let msgs: Vec<String> =
+        REPORTS.lock().unwrap().iter().map(|e| e.message().to_string()).collect();
+    drop(reader);
+    if let Some(prev) = prev_cwd {
+        let _ = std::env::set_current_dir(prev);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(read.unwrap(), Some(loc), "the record is read once the segment appears");
+    assert!(
+        msgs.iter().any(|m| m
+            == "new timeline 2 forked off current database system timeline 1 before current recovery point 0/1000028"),
+        "C rejects the fork below the reader position; got {msgs:?}"
+    );
+    assert!(!msgs.iter().any(|m| m == "new target timeline is 2"), "got {msgs:?}");
+    assert_eq!(target_tli, 1, "recovery target timeline must stay 1");
+}
+
+// xlogrecovery.c:823: the no-backup_label "could not find redo location"
+// PANIC formats both LSN low halves with %08X (unlike the backup_label FATAL
+// at :665, which stays %X/%X).
+#[test]
+fn redo_location_panic_pads_lsn_low_halves_like_c() {
+    assert_eq!(lsn_fmt08(0x1_0000_0028), "1/00000028");
+    assert_eq!(lsn_fmt08(0x0_ABCD_1234), "0/ABCD1234");
+    assert_eq!(lsn_fmt(0x1_0000_0028), "1/28");
+}
+
+// xlogrecovery.c:3454-3459: a failed pread on a WAL segment is reported under
+// errcode_for_file_access with %m — the strerror text alone; the pre-fix port
+// printed std::io::Error's Display ("Is a directory (os error 21)").
+#[test]
+fn wal_segment_pread_failure_is_reported_with_strerror_like_c() {
+    let _g = datadir_lock();
+    let dir = boot_fixture("pread_failure");
+    install_startup_process_seams();
+    WALRCV_UP.store(false, Relaxed);
+    STANDBY_MODE.store(false, Relaxed);
+    IN_ARCHIVE_RECOVERY.store(false, Relaxed);
+    RECOVERY_TARGET_TLI.store(1, Relaxed);
+    // A directory where segment 1 belongs: open(O_RDONLY) succeeds, pread
+    // fails with EISDIR.
+    std::fs::create_dir(dir.join("pg_wal").join(transam_xlog::XLogFileName(1, 1, SEG))).unwrap();
+    REPORTS.lock().unwrap().clear();
+    let prev = elog::set_emit_log_hook(Some(capture_report));
+    let mut src = PageSource::new();
+    src.replay_tli = 1;
+    let mut view = ReaderView {
+        segcxt: xlogreader_seams::WALSegmentContext { ws_segsize: SEG },
+        ..Default::default()
+    };
+    let mut page = vec![0u8; XLOG_BLCKSZ];
+    let target = SEG as u64;
+    let r = src.page_read(&mut view, target, XLOG_BLCKSZ as i32, target, &mut page);
+    src.close_read_file();
+    elog::set_emit_log_hook(prev);
+    let reports = REPORTS.lock().unwrap().clone();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(r.unwrap(), XLREAD_FAIL);
+    let expected = format!(
+        "could not read from WAL segment 000000010000000000000001, LSN 0/1000000, offset 0: {}",
+        elog::errno::strerror(libc::EISDIR)
+    );
+    let hit = reports
+        .iter()
+        .find(|e| e.message().starts_with("could not read from WAL segment"))
+        .unwrap_or_else(|| {
+            panic!("no WAL read report; got {:?}", reports.iter().map(|e| e.message()).collect::<Vec<_>>())
+        });
+    assert_eq!(hit.message(), expected);
+    assert_eq!(hit.level, LOG);
+    assert_eq!(hit.sqlstate(), types_error::ERRCODE_WRONG_OBJECT_TYPE);
+}
+
+// assign_recovery_target (xlogrecovery.c:4860) guards before it looks at the
+// value: `-c recovery_target_name=foo -c recovery_target=` is FATAL in the
+// postmaster's config walk, while a backend thread's snapshot replay of the
+// same pair (IsUnderPostmaster) must not fire.
+#[test]
+fn empty_recovery_target_after_a_competing_target_is_fatal_in_the_postmaster() {
+    // REPORTS and the emit hook are process-wide: every expect_fatal caller
+    // serializes on the datadir lock, so this one must too.
+    let _g = datadir_lock();
+    let _serial = HOOK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    install_crate_seams();
+    let hook = guc_tables::hooks::assign_recovery_target.get();
+    let was_under = init_small::globals::IsUnderPostmaster();
+    targets::set_recovery_target(targets::RecoveryTargetType::Name);
+    init_small::globals::SetIsUnderPostmaster(false);
+    let err = expect_fatal(|| {
+        hook(Some(""), None);
+        Ok(())
+    });
+    init_small::globals::SetIsUnderPostmaster(true);
+    hook(Some(""), None);
+    let replayed = targets::recovery_target();
+    init_small::globals::SetIsUnderPostmaster(was_under);
+    targets::set_recovery_target(targets::RecoveryTargetType::Unset);
+    assert_eq!(err.message(), "multiple recovery targets specified");
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_INVALID_PARAMETER_VALUE);
+    assert_eq!(replayed, targets::RecoveryTargetType::Name);
+}
+
+// xlogrecovery.c:3517: the standby's segment-start header check logs
+// XLogReaderValidatePageHeader's own message — for a recycled local segment
+// its "unexpected pageaddr", not a generic "invalid page header".
+#[test]
+fn standby_segment_start_check_logs_the_validator_message() {
+    let _g = datadir_lock();
+    let dir = boot_fixture("recycled_segment_header");
+    install_startup_process_seams();
+    WALRCV_UP.store(false, Relaxed);
+    STANDBY_MODE.store(true, Relaxed);
+    IN_ARCHIVE_RECOVERY.store(false, Relaxed);
+    RECOVERY_TARGET_TLI.store(1, Relaxed);
+    // Segment 1's file still carries its previous life as segment 3.
+    let mut page = vec![0u8; XLOG_BLCKSZ];
+    page[0..2].copy_from_slice(&0xD118u16.to_ne_bytes());
+    page[2..4].copy_from_slice(&XLP_LONG_HEADER.to_ne_bytes());
+    page[4..8].copy_from_slice(&1u32.to_ne_bytes());
+    page[8..16].copy_from_slice(&(3 * SEG as u64).to_ne_bytes());
+    page[24..32].copy_from_slice(&SYS_ID.to_ne_bytes());
+    page[32..36].copy_from_slice(&(SEG as u32).to_ne_bytes());
+    page[36..40].copy_from_slice(&8192u32.to_ne_bytes());
+    std::fs::write(dir.join("pg_wal").join(transam_xlog::XLogFileName(1, 1, SEG)), &page)
+        .unwrap();
+    REPORTS.lock().unwrap().clear();
+    let prev = elog::set_emit_log_hook(Some(capture_report));
+    let mut src = PageSource::new();
+    src.replay_tli = 1;
+    src.system_identifier = SYS_ID;
+    let mut view = ReaderView {
+        segcxt: xlogreader_seams::WALSegmentContext { ws_segsize: SEG },
+        nonblocking: true,
+        ..Default::default()
+    };
+    let mut buf = vec![0u8; XLOG_BLCKSZ];
+    let target = SEG as u64;
+    let r = src.page_read(&mut view, target, XLOG_BLCKSZ as i32, target, &mut buf);
+    src.close_read_file();
+    elog::set_emit_log_hook(prev);
+    STANDBY_MODE.store(false, Relaxed);
+    let reports = REPORTS.lock().unwrap().clone();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(r.unwrap(), XLREAD_WOULDBLOCK);
+    let msgs: Vec<&str> = reports.iter().map(|e| e.message()).collect();
+    assert!(
+        msgs.contains(
+            &"unexpected pageaddr 0/3000000 in WAL segment 000000010000000000000001, LSN 0/1000000, offset 0"
+        ),
+        "got {msgs:?}"
+    );
 }

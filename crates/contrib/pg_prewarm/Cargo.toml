@@ -37,6 +37,7 @@ interrupt = { path = "../../backend/postmaster/interrupt" }
 latch = { path = "../../backend/storage/ipc/latch" }
 procsignal = { path = "../../backend/storage/ipc/procsignal" }
 ipc = { path = "../../backend/storage/ipc/ipc" }
+dsm_registry = { path = "../../backend/storage/ipc/dsm_registry" }
 adt_timestamp = { path = "../../backend/utils/adt/adt_timestamp" }
 fd = { path = "../../backend/storage/file/fd" }
 elog = { path = "../../backend/utils/error/elog" }

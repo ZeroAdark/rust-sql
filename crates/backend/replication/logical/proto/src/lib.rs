@@ -789,6 +789,9 @@ fn logicalrep_write_tuple(
     Ok(())
 }
 
+// memutils.h MaxAllocSize: palloc rejects larger requests.
+const MAX_ALLOC_SIZE: u64 = 0x3fff_ffff;
+
 // logicalrep_read_tuple (proto.c:860).
 fn logicalrep_read_tuple(r: &mut Reader<'_>) -> PgResult<LogicalRepTupleData> {
     let natts = r.get_int16()? as usize;
@@ -805,8 +808,18 @@ fn logicalrep_read_tuple(r: &mut Reader<'_>) -> PgResult<LogicalRepTupleData> {
                 tuple.colvalues.push(None);
             }
             LOGICALREP_COLUMN_TEXT | LOGICALREP_COLUMN_BINARY => {
-                let len = r.get_int32()? as usize;
-                tuple.colvalues.push(Some(r.get_bytes(len)?));
+                // proto.c:898 palloc(len + 1) runs before pq_copymsgbytes, so
+                // an oversized length fails the allocation check first.
+                let len = r.get_int32()? as i32;
+                let alloc = i64::from(len.wrapping_add(1)) as u64;
+                if alloc > MAX_ALLOC_SIZE {
+                    elog(ERROR, format!("invalid memory alloc request size {alloc}"))?;
+                    unreachable!();
+                }
+                if len < 0 {
+                    return Err(protocol_violation("insufficient data left in message"));
+                }
+                tuple.colvalues.push(Some(r.get_bytes(len as usize)?));
             }
             other => {
                 elog(

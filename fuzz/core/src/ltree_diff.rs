@@ -27,7 +27,7 @@
 //!   7      crc — ltree_crc32_sz over the raw payload bytes (LOWER_NODE
 //!          fold), value plane u32. The cfg(test) sweep below closes the
 //!          full 1-byte and 2-byte domains exhaustively (a0 candidate from
-//!          the lane FLEET-QUEUE).
+//!          the lane CI-QUEUE).
 //!
 //! Comparison planes: value bytes (type images, out cstrings, send wire,
 //! text payloads) + error verdict + EXACT sqlstate (both sides carry the
@@ -182,7 +182,7 @@ fn init_env() {
         let _ = std::panic::catch_unwind(adt_formatting::init_seams);
         stack_depth_core::assign_max_stack_depth(2048);
     });
-    // FLEET-QUEUE mandate: arm the Rust-side stack guard per worker thread —
+    // CI-QUEUE mandate: arm the Rust-side stack guard per worker thread —
     // stack_is_too_deep() short-circuits on base==0 and the guard is INERT
     // without this (a campaign without it is INCOMPLETE).
     thread_local! {
@@ -1378,7 +1378,7 @@ mod tests {
         exec(b"\x07AbCdEf_123-xyz");
     }
 
-    /// a0 EXHAUSTIVE-DIFF (FLEET-QUEUE item 4): ltree_crc32_sz over the FULL
+    /// a0 EXHAUSTIVE-DIFF (CI-QUEUE item 4): ltree_crc32_sz over the FULL
     /// 1-byte domain (256) and FULL 2-byte domain (65536) — total closure of
     /// the fold+CRC kernel at these lengths, both sides executed per case.
     #[test]

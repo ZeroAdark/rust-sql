@@ -507,6 +507,15 @@ pub fn exec_init_parallel_plan<'mcx>(
 
     let mut subtree_ids = Vec::new();
     collect_plan_node_ids(Some(child_plan), &mut subtree_ids);
+    // planstate_tree_walker also visits initPlan/subPlan states (nodeFuncs.c:
+    // 4793): a SubPlan run below the Gather carries per-worker instrumentation.
+    if let Some(leader) = estate.es_plannedstmt {
+        for sp in leader.subplans.iter().flatten() {
+            if sp.as_plan().expect("subplans cell is a plan tree").parallel_safe {
+                collect_plan_node_ids(Some(sp), &mut subtree_ids);
+            }
+        }
+    }
 
     let instrumented = estate.es_instrument != 0;
     let shared = Arc::new(ParallelExecShared {
@@ -603,10 +612,10 @@ pub fn exec_parallel_reinitialize<'mcx>(
         // ExecHashJoinReInitializeDSM: detach, clear shared files, reset the
         // build barrier for the next scan.
         ParallelScanMut::HashJoin(hj) => {
-            if let Some(t) = hj.hash.state.ptable.as_mut() {
-                ::nodehash::parallel::exec_hash_table_detach_batch(t)?;
-                ::nodehash::parallel::exec_hash_table_detach(t)?;
-            }
+            // The leader's table stats are accumulated before the table goes
+            // (ExecReScanHashJoin, nodeHashjoin.c:1543-1548); C keeps
+            // hj_HashTable across ReInitializeDSM for exactly that read.
+            ::nodehashjoin::exec_shutdown_hash_join(&hj.state, &mut hj.hash.state, estate)?;
             hj.hash.state.ptable = None;
             hj.hash
                 .state
@@ -671,7 +680,25 @@ fn retrieve_instrumentation(
     let mcx = estate.es_query_cxt;
     let mut workers = si.workers.lock().unwrap_or_else(|e| e.into_inner());
     for slot in workers.iter_mut() {
-        let Some(w) = slot.take() else { continue };
+        let mut node_ids = PgVec::new_in(mcx);
+        node_ids
+            .try_reserve_exact(pei.subtree_ids.len())
+            .map_err(|_| mcx.oom(1))?;
+        node_ids.extend(pei.subtree_ids.iter().copied());
+        let Some(w) = slot.take() else {
+            estate.es_worker_instrument.push(WorkerInstr {
+                node_ids,
+                instrument: PgVec::new_in(mcx),
+                sort: PgVec::new_in(mcx),
+                incsort: PgVec::new_in(mcx),
+                agg: PgVec::new_in(mcx),
+                hash: PgVec::new_in(mcx),
+                index: PgVec::new_in(mcx),
+                bitmap: PgVec::new_in(mcx),
+                memoize: PgVec::new_in(mcx),
+            });
+            continue;
+        };
         if estate.es_instrumentation.len() < w.instrument.len() {
             let grow = w.instrument.len() - estate.es_instrumentation.len();
             estate
@@ -690,11 +717,6 @@ fn retrieve_instrumentation(
             .try_reserve_exact(w.instrument.len())
             .map_err(|_| mcx.oom(1))?;
         instrument.extend(w.instrument.iter().copied());
-        let mut node_ids = PgVec::new_in(mcx);
-        node_ids
-            .try_reserve_exact(pei.subtree_ids.len())
-            .map_err(|_| mcx.oom(1))?;
-        node_ids.extend(pei.subtree_ids.iter().copied());
         let mut wi = WorkerInstr {
             node_ids,
             instrument,
@@ -954,13 +976,33 @@ pub fn parallel_query_main(shared: &parallel::ParallelShared) -> PgResult<()> {
                     // the same walk EXPLAIN uses); one entry per
                     // instrumented Memoize node under the Gather.
                     let mut memoize = Vec::new();
-                    if let Some(ps) = planstate.as_mut() {
-                        for id in 0..es.es_instrumentation.len() {
-                            if let Some(crate::procnode::InstrExtra::Memoize(m)) =
-                                crate::procnode::planstate_instr_extra(ps, es, id as u32)
-                            {
-                                memoize.push((id as i32, m));
+                    for id in 0..es.es_instrumentation.len() {
+                        let found = match planstate.as_mut() {
+                            Some(ps) => crate::procnode::planstate_instr_extra(ps, es, id as u32),
+                            None => None,
+                        };
+                        let found = found.or_else(|| {
+                            for i in 0..es.es_subplanstates.len() {
+                                let cell = es.es_subplanstates[i];
+                                // SAFETY: cells are arena-live *mut
+                                // Option<PlanStateNode> installed by
+                                // InitPlan; disjoint from everything the
+                                // walk reaches through estate.
+                                let sub = unsafe {
+                                    &mut *cell.0.cast::<Option<crate::PlanStateNode>>().as_ptr()
+                                };
+                                if let Some(ps) = sub.as_mut() {
+                                    if let Some(x) =
+                                        crate::procnode::planstate_instr_extra(ps, es, id as u32)
+                                    {
+                                        return Some(x);
+                                    }
+                                }
                             }
+                            None
+                        });
+                        if let Some(crate::procnode::InstrExtra::Memoize(m)) = found {
+                            memoize.push((id as i32, m));
                         }
                     }
                     WorkerInstrReport {
@@ -998,10 +1040,28 @@ pub fn parallel_query_main(shared: &parallel::ParallelShared) -> PgResult<()> {
                     for (id, wi) in report.instrument.iter().enumerate() {
                         ::instrument::instr_agg_node(&mut prev.instrument[id], wi);
                     }
-                    prev.sort = report.sort;
+                    for (id, si) in report.sort {
+                        match prev.sort.iter_mut().find(|(pid, _)| *pid == id) {
+                            Some((_, slot)) => *slot = si,
+                            None => prev.sort.push((id, si)),
+                        }
+                    }
                     prev.incsort = report.incsort;
-                    prev.agg = report.agg;
-                    prev.hash = report.hash;
+                    for (id, ai) in report.agg {
+                        match prev.agg.iter_mut().find(|(pid, _)| *pid == id) {
+                            Some((_, slot)) => *slot = ai,
+                            None => prev.agg.push((id, ai)),
+                        }
+                    }
+                    // ExecHashInitializeWorker reconnects a relaunched worker to
+                    // its persistent slot and ExecHashAccumInstrumentation keeps
+                    // per-field maxima (nodeHash.c:2820, 2888).
+                    for (id, hi) in report.hash {
+                        match prev.hash.iter_mut().find(|(pid, _)| *pid == id) {
+                            Some((_, acc)) => acc.accum(&hi),
+                            None => prev.hash.push((id, hi)),
+                        }
+                    }
                     // ExecEndMemoize memcpy's the whole slot: latest run wins.
                     prev.memoize = report.memoize;
                     for (id, n) in report.index {

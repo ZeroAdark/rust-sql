@@ -257,6 +257,7 @@ pub(crate) fn fc_g_intbig_picksplit(
     let mut datum_r = SignKey::from_image(key(seed_2), siglen);
 
     let maxoff = (entryvec.n - 1) as usize;
+    #[derive(Clone, Copy)]
     struct SplitCost {
         pos: usize,
         cost: i32,
@@ -267,7 +268,9 @@ pub(crate) fn fc_g_intbig_picksplit(
         let size_beta = datum_r.hemdist_img(key(j), siglen);
         costvector.push(SplitCost { pos: j, cost: (size_alpha - size_beta).abs() });
     }
-    costvector.sort_by_key(|c| c.cost);
+    // qsort(costvector, maxoff, sizeof(SPLITCOST), comparecost): the
+    // equal-cost order pg_qsort produces decides page membership.
+    ::pg_qsort::pg_qsort(&mut costvector, |a, b| a.cost.cmp(&b.cost) as i32);
 
     let mut spl_left: Vec<u16> = Vec::with_capacity(maxoff + 1);
     let mut spl_right: Vec<u16> = Vec::with_capacity(maxoff + 1);

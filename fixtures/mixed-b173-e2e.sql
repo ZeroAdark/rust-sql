@@ -1,5 +1,5 @@
 -- bugs/batch-173-mixed-xhigh: SQL-reachable legs, expected captured from C 18.6.
--- fp-commands-schemacmds#1: CREATE SCHEMA restores the effective user
+-- regression: CREATE SCHEMA restores the effective user
 -- unconditionally (schemacmds.c:239), even when an element changed it.
 CREATE ROLE b173_u2;
 CREATE SCHEMA b173_sx CREATE TABLE p(x text) PARTITION BY LIST (x) CREATE TABLE p1 PARTITION OF p FOR VALUES IN (set_config('role','b173_u2',false));
@@ -7,7 +7,7 @@ SELECT current_user, session_user;
 RESET ROLE;
 DROP SCHEMA b173_sx CASCADE;
 DROP ROLE b173_u2;
--- fp-commands-trigger-p2#1: WHEN predicates go through expression_planner
+-- regression: WHEN predicates go through expression_planner
 -- (named-argument calls are reordered there).
 CREATE FUNCTION b173_gt(a int, b int) RETURNS bool LANGUAGE sql AS 'select $1 > $2';
 CREATE TABLE b173_t(x int);
@@ -17,7 +17,7 @@ INSERT INTO b173_t VALUES (1), (-1);
 SELECT * FROM b173_t ORDER BY 1;
 DROP TABLE b173_t;
 DROP FUNCTION b173_gt, b173_tf;
--- fp-commands-trigger-p2#2: a deferred trigger dropping itself still fires
+-- regression: a deferred trigger dropping itself still fires
 -- for the cycle's remaining events (the estate's trigger descriptor copy).
 CREATE TABLE b173_td(x int);
 CREATE FUNCTION b173_tfd() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'fired %', NEW.x; EXECUTE 'DROP TRIGGER b173_trd ON b173_td'; RETURN NULL; END $$;
@@ -28,7 +28,7 @@ COMMIT;
 SELECT tgname FROM pg_trigger WHERE tgrelid = 'b173_td'::regclass;
 DROP TABLE b173_td;
 DROP FUNCTION b173_tfd;
--- fp-contrib-bloom-blutils#1: hashing a compressed text datum at index build.
+-- regression: hashing a compressed text datum at index build.
 CREATE EXTENSION IF NOT EXISTS bloom;
 CREATE TABLE b173_tb(s text);
 INSERT INTO b173_tb SELECT repeat('x', 5000) || i FROM generate_series(1,3) i;
@@ -39,11 +39,11 @@ SET enable_seqscan = off;
 SELECT length(s) FROM b173_tb WHERE s = repeat('y', 6000);
 RESET enable_seqscan;
 DROP TABLE b173_tb;
--- fp-executor-b2#1: a correlated inner CteScan rescans by rewinding once
+-- regression: a correlated inner CteScan rescans by rewinding once
 -- another reader has consumed the producer (nodeCtescan.c:324).
 SELECT (WITH c AS MATERIALIZED (SELECT t.x AS v) SELECT (SELECT v FROM c WHERE v = t.x) FROM c c2) AS r FROM (VALUES (1),(2),(3)) t(x);
 SELECT (WITH c AS MATERIALIZED (SELECT t.x AS v) SELECT max((SELECT v FROM c WHERE v = c2.v)) FROM c c2) AS r FROM (VALUES (1),(2),(3)) t(x);
--- fp-executor-b5#1: every VALUES column is initialized (permission-checked)
+-- regression: every VALUES column is initialized (permission-checked)
 -- before any is evaluated, so the nextval never runs.
 CREATE SEQUENCE b173_s;
 CREATE FUNCTION b173_priv() RETURNS int LANGUAGE sql AS 'select 1';
@@ -58,7 +58,7 @@ SELECT last_value, is_called FROM b173_s;
 DROP SEQUENCE b173_s;
 DROP FUNCTION b173_priv;
 DROP ROLE b173_u;
--- fp-executor-nodeMemoize#1: a cache key carrying a pending initplan Param.
+-- regression: a cache key carrying a pending initplan Param.
 CREATE TABLE b173_ma(x int);
 CREATE TABLE b173_mb(y int);
 INSERT INTO b173_ma SELECT i % 10 FROM generate_series(1,1000) i;
@@ -72,13 +72,13 @@ SELECT count(*) FROM b173_ma JOIN b173_mb ON b173_mb.y = b173_ma.x + (SELECT 1);
 RESET enable_hashjoin;
 RESET enable_mergejoin;
 DROP TABLE b173_ma, b173_mb;
--- fp-mb-mbutils#1: pg_convert returns the detoasted input when no
+-- regression: pg_convert returns the detoasted input when no
 -- conversion happens (mbutils.c:599).
 CREATE TABLE b173_tc(s text, b bytea);
 INSERT INTO b173_tc VALUES (repeat('a',5000), convert_to(repeat('a',5000),'UTF8'));
 SELECT pg_column_compression(s), pg_column_compression(convert_to(s,'UTF8')), pg_column_size(convert_to(s,'UTF8')), pg_column_compression(convert_from(b,'UTF8')), pg_column_compression(convert(b,'UTF8','UTF8')) FROM b173_tc;
 DROP TABLE b173_tc;
--- fp-mmgr-portalmem#1: PreCommit_Portals holds WITH HOLD cursors in the
+-- regression: PreCommit_Portals holds WITH HOLD cursors in the
 -- portal hash table's dynahash order (string_hash buckets, chains in
 -- insertion order, splits past 16 entries), visible through nextval.
 CREATE SEQUENCE b173_sp;

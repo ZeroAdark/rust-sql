@@ -228,7 +228,7 @@ fn define_query_stores_and_shares_handles() {
     {
         let p = portal.borrow();
         assert_eq!(p.status, PORTAL_DEFINED);
-        assert_eq!(p.sourceText.as_ref().unwrap().as_str(), "select 1");
+        assert_eq!(p.sourceText.unwrap(), "select 1");
         assert_eq!(p.prepStmtName.as_ref().unwrap().as_str(), "ps1");
         assert_eq!(p.stmts, StmtListHandle(5));
         assert_eq!(p.cplan, CachedPlanHandle(11));
@@ -753,4 +753,26 @@ fn dynahash_scan_order_is_bucket_then_chain() {
             assert_eq!(o.bucket(DynaOrder::hash(n)), b);
         }
     }
+}
+
+// portalmem.c:225 holds for a reused unnamed portal too: the context
+// TakeParkedPortal attaches to a parked shell is identified "<unnamed>"
+// (pre-fix pg_backend_memory_contexts.ident was NULL for it).
+#[test]
+fn taken_parked_portal_context_is_identified_unnamed() {
+    setup();
+    let psrc = PlanSourceHandle(181);
+    let shell = CreatePortal("", false, false).unwrap();
+    assert!(remove_from_table(&shell).is_some());
+    {
+        let mut p = shell.borrow_mut();
+        p.portalContext = None;
+        p.plansource = psrc;
+    }
+    with_mgr(|m| m.parked.push((psrc, shell.clone()))).unwrap();
+    let taken = TakeParkedPortal(psrc).unwrap().expect("parked shell");
+    assert!(taken.ptr_eq(&shell));
+    let ident = taken.borrow().portalContext.as_ref().expect("portalContext").ident();
+    assert_eq!(ident.as_deref(), Some("<unnamed>"));
+    PortalDrop(&taken, false).unwrap();
 }

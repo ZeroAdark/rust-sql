@@ -66,6 +66,27 @@ fc_trim2! {
     fc_btrim: btrim;
     fc_ltrim: ltrim;
     fc_rtrim: rtrim;
+}
+
+// dobyteatrim (oracle_compat.c:570) hands back the input datum itself, packed
+// header and all, when either side is empty.
+macro_rules! fc_byteatrim2 {
+    ($($fname:ident: $core:ident;)*) => {$(
+        pub fn $fname(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+            // SAFETY: catalog args are non-null bytea varlenas (strict fn).
+            let (s, set) = unsafe {
+                (fcinfo.arg_varlena_packed(0)?, fcinfo.arg_varlena_packed(1)?)
+            };
+            if s.data().is_empty() || set.data().is_empty() {
+                return Ok(fcinfo.arg(0));
+            }
+            let mcx = fcinfo.result_mcx();
+            Ok(varlena_result(crate::$core(mcx, s.data(), set.data())?))
+        }
+    )*};
+}
+
+fc_byteatrim2! {
     fc_byteatrim: byteatrim;
     fc_bytealtrim: bytealtrim;
     fc_byteartrim: byteartrim;
@@ -99,6 +120,10 @@ pub fn fc_translate(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
             fcinfo.arg_varlena_packed(2)?,
         )
     };
+    // oracle_compat.c:841: an empty string is returned as the input datum.
+    if s.data().is_empty() {
+        return Ok(fcinfo.arg(0));
+    }
     let mcx = fcinfo.result_mcx();
     Ok(varlena_result(crate::translate(
         mcx,

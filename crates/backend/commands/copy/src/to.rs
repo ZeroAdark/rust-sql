@@ -38,8 +38,9 @@ use crate::{
     force_flags, CopyFormatOptions, CopyGetAttnums, ProcessCopyOptions, RELKIND_RELATION,
 };
 
-// C buffers per-row fwrite in libc's FILE; here fe_msgbuf retains rows until
-// this watermark, so the write cadence (not per-row syscalls) matches C.
+// C buffers per-row fwrite in libc's FILE; the File destination mirrors that
+// in file_buf, while Program/Stdout retain rows in fe_msgbuf until this
+// watermark, so the write cadence (not per-row syscalls) matches C.
 const FILE_FLUSH_THRESHOLD: usize = 65536;
 
 // Final mode of a COPY TO server file. C's BeginCopyTo opens under a temporary
@@ -443,6 +444,22 @@ pub fn DoCopyTo<'mcx>(
     cstate: &mut CopyToState<'mcx, '_>,
     rel: Option<&Relation<'mcx>>,
 ) -> PgResult<u64> {
+    let r = do_copy_to(mcx, cstate, rel);
+    if r.is_err() {
+        // C's error path: AtEOXact_Files fcloses copy_file, which flushes the
+        // stdio buffer (rows before the error land; a failure there is silent).
+        if let CopyDest::File { fd, .. } = cstate.dest {
+            let _ = stdio_final_flush(cstate, fd);
+        }
+    }
+    r
+}
+
+fn do_copy_to<'mcx>(
+    mcx: Mcx<'mcx>,
+    cstate: &mut CopyToState<'mcx, '_>,
+    rel: Option<&Relation<'mcx>>,
+) -> PgResult<u64> {
     let query_tupdesc = cstate.tupdesc.clone();
     let tup_desc: &TupleDescData<'_> = match rel {
         Some(rel) => &rel.rd_att,
@@ -701,12 +718,13 @@ fn CopyOneRowTo<'mcx>(
         let s = unsafe { CStr::from_ptr(out.as_usize() as *const core::ffi::c_char) }.to_bytes();
         // C compares against null_print before conversion (copyto.c:1311).
         let matches_null = opts.csv_mode && s == opts.null_print.as_bytes();
+        // Outer binding: rmcx is an AllocSet, so a dropped PgVec is freed.
+        let converted;
         let s: &[u8] = if *need_transcoding {
             match mbutils::pg_server_to_any(rmcx, s, *file_encoding)? {
-                Some(converted) => {
-                    let (ptr, len) = (converted.as_ptr(), converted.len());
-                    // SAFETY: converted lives in rmcx until the next row reset.
-                    unsafe { core::slice::from_raw_parts(ptr, len) }
+                Some(c) => {
+                    converted = c;
+                    &converted
                 }
                 None => s,
             }
@@ -832,9 +850,7 @@ fn send_end_of_row(cstate: &mut CopyToState<'_, '_>) -> PgResult<()> {
     match cstate.dest {
         CopyDest::File { .. } => {
             account_fe_msgbuf(cstate);
-            if cstate.fe_msgbuf.len() >= FILE_FLUSH_THRESHOLD {
-                flush_to_file(cstate)?;
-            }
+            flush_to_file(cstate)?;
         }
         CopyDest::Program { .. } => {
             account_fe_msgbuf(cstate);
@@ -866,16 +882,21 @@ fn stdio_bufsize(st_blksize: usize) -> usize {
 // stdio fwrite over `file_buf`: the row is appended, and every time the
 // buffer fills to `file_bufsize` that chunk goes to the fd (__sfvwrite
 // flushes on a full buffer). Returns the write error, if any.
-fn stdio_buffered_write(cstate: &mut CopyToState<'_, '_>, fd: i32, bytes: &[u8]) -> std::io::Result<()> {
-    cstate.file_buf.extend_from_slice(bytes);
-    while cstate.file_buf.len() >= cstate.file_bufsize {
-        let chunk = cstate.file_bufsize;
+fn stdio_buffered_write(
+    file_buf: &mut Vec<u8>,
+    bufsize: usize,
+    fd: i32,
+    bytes: &[u8],
+) -> std::io::Result<()> {
+    file_buf.extend_from_slice(bytes);
+    while file_buf.len() >= bufsize {
+        let chunk = bufsize;
         let r = fd::with_allocated_stdio(fd, |f| {
             use std::io::Write;
-            f.write_all(&cstate.file_buf[..chunk])
+            f.write_all(&file_buf[..chunk])
         });
         match r {
-            Some(Ok(())) => cstate.file_buf.drain(..chunk),
+            Some(Ok(())) => file_buf.drain(..chunk),
             Some(Err(e)) => return Err(e),
             None => panic!("COPY TO: AllocateFile index {fd} vanished"),
         };
@@ -906,8 +927,8 @@ fn flush_to_file(cstate: &mut CopyToState<'_, '_>) -> PgResult<()> {
     if cstate.fe_msgbuf.is_empty() {
         return Ok(());
     }
-    let bytes = cstate.fe_msgbuf.as_bytes().to_vec();
-    if let Err(e) = stdio_buffered_write(cstate, fd, &bytes) {
+    let CopyToState { file_buf, file_bufsize, fe_msgbuf, .. } = &mut *cstate;
+    if let Err(e) = stdio_buffered_write(file_buf, *file_bufsize, fd, fe_msgbuf.as_bytes()) {
         ereport(ERROR)
             .with_saved_errno(e.raw_os_error().unwrap_or(0))
             .errcode_for_file_access()

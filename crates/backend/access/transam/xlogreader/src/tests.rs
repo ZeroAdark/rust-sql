@@ -861,3 +861,19 @@ fn released_records_free_their_block_metadata() {
     }
     assert!(max_pool <= 3, "blocks_pool grew to {max_pool}");
 }
+
+#[test]
+fn restore_block_image_seam_rejects_block_ids_above_max_as_invalid() {
+    // xlogreader.c:2026 compares the uint8 block id against the int
+    // max_block_id (audit regression): ids with the high bit
+    // set are "invalid block", never an index past the 33-entry array.
+    let mut v = ReaderView::default();
+    v.record = Some(ViewRecord { max_block_id: 0, ..Default::default() });
+    for block_id in [1u8, 33, 127, 128, 200, 255] {
+        let out = restore_block_image_seam(&v, block_id, 0).unwrap();
+        assert_eq!(
+            out.unwrap_err(),
+            format!("could not restore image at 0/0 with invalid block {block_id} specified")
+        );
+    }
+}

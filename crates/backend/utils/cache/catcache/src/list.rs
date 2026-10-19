@@ -185,7 +185,7 @@ pub(crate) fn adopt_members(
         let mut byref_len = 0usize;
         for i in 0..nkeys as usize {
             if matches!(kinds[i], CCFastKind::Name | CCFastKind::Text | CCFastKind::OidVector) {
-                byref_len += keys[i].bytes().len();
+                byref_len += crate::stored_key_bytes(kinds[i], &keys[i]).len();
             }
         }
         let buf = payload_alloc(mcx, byref_len)?;
@@ -195,7 +195,7 @@ pub(crate) fn adopt_members(
             cl_keys[i] = match kinds[i] {
                 CCFastKind::Char | CCFastKind::Int2 | CCFastKind::Int4 => keys[i].word(),
                 _ => {
-                    let b = keys[i].bytes();
+                    let b = crate::stored_key_bytes(kinds[i], &keys[i]);
                     // SAFETY: `buf` was sized as the sum of the payloads.
                     unsafe {
                         core::ptr::copy_nonoverlapping(b.as_ptr(), buf.as_ptr().add(off), b.len());

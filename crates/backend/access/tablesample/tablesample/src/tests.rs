@@ -160,6 +160,7 @@ fn bernoulli_next_sample_block_panics() {
 /// unknown-symbol elog, and no-prosrc elog — all four arms executable.
 #[test]
 fn tsm_get_carve_witness() {
+    syscache_seams::lookup_pg_proc_probin::set(|_mcx, _funcid| Ok(None));
     syscache_seams::lookup_pg_proc_prosrc::set(|mcx, funcid| {
         Ok(match funcid {
             111 => Some(mcx::PgString::from_str_in("tsm_system_rows_handler", mcx)?),
@@ -268,4 +269,13 @@ fn sample_scan_get_sample_size_carve_witness() {
     )
     .unwrap();
     Tsm::SystemTime.sample_scan_get_sample_size(m, &f8null, 64, 1000.0, 4.0).unwrap();
+}
+
+/// GetTsmRoutine calls whatever pg_proc row the query names through fmgr,
+/// so a LANGUAGE internal alias of a builtin handler resolves.
+#[test]
+fn builtin_handler_symbols_resolve() {
+    assert_eq!(Tsm::from_symbol(b"tsm_system_handler"), Some(Tsm::System));
+    assert_eq!(Tsm::from_symbol(b"tsm_bernoulli_handler"), Some(Tsm::Bernoulli));
+    assert_eq!(Tsm::from_symbol(b"tsm_nonesuch_handler"), None);
 }

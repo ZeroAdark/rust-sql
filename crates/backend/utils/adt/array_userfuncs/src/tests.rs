@@ -712,7 +712,7 @@ fn combine_outside_an_aggregate_is_a_clean_error() {
     assert_eq!(err.sqlstate(), ::types_error::ERRCODE_INTERNAL_ERROR);
 }
 
-// audit-18.6 fp-adt-array_userfuncs#1: array_userfuncs.c:1984 sorts slices
+// audit-18.6 regression: array_userfuncs.c:1984 sorts slices
 // through a slice iterator, so a 2 x 33554432 array reserves two workspace
 // entries, not 67108864 x 16 bytes (which mcx rejects against MaxAllocSize).
 #[test]

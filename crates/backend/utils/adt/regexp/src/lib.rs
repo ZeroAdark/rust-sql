@@ -175,10 +175,14 @@ pub fn RE_compile_and_execute(
 ) -> PgResult<bool> {
     if pmatch.len() < 2 {
         cflags |= REG_NOSUB;
+    }
+    if pmatch.len() < 2 && regex_core::regex_compile::check_cflags(cflags).is_ok() {
         regex_core::regex_locale::pg_set_regex_collation(mcx, collation)?;
         // regex_engine dispatch: boolean matches (~, ~*, regexp_like) on
         // RE2-compatible patterns skip the wchar conversion entirely.
         if let Some(re) = regexp_alt::dispatch(pattern, cflags, dat)? {
+            // regexp.c:332: RE_execute's (dat_len + 1) * sizeof(pg_wchar) palloc.
+            ::mcx::check_alloc_size((dat.len() + 1) * core::mem::size_of::<PgWChar>())?;
             return Ok(re.is_match(dat, 0));
         }
     }
@@ -267,11 +271,17 @@ pub fn parse_re_flags(opts: Option<&[u8]>) -> PgResult<PgReFlags> {
 fn invalid_re_option(opt: &[u8]) -> PgError {
     let mblen =
         (mbutils::pg_mblen_range(opt).unwrap_or(opt.len() as i32) as usize).min(opt.len());
-    PgError::error(format!(
-        "invalid regular expression option: \"{}\"",
-        String::from_utf8_lossy(&opt[..mblen])
-    ))
-    .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE)
+    // regexp.c:445 "%.*s": the option's bytes verbatim (SQL_ASCII high bytes).
+    let err = match core::str::from_utf8(&opt[..mblen]) {
+        Ok(s) => PgError::error(format!("invalid regular expression option: \"{s}\"")),
+        Err(_) => {
+            let mut msg = b"invalid regular expression option: \"".to_vec();
+            msg.extend_from_slice(&opt[..mblen]);
+            msg.push(b'"');
+            PgError::error_raw_message(msg)
+        }
+    };
+    err.with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE)
 }
 
 #[cold]
@@ -306,6 +316,7 @@ pub fn textregexsubstr<'mcx>(
     if let Some(re) = regexp_alt::dispatch(p, REG_ADVANCED, s)?
         .filter(|re| re.capture_safe() || re.ngroups() == 0)
     {
+        ::mcx::check_alloc_size((s.len() + 1) * core::mem::size_of::<PgWChar>())?;
         let mut groups = [(-1i64, -1i64); 2];
         let want = if re.ngroups() > 0 { 2 } else { 1 };
         if !re.exec(s, 0, &mut groups[..want]) {
@@ -475,6 +486,7 @@ pub fn similar_escape_internal<'mcx>(
 
     // C: palloc(VARHDRSZ + 23 + 3 * plen); every write stays within this
     // reservation.
+    ::mcx::check_alloc_size(4 + 23 + 3 * plen)?;
     let mut r: PgVec<'mcx, u8> = vec_with_capacity_in(mcx, 23 + 3 * plen)?;
 
     vec_append_bytes(&mut r, b"^(?:")?;

@@ -258,16 +258,17 @@ pub fn fc_tsquery_rewrite_query(
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
     let query = arg_tsquery(fcinfo, 0)?;
-    // SAFETY: strict fn: arg 1 is a non-null live text varlena.
-    let sql_v = unsafe { fcinfo.arg_varlena_packed(1) }?;
-    let sql = core::str::from_utf8(sql_v.data())
-        .map_err(|_| Box::new(PgError::error("invalid UTF-8 in ts_rewrite query text")))?;
     // SAFETY: the armed result mcx outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
 
     if query.size() == 0 {
         return Ok(image_result(copy_image(mcx, query)?));
     }
+
+    // SAFETY: strict fn: arg 1 is a non-null live text varlena.
+    let sql_v = unsafe { fcinfo.arg_varlena_packed(1) }?;
+    let sql = core::str::from_utf8(sql_v.data())
+        .map_err(|_| Box::new(PgError::error("invalid UTF-8 in ts_rewrite query text")))?;
 
     let mut tree = Some(prepared_tree(mcx, query)?);
 

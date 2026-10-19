@@ -66,15 +66,9 @@ pub fn fc_pg_get_aios(
         let mut values = [Datum::null(); PG_GET_AIOS_COLS];
         let mut nulls = [false; PG_GET_AIOS_COLS];
 
-        // Owner pid, read after the copy like C (a process that exited would
-        // have waited for the IO first, which the generation check catches).
-        let owner_pid = lmgr_proc::GetPGProcByNumber(ioh.owner_procno)
-            .pid
-            .load(std::sync::atomic::Ordering::Relaxed);
-
         // column: owning pid
-        if owner_pid != 0 {
-            values[0] = Datum::from_i32(owner_pid);
+        if ioh.owner_pid != 0 {
+            values[0] = Datum::from_i32(ioh.owner_pid);
         } else {
             nulls[0] = true;
         }

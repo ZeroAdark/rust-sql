@@ -146,6 +146,29 @@ fn paths_set_and_replace() {
     assert_eq!(globals::DatabasePath(), Some("base/5"));
 }
 
+// A child backend adopts the postmaster's DataDir bytes (globals.c:71 DataDir
+// is inherited by fork) instead of leaking a fresh copy per connection.
+#[test]
+fn inherit_data_dir_adopts_the_parents_allocation() {
+    globals::SetDataDir("/tmp/pgdata-parent");
+    let parent = globals::DataDir().unwrap();
+    globals::SetDataDir("/tmp/other");
+    globals::InheritDataDir(parent);
+    assert!(std::ptr::eq(globals::DataDir().unwrap(), parent));
+    assert_eq!(globals::DataDir(), Some("/tmp/pgdata-parent"));
+}
+
+#[test]
+fn database_path_clear_releases_the_allocation() {
+    globals::SetDatabasePath("base/16384");
+    assert_eq!(globals::TakeDatabasePath().as_deref(), Some("base/16384"));
+    assert_eq!(globals::DatabasePath(), None);
+    assert_eq!(globals::TakeDatabasePath(), None);
+    globals::SetDatabasePath("pg_tblspc/16385/PG_18_202506031/16384");
+    globals::ClearDatabasePath();
+    assert_eq!(globals::DatabasePath(), None);
+}
+
 #[test]
 fn interrupt_helpers() {
     assert!(globals::InterruptsCanBeProcessed());
@@ -344,4 +367,17 @@ mod wretain_state {
         wretain::clear_identity();
         assert!(!wretain::caches_tainted());
     }
+}
+
+// data_directory_mode is PGC_INTERNAL: checkDataDir owns the global
+// (miscinit.c:428) and GUC initialization publishing the 0700 boot value
+// through the slot must not clobber a group-access (0750) cluster's mode.
+#[test]
+fn guc_slot_never_overwrites_data_directory_mode() {
+    setup();
+    globals::set_data_directory_mode(0o750);
+    guc_tables::vars::data_directory_mode.write(0o700);
+    assert_eq!(guc_tables::vars::data_directory_mode.read(), 0o750);
+    assert_eq!(globals::data_directory_mode(), 0o750);
+    globals::set_data_directory_mode(PG_DIR_MODE_OWNER);
 }

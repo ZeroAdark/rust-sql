@@ -1044,6 +1044,7 @@ pub fn textToQualifiedNameList<'mcx>(
     mcx: Mcx<'mcx>,
     rawname: &[u8],
 ) -> PgResult<Vec<PgVec<'mcx, u8>>> {
+    let rawname = cstring_prefix(rawname);
     match split_identifier_bytes(mcx, rawname, b'.', mbutils::GetDatabaseEncoding())? {
         Some(names) if !names.is_empty() => Ok(names),
         _ => Err(invalid_name_syntax()),
@@ -1064,10 +1065,17 @@ pub fn split_identifier_string_bytes(
 // C never validates the encoding, so a SQL_ASCII text carrying non-UTF-8
 // bytes splits like any other).
 pub fn text_to_qualified_name_list_bytes(mcx: Mcx<'_>, rawname: &[u8]) -> PgResult<Vec<Vec<u8>>> {
+    let rawname = cstring_prefix(rawname);
     match split_identifier_string_bytes(mcx, rawname, b'.', mbutils::GetDatabaseEncoding())? {
         Some(names) if !names.is_empty() => Ok(names),
         _ => Err(invalid_name_syntax()),
     }
+}
+
+// text_to_cstring hands C a NUL-terminated buffer: SplitIdentifierString
+// never sees bytes past the first NUL (varlena.c:3626).
+fn cstring_prefix(b: &[u8]) -> &[u8] {
+    &b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())]
 }
 
 fn invalid_name_syntax() -> Box<PgError> {

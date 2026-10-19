@@ -27,17 +27,14 @@ fn amcheck_index_mainfork_expected(rel: &Relation<'_>) -> PgResult<bool> {
     Ok(false)
 }
 
-fn am_name(am_id: Oid) -> String {
-    syscache_seams::pg_am_amname::call(am_id)
-        .ok()
-        .flatten()
-        .unwrap_or_default()
+fn am_name(am_id: Oid) -> PgResult<String> {
+    Ok(syscache_seams::pg_am_amname::call(am_id)?.unwrap_or_default())
 }
 
 pub(crate) fn index_checkable(rel: &Relation<'_>, am_id: Oid) -> PgResult<bool> {
     if rel.rd_rel.relkind != RELKIND_INDEX || rel.rd_rel.relam != am_id {
-        let want = am_name(am_id);
-        let have = am_name(rel.rd_rel.relam);
+        let want = am_name(am_id)?;
+        let have = am_name(rel.rd_rel.relam)?;
         return Err(Box::new(
             PgError::error(format!(
                 "expected \"{want}\" index as targets for verification"
@@ -126,4 +123,23 @@ pub(crate) fn amcheck_lock_relation_and_check<'mcx>(
     indexam::index_close(indrel, lockmode)?;
     table::table_close(heaprel, lockmode)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod am_name_tests {
+    use super::*;
+
+    // verify_common.c:168: the AMOID syscache lookup's error (a lock
+    // timeout on pg_am) propagates instead of being swallowed into "".
+    #[test]
+    fn am_name_propagates_lookup_errors() {
+        syscache_seams::pg_am_amname::set(|_| {
+            Err(Box::new(
+                PgError::error("canceling statement due to lock timeout")
+                    .with_sqlstate(::types_error::ERRCODE_LOCK_NOT_AVAILABLE),
+            ))
+        });
+        let err = am_name(403).expect_err("lookup error must propagate");
+        assert_eq!(err.sqlstate(), ::types_error::ERRCODE_LOCK_NOT_AVAILABLE);
+    }
 }

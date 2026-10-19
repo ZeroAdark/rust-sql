@@ -516,7 +516,7 @@ pub(crate) fn clause_selectivity_node_ext<'mcx>(
         // them is an open-ended list whose misses are planner panics on
         // ordinary SQL rather than estimate differences.
         //
-        // NullIfExpr lands here (GL-TESTFIX-1 / GL-TESTRIGS-1 F-R3-1): its C
+        // NullIfExpr lands here (regression / regression F-R3-1): its C
         // node REPRESENTATION is OpExpr, but its tag is T_NullIfExpr, so C's
         // `is_opclause(clause) || IsA(clause, DistinctExpr)` arm rejects it and
         // this final else takes it — a boolean NULLIF qual estimates via
@@ -592,8 +592,7 @@ fn rowcomparesel<'mcx>(
     } else {
         let mut bms = vars::pull_varnos(run.mcx, larg)?;
         bms.add_members(run.mcx, &vars::pull_varnos(run.mcx, rarg)?)?;
-        debug_assert!(crate::relnode::relids_is_unset(&run.root.outer_join_rels));
-        bms.iter().count() > 1
+        bms.iter().filter(|&r| !relids_is_member(r, &run.root.outer_join_rels)).count() > 1
     };
     if is_join {
         crate::plancat::join_selectivity(run, opno, &args, inputcollid, jointype, sjinfo)

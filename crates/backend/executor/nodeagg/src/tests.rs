@@ -608,6 +608,10 @@ fn two_col_desc(mcx: Mcx<'_>) -> Rc<TupleDescData<'_>> {
 }
 
 fn mk_hashed_count_agg(mcx: Mcx<'_>) -> &Agg<'_> {
+    mk_hashed_count_agg_groups(mcx, 4)
+}
+
+fn mk_hashed_count_agg_groups(mcx: Mcx<'_>, num_groups: i64) -> &Agg<'_> {
     let outer_var = Node::mk_var(mcx, 1, 1, INT4OID, -1, 0, 0).unwrap();
     let outer_tle = Node::mk_target_entry(mcx, outer_var, 1, Some("a"), false).unwrap();
     let outer_plan = {
@@ -638,7 +642,7 @@ fn mk_hashed_count_agg(mcx: Mcx<'_>) -> &Agg<'_> {
     agg.grpColIdx = mcx::slice_borrow_in(mcx, &[1i16]).unwrap();
     agg.grpOperators = mcx::slice_borrow_in(mcx, &[INT4_EQ]).unwrap();
     agg.grpCollations = mcx::slice_borrow_in(mcx, &[0u32]).unwrap();
-    agg.numGroups = 4;
+    agg.numGroups = num_groups as _;
     agg.seal_ref()
 }
 
@@ -3412,4 +3416,151 @@ fn hashed_min_text_replacement_frees_superseded_transvalues() {
     let big = hashed_min_text_aggcontext_after(4_000);
     const SLACK: usize = 64 * 1024;
     assert!(big <= small + SLACK, "aggcontext grew with replaced transvalues: {small} -> {big}");
+}
+
+// ExecInitAgg (nodeAgg.c:3721): EXPLAIN never fills the hash table, so the
+// numGroups-sized allocation is skipped under EXEC_FLAG_EXPLAIN_ONLY.
+fn hashed_init_query_arena_growth(eflags: i32) -> usize {
+    install_seams();
+    let agg = mk_hashed_count_agg_groups(leaked_mcx(), 1 << 20);
+    let estate_owner = create_executor_state(Box::leak(Box::new(MemoryContext::new("q"))));
+    let mut estate_owner = estate_owner.unwrap();
+    estate_owner.with_mut(|estate| {
+        let before = estate.es_query_cxt.context().subtree_allocated();
+        // SAFETY: agg is leaked ('static) and read-only.
+        let agg = unsafe { shorten(agg) };
+        let state = exec_init_agg(agg, estate, eflags, two_col_desc(leaked_mcx()), None).unwrap();
+        let grew = estate.es_query_cxt.context().subtree_allocated() - before;
+        drop(state);
+        grew
+    })
+}
+
+#[test]
+fn explain_only_skips_hash_table_allocation() {
+    let run = hashed_init_query_arena_growth(0);
+    let explain = hashed_init_query_arena_growth(::types_slot::EXEC_FLAG_EXPLAIN_ONLY);
+    assert!(run >= 1 << 20, "a 1M-group (work_mem-clamped) table is sized at init: {run}");
+    assert!(explain < run / 8, "EXPLAIN-only init sized the hash table: {explain} vs {run}");
+}
+
+// GROUP BY ROLLUP(a) over (a int4, b text), sorted: count(*) per set.
+fn mk_sorted_gsets_count_text_agg(mcx: Mcx<'_>) -> &Agg<'_> {
+    let a = Node::mk_var(mcx, 1, 1, INT4OID, -1, 0, 0).unwrap();
+    let b = Node::mk_var(mcx, 1, 2, TEXTOID, -1, 0, 0).unwrap();
+    let mut outer_tl = NodeList::make1(
+        mcx,
+        Node::mk_target_entry(mcx, a, 1, Some("a"), false).unwrap(),
+    )
+    .unwrap();
+    outer_tl
+        .lappend(mcx, Node::mk_target_entry(mcx, b, 2, Some("b"), false).unwrap())
+        .unwrap();
+    let outer_plan = {
+        let mut r = Node::build::<types_nodes::plannodes::Result>(mcx).unwrap();
+        r.plan.targetlist = outer_tl;
+        r.plan.plan_width = 36;
+        r.seal()
+    };
+
+    let ga = Node::mk_var(mcx, OUTER_VAR, 1, INT4OID, -1, 0, 0).unwrap();
+    let mut aggref = Node::build::<Aggref>(mcx).unwrap();
+    aggref.aggfnoid = COUNT_STAR_OID;
+    aggref.aggtype = INT8OID;
+    aggref.aggtranstype = INT8OID;
+    aggref.aggstar = true;
+    aggref.aggno = 0;
+    aggref.aggtransno = 0;
+    let mut tlist = NodeList::make1(
+        mcx,
+        Node::mk_target_entry(mcx, ga, 1, Some("a"), false).unwrap(),
+    )
+    .unwrap();
+    tlist
+        .lappend(
+            mcx,
+            Node::mk_target_entry(mcx, aggref.seal(), 2, Some("count"), false).unwrap(),
+        )
+        .unwrap();
+
+    let set1 =
+        Node::mk_int_list(mcx, types_nodes::list::IntList::from_slice(mcx, &[0]).unwrap())
+            .unwrap();
+    let set0 =
+        Node::mk_int_list(mcx, types_nodes::list::IntList::from_slice(mcx, &[]).unwrap())
+            .unwrap();
+    let mut gsets = NodeList::make1(mcx, set1).unwrap();
+    gsets.lappend(mcx, set0).unwrap();
+
+    let mut agg = Node::build::<Agg>(mcx).unwrap();
+    agg.plan.targetlist = tlist;
+    agg.plan.lefttree = Some(outer_plan);
+    agg.aggstrategy = 1;
+    agg.numCols = 1;
+    agg.grpColIdx = mcx::slice_borrow_in(mcx, &[1i16]).unwrap();
+    agg.grpOperators = mcx::slice_borrow_in(mcx, &[INT4_EQ]).unwrap();
+    agg.grpCollations = mcx::slice_borrow_in(mcx, &[0u32]).unwrap();
+    agg.numGroups = 3;
+    agg.groupingSets = gsets;
+    agg.seal_ref()
+}
+
+// agg_retrieve_direct (nodeAgg.c:2516) keeps the representative tuple with
+// ownership: each group boundary's ExecCopySlot frees the previous group's
+// image, so the query arena does not grow with the group count.
+fn sorted_gsets_query_arena_after(n: usize) -> usize {
+    install_seams();
+    let agg = mk_sorted_gsets_count_text_agg(leaked_mcx());
+    let estate_owner = create_executor_state(Box::leak(Box::new(MemoryContext::new("q"))));
+    let mut estate_owner = estate_owner.unwrap();
+    estate_owner.with_mut(|estate| {
+        let mcx = estate.es_query_cxt;
+        let outer_desc = int4_text_desc(mcx);
+        let outer_id = estate.exec_init_extra_tuple_slot(Some(outer_desc), TupleSlotKind::Virtual);
+        // SAFETY: agg is leaked ('static) and read-only.
+        let agg = unsafe { shorten(agg) };
+        let mut state = exec_init_agg(
+            agg,
+            estate,
+            0,
+            two_col_desc(leaked_mcx()),
+            Some(int4_text_desc(leaked_mcx())),
+        )
+        .unwrap();
+        let payload = "x".repeat(300);
+        let mut i = 0usize;
+        let mut feed = move |estate: &mut EStateData<'_>| {
+            if i >= n {
+                return Ok(None);
+            }
+            let mcx = estate.es_query_cxt;
+            let slot = estate.slot_mut(outer_id);
+            exectuples::exec_clear_tuple(slot, mcx);
+            slot.base_mut().tts_values[0] = Datum::from_i32(i as i32);
+            slot.base_mut().tts_isnull[0] = false;
+            slot.base_mut().tts_values[1] = text_datum(&payload);
+            slot.base_mut().tts_isnull[1] = false;
+            exectuples::exec_store_virtual_tuple(slot);
+            i += 1;
+            Ok(Some(outer_id))
+        };
+        let mut rows = 0usize;
+        let mut total = 0i64;
+        while let Some(slot_id) = exec_agg(&mut state, estate, &mut feed).unwrap() {
+            let base = estate.slot_mut(slot_id).base();
+            rows += 1;
+            total += base.tts_values[1].as_i64();
+        }
+        assert_eq!(rows, n + 1);
+        assert_eq!(total, 2 * n as i64);
+        estate.es_query_cxt.context().subtree_allocated()
+    })
+}
+
+#[test]
+fn sorted_grouping_sets_free_superseded_group_tuples() {
+    let small = sorted_gsets_query_arena_after(64);
+    let big = sorted_gsets_query_arena_after(4096);
+    const SLACK: usize = 256 * 1024;
+    assert!(big <= small + SLACK, "query arena grew with group tuples: {small} -> {big}");
 }

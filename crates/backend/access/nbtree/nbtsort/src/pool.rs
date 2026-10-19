@@ -188,6 +188,9 @@ struct BtBuildPool {
     started: AtomicUsize,
     refused: AtomicUsize,
     error: Mutex<Option<Box<PgError>>>,
+    /// Workers' sub-ERROR reports, relayed by the leader's drain (C: the
+    /// worker error queue's 'N' messages).
+    notices: Arc<Mutex<Vec<Box<PgError>>>>,
     failed: AtomicBool,
     /// Leader teardown in progress: shippers must drain out (a worker
     /// parked on a full queue would otherwise stall the abort drain).
@@ -215,6 +218,10 @@ impl BtBuildPool {
 
     fn take_error(&self) -> Option<Box<PgError>> {
         self.error.lock().unwrap_or_else(|p| p.into_inner()).take()
+    }
+
+    fn take_notices(&self) -> Vec<Box<PgError>> {
+        std::mem::take(&mut *self.notices.lock().unwrap_or_else(|p| p.into_inner()))
     }
 
     /// Ship one formed-tuple batch to the leader. Backpressure: over-cap
@@ -300,8 +307,21 @@ impl runtime::TaskSetWork for BtBuildPool {
             return;
         }
         let t0 = claim_timing_enabled().then(pg_clock::MonoStamp::now);
+        // C pq_redirect_to_shm_mq: the worker's client-bound sub-ERROR
+        // reports (an index expression's WARNING) route to the leader's
+        // error queue; mark the thread client-bound and capture them.
+        let notices = Arc::clone(&self.notices);
+        let prev_dest = elog::config::where_to_send_output();
+        elog::config::set_where_to_send_output(types_dest::CommandDest::Remote);
+        let prev_redirect = elog::set_frontend_redirect(Some(Box::new(move |e: &PgError| {
+            if e.level < ERROR {
+                notices.lock().unwrap_or_else(|p| p.into_inner()).push(Box::new(e.clone()));
+            }
+        })));
         // unwind-ok: worker-containment
         let r = catch_unwind(AssertUnwindSafe(|| self.morsel_body(range)));
+        elog::set_frontend_redirect(prev_redirect);
+        elog::config::set_where_to_send_output(prev_dest);
         match r {
             Ok(Ok(())) => {}
             Ok(Err(e)) => self.fail(e),
@@ -839,6 +859,7 @@ pub(crate) fn pool_feed_spools<'mcx>(
             started: AtomicUsize::new(0),
             refused: AtomicUsize::new(0),
             error: Mutex::new(None),
+            notices: Arc::new(Mutex::new(Vec::new())),
             failed: AtomicBool::new(false),
             closing: AtomicBool::new(false),
             broken_hot_chain: AtomicBool::new(false),
@@ -947,6 +968,9 @@ fn pool_leader_join(
     };
     // Drain everything currently queued into the caller's spools.
     let mut drain = |bp: &Arc<BtBuildPool>, consumed: &mut u64| -> PgResult<bool> {
+        for e in bp.take_notices() {
+            parallel::emit_relayed_worker_notice(e);
+        }
         let mut any = false;
         loop {
             let batch = {

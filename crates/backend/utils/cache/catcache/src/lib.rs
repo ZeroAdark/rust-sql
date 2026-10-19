@@ -207,7 +207,28 @@ fn state_init(slot: &mut Option<ManuallyDrop<McxOwned<CatCacheStateTy>>>) {
     ::mcx::register_session_cleanup(Box::new(|| {
         STATE.with(|cell| {
             // SAFETY: task-end teardown, outside any catcache borrow.
-            if let Some(owned) = unsafe { &mut *cell.get() }.take() {
+            if let Some(mut owned) = unsafe { &mut *cell.get() }.take() {
+                // The phase-2 descriptor headers (init.rs: one bare Box per
+                // initialized cache, 'static-extended) die here with the
+                // rest of the estate — while CacheMemoryContext, which
+                // holds their attribute arrays, is still alive. Session
+                // teardown lane: ~50 caches x 96 B were left behind by
+                // every session before this.
+                owned.with_mut(|st| {
+                    for cache in st.caches.iter_mut().flatten() {
+                        if let Some(td) = cache.cc_tupdesc.take() {
+                            // SAFETY: `td` is the Box::leak'd header from
+                            // catalog_cache_initialize_cache, taken out of
+                            // its only holder just now; nothing reads a
+                            // cache after this cleanup on this thread.
+                            unsafe {
+                                drop(Box::from_raw(
+                                    td as *const TupleDescData<'static> as *mut TupleDescData<'static>,
+                                ));
+                            }
+                        }
+                    }
+                });
                 drop(ManuallyDrop::into_inner(owned));
             }
         });
@@ -267,6 +288,16 @@ pub(crate) fn pack_ref(off: u32, len: u32) -> Datum {
     // Full 8-byte Datum word (u64, not usize: a usize shift truncates on
     // 32-bit wasm — ILP32 Datum-word audit). Identical on 64-bit targets.
     Datum::from_u64(((off as u64) << 32) | len as u64)
+}
+
+/// `namestrcpy`'s clip in `CatCacheCopyKeys` (catcache.c:2342): a NAME key is
+/// stored as at most NAMEDATALEN-1 bytes however long the probe was.
+pub(crate) fn stored_key_bytes<'a>(kind: CCFastKind, probe: &'a CatCKey<'_>) -> &'a [u8] {
+    let b = probe.bytes();
+    match kind {
+        CCFastKind::Name => &b[..b.len().min(compute::NAMEDATALEN - 1)],
+        _ => b,
+    }
 }
 
 /// # Safety

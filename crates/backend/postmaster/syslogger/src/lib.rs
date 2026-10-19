@@ -101,6 +101,13 @@ static CONFIG_RELOAD_PENDING: AtomicBool = AtomicBool::new(false);
 static SYSLOGGER_LATCH: Mutex<Option<LatchHandle>> = Mutex::new(None);
 static SYSLOGGER_EXITED: AtomicBool = AtomicBool::new(false);
 
+fn log_fork_failure(save_errno: i32) -> PgResult<()> {
+    ereport(LOG)
+        .with_saved_errno(save_errno)
+        .errmsg("could not fork system logger: %m")
+        .finish(loc("SysLogger_Start"))
+}
+
 pub fn collector_kill(signo: i32) {
     match signo {
         SIGUSR1 => ROTATION_REQUESTED.store(true, Relaxed),
@@ -480,9 +487,7 @@ pub fn SysLogger_Start(child_slot: i32) -> PgResult<i32> {
         launch_backend::postmaster_child_launch(BackendType::Logger, child_slot, StartupData::None, None);
 
     if syslogger_pid == -1 {
-        ereport(LOG)
-            .errmsg("could not fork system logger: %m")
-            .finish(loc("SysLogger_Start"))?;
+        log_fork_failure(elog::errno::current_errno())?;
         return Ok(0);
     }
 
@@ -679,7 +684,12 @@ fn logger_pipe_report(level: ErrorLevel, errnum: i32, message: &str) -> elog::Er
 /// O_EXCL and fchmod only the file we created to the exact C mode.
 fn logfile_open(filename: &str, mode: &str, allow_errors: bool) -> PgResult<*mut libc::FILE> {
     let file_mode = ((LOG_FILE_MODE.load(Relaxed) as u32 | 0o200) & 0o666) as libc::mode_t;
-    let oflags = libc::O_WRONLY | if mode == "w" { libc::O_TRUNC } else { libc::O_APPEND };
+    // syslogger.c:776 closes the postmaster's copies so no later child can
+    // inherit the logfiles; the shared process keeps them, so mark them
+    // close-on-exec instead (COPY PROGRAM and archive commands).
+    let oflags = libc::O_WRONLY
+        | libc::O_CLOEXEC
+        | if mode == "w" { libc::O_TRUNC } else { libc::O_APPEND };
     let c_filename = std::ffi::CString::new(filename).expect("log path contains NUL");
 
     let fh = unsafe {
@@ -692,6 +702,13 @@ fn logfile_open(filename: &str, mode: &str, allow_errors: bool) -> PgResult<*mut
             libc::fchmod(fd, file_mode);
         } else if last_errno() == libc::EEXIST {
             fd = open(oflags);
+            // A dangling symlink: fopen creates its target (syslogger.c:1229).
+            if fd < 0 && last_errno() == libc::ENOENT {
+                fd = open(oflags | libc::O_CREAT);
+                if fd >= 0 {
+                    libc::fchmod(fd, file_mode);
+                }
+            }
         }
         if fd < 0 {
             std::ptr::null_mut()

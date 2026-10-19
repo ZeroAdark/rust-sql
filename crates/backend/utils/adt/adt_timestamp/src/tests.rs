@@ -1108,7 +1108,7 @@ fn cstring_array_image(elems: &[&[u8]], bitmap: Option<u8>) -> Vec<u8> {
     img
 }
 
-// audit-18.6 fp-adt-b1#2: arrayutils.c:249 array_contains_nulls inspects
+// audit-18.6 regression: arrayutils.c:249 array_contains_nulls inspects
 // the bitmap bits, so ('{NULL,6}'::cstring[])[2:2] (bitmap present, no
 // null) is the typmod 6, not "must not contain nulls".
 #[test]
@@ -1126,7 +1126,7 @@ fn typmod_array_bitmap_without_nulls_is_accepted() {
     assert_eq!(err.message(), "typmod array must not contain nulls");
 }
 
-// audit-18.6 fp-adt-b1#3 / fp-adt-date-p1#2: C parses every element
+// audit-18.6 regression / regression: C parses every element
 // (pg_strtoint32) before the caller counts them, so nine elements with a
 // bad integer are 22P02, and nine good ones are the caller's 22023.
 #[test]
@@ -1154,7 +1154,7 @@ fn typmod_array_parses_elements_before_count_cap() {
     assert_eq!(err.sqlstate(), ::types_error::ERRCODE_INVALID_PARAMETER_VALUE);
 }
 
-// audit-18.6 fp-adt-b1#4: a non-UTF-8 element (SQL_ASCII) is pg_strtoint32's
+// audit-18.6 regression: a non-UTF-8 element (SQL_ASCII) is pg_strtoint32's
 // 22P02 quoting the raw bytes, not a UTF-8 decoding failure.
 #[test]
 fn typmod_array_non_utf8_element_is_invalid_integer() {
@@ -1165,4 +1165,40 @@ fn typmod_array_non_utf8_element_is_invalid_integer() {
     let err = crate::builtins::array_get_integer_typmods(&fci, &mut out, "too many").unwrap_err();
     assert_eq!(err.sqlstate(), ::types_error::ERRCODE_INVALID_TEXT_REPRESENTATION);
     assert_eq!(err.message_raw.as_deref(), Some(&b"invalid input syntax for type integer: \"\xff\""[..]));
+}
+
+#[test]
+fn mbcliplen_keeps_whole_characters_in_utf8() {
+    let saved = mbutils::GetDatabaseEncoding();
+    mbutils::SetDatabaseEncoding(mbutils::pg_char_to_encoding("UTF8")).unwrap();
+    // downcase_truncate_identifier / text_to_cstring_buffer clip with
+    // pg_mbcliplen: 40 x "\u{e9}" (80 bytes) fits 31 whole chars in 63 bytes.
+    let units = "\u{e9}".repeat(40);
+    assert_eq!(mbcliplen(units.as_bytes(), 63), 62);
+    assert_eq!(mbcliplen(units.as_bytes(), 80), 80);
+    assert_eq!(mbcliplen(b"abc", 2), 2);
+    let zone = "\u{e9}".repeat(200);
+    assert_eq!(mbcliplen(zone.as_bytes(), TZ_STRLEN_MAX), 254);
+    mbutils::SetDatabaseEncoding(saved).unwrap();
+}
+
+// timestamp.c:4841 / 5055 quote the unit's bytes verbatim (SQL_ASCII high
+// bytes survive the downcasing).
+#[test]
+fn unit_messages_keep_non_utf8_bytes() {
+    let err = timestamp_part_common(b"\xff", 0, true).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(&b"unit \"\xff\" not recognized for type timestamp without time zone"[..])
+    );
+    assert_eq!(err.sqlstate, ERRCODE_INVALID_PARAMETER_VALUE);
+    let err = timestamp_trunc(b"millennia\xff", 0).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(&b"unit \"millennia\xff\" not recognized for type timestamp without time zone"[..])
+    );
+    let err = crate::interval::interval_trunc(b"\xff", &Interval::default()).unwrap_err();
+    assert_eq!(err.message_raw.as_deref(), Some(&b"unit \"\xff\" not recognized for type interval"[..]));
+    let err = timestamp_trunc(b"gibberish", 0).unwrap_err();
+    assert!(err.message_raw.is_none());
 }

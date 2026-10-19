@@ -9,7 +9,7 @@ SUITE.tsv commit.
 
 Why it exists: four separate classes of malformed rows were authored by four
 different lanes and only surfaced on a full CI cluster solve run (see
-proofs/FLEET-SOLVING.md "Measured baseline"), where each malformed row burns
+proofs/CI-SOLVING.md "Measured baseline"), where each malformed row burns
 a solver slot and reports as a deviation indistinguishable from a real
 divergence:
 

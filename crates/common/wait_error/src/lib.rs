@@ -13,8 +13,8 @@ pub fn system(command: &str) -> i32 {
 // kill(-pid) leg of signal_child reaches the command's descendants; the hooks
 // let the caller register the child for that signal fan-out.
 #[cfg(not(target_family = "wasm"))]
-pub fn system_tracked(command: &str, spawned: impl FnOnce(u32), reaped: impl FnOnce(u32)) -> i32 {
-    use std::os::unix::process::{CommandExt, ExitStatusExt};
+fn spawn_sh(command: &str) -> Option<std::process::Child> {
+    use std::os::unix::process::CommandExt;
     // system(3): the child inherits the caller's SIGPIPE disposition (every
     // backend ignores it); std resets it to SIG_DFL before exec.
     let mut parent: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -22,7 +22,7 @@ pub fn system_tracked(command: &str, spawned: impl FnOnce(u32), reaped: impl FnO
     let ignored = unsafe { libc::sigaction(libc::SIGPIPE, std::ptr::null(), &mut parent) } == 0
         && parent.sa_sigaction == libc::SIG_IGN;
     let mut cmd = std::process::Command::new("/bin/sh");
-    cmd.arg("-c").arg(command).process_group(0);
+    cmd.arg0("sh").arg("-c").arg(command).process_group(0);
     if ignored {
         // SAFETY: signal(2) is async-signal-safe; runs between fork and exec.
         unsafe {
@@ -32,10 +32,13 @@ pub fn system_tracked(command: &str, spawned: impl FnOnce(u32), reaped: impl FnO
             })
         };
     }
-    let mut child = match cmd.spawn() {
-        Ok(child) => child,
-        Err(_) => return -1,
-    };
+    cmd.spawn().ok()
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub fn system_tracked(command: &str, spawned: impl FnOnce(u32), reaped: impl FnOnce(u32)) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+    let Some(mut child) = spawn_sh(command) else { return -1 };
     let pid = child.id();
     spawned(pid);
     let rc = match child.wait() {
@@ -46,8 +49,52 @@ pub fn system_tracked(command: &str, spawned: impl FnOnce(u32), reaped: impl FnO
     rc
 }
 
+// system_tracked with the wait split into ticks: `tick` runs between
+// non-blocking reaps, so the caller can service its own interrupts while the
+// command runs (RestoreArchivedFile: the startup process's SIGTERM
+// disposition proc_exits from inside C's system(3)). The child is
+// unregistered even when a tick unwinds, and never killed (C orphans it).
+#[cfg(not(target_family = "wasm"))]
+pub fn system_tracked_ticking(
+    command: &str,
+    spawned: impl FnOnce(u32),
+    reaped: impl FnOnce(u32),
+    mut tick: impl FnMut(),
+) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+    struct Reap<F: FnOnce(u32)>(u32, Option<F>);
+    impl<F: FnOnce(u32)> Drop for Reap<F> {
+        fn drop(&mut self) {
+            if let Some(f) = self.1.take() {
+                f(self.0);
+            }
+        }
+    }
+    let Some(mut child) = spawn_sh(command) else { return -1 };
+    let pid = child.id();
+    spawned(pid);
+    let _reap = Reap(pid, Some(reaped));
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.into_raw(),
+            Ok(None) => tick(),
+            Err(_) => return -1,
+        }
+    }
+}
+
 #[cfg(target_family = "wasm")]
 pub fn system_tracked(_command: &str, _spawned: impl FnOnce(u32), _reaped: impl FnOnce(u32)) -> i32 {
+    -1
+}
+
+#[cfg(target_family = "wasm")]
+pub fn system_tracked_ticking(
+    _command: &str,
+    _spawned: impl FnOnce(u32),
+    _reaped: impl FnOnce(u32),
+    _tick: impl FnMut(),
+) -> i32 {
     -1
 }
 
@@ -198,6 +245,16 @@ mod tests {
         code << 8
     }
 
+    // system(3) execs the shell as "sh" (argv[0]), which is what $0 shows
+    // an archive_command / restore_command.
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn shell_argv0_is_sh() {
+        let rc = super::system("test \"$0\" = sh");
+        assert!(super::WIFEXITED(rc), "status {rc:#x}");
+        assert_eq!(super::WEXITSTATUS(rc), 0);
+    }
+
     fn signaled(sig: i32) -> i32 {
         sig
     }
@@ -262,5 +319,45 @@ mod tests {
         assert_eq!(wait_result_to_exit_code(exited(3)), 3);
         assert_eq!(wait_result_to_exit_code(signaled(libc::SIGTERM)), 128 + libc::SIGTERM);
         assert_eq!(wait_result_to_exit_code(-1), -1);
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod ticking_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn ticking_wait_reaps_on_exit_and_unregisters_when_a_tick_unwinds() {
+        let ticks = Cell::new(0);
+        let rc = system_tracked_ticking("exit 3", |_| {}, |_| {}, || ticks.set(ticks.get() + 1));
+        assert_eq!(rc >> 8, 3);
+
+        let spawned = Cell::new(0u32);
+        let reaped = Cell::new(0u32);
+        let ticks = Cell::new(0);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            system_tracked_ticking(
+                "exec sleep 30",
+                |p| spawned.set(p),
+                |p| reaped.set(p),
+                || {
+                    ticks.set(ticks.get() + 1);
+                    if ticks.get() == 3 {
+                        std::panic::panic_any("proc_exit");
+                    }
+                },
+            )
+        }));
+        assert!(r.is_err());
+        assert_ne!(spawned.get(), 0);
+        assert_eq!(reaped.get(), spawned.get());
+        // Orphaned like C's system(3) child: still alive, so kill it here.
+        let killed = std::process::Command::new("kill")
+            .arg("-9")
+            .arg(spawned.get().to_string())
+            .status()
+            .unwrap();
+        assert!(killed.success());
     }
 }

@@ -173,7 +173,7 @@ pub fn BufFileCreateFileSet<'mcx>(
     Ok(BufFile {
         files,
         is_inter_xact: false,
-        resowner: types_resowner::ResourceOwner::NULL,
+        resowner: resowner_seams::current_resource_owner::call(),
         dirty: false,
         read_only: false,
         fileset: Some(key),
@@ -230,7 +230,7 @@ fn open_fileset_common<'mcx>(
     Ok(Some(BufFile {
         files,
         is_inter_xact: false,
-        resowner: types_resowner::ResourceOwner::NULL,
+        resowner: resowner_seams::current_resource_owner::call(),
         dirty: false,
         read_only,
         fileset: Some(key),
@@ -365,19 +365,18 @@ impl<'mcx> BufFile<'mcx> {
     }
 
     fn extend(&mut self) -> PgResult<()> {
+        // buffile.c:162: the new segment belongs to the BufFile's owner.
+        let old_owner = resowner_seams::current_resource_owner::call();
+        resowner_seams::set_current_resource_owner::call(self.resowner);
         let pfile = match &self.fileset {
-            None => {
-                let old_owner = resowner_seams::current_resource_owner::call();
-                resowner_seams::set_current_resource_owner::call(self.resowner);
-                let file = OpenTemporaryFile(self.is_inter_xact);
-                resowner_seams::set_current_resource_owner::call(old_owner);
-                file?
-            }
+            None => OpenTemporaryFile(self.is_inter_xact),
             Some(fileset) => {
                 let name = self.name.as_ref().expect("fileset BufFile has a name");
-                make_new_fileset_segment(fileset, name, self.files.len())?
+                make_new_fileset_segment(fileset, name, self.files.len())
             }
         };
+        resowner_seams::set_current_resource_owner::call(old_owner);
+        let pfile = pfile?;
         debug_assert!(pfile.0 >= 0);
         self.files.push(pfile);
         Ok(())

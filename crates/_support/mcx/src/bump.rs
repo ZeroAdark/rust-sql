@@ -94,9 +94,9 @@ impl BumpArena {
             return self.alloc_dedicated(layout, acct);
         }
         let csize = (layout.size() + 7) & !7;
-        // wrapping_sub folds the ZST case into the oversize branch.
+        // wrapping_sub folds the ZST case into the dedicated branch.
         if csize.wrapping_sub(1) >= self.chunk_limit {
-            return self.alloc_unusual(layout, csize, acct);
+            return self.alloc_dedicated(layout, acct);
         }
         let avail = self.cur_end as usize - self.cur_ptr as usize;
         if csize <= avail {
@@ -162,24 +162,8 @@ impl BumpArena {
         Ok(NonNull::slice_from_raw_parts(p, csize))
     }
 
-    // ZST or over-chunk-limit request (C's BumpAllocLarge lane).
-    #[cold]
-    #[inline(never)]
-    fn alloc_unusual(
-        &mut self,
-        layout: Layout,
-        csize: usize,
-        acct: &Acct,
-    ) -> Result<NonNull<[u8]>, AllocError> {
-        if csize == 0 {
-            let dangling = layout.align() as *mut u8;
-            // SAFETY: align is a non-zero power of two, hence non-null.
-            let nn = unsafe { NonNull::new_unchecked(dangling) };
-            return Ok(NonNull::slice_from_raw_parts(nn, 0));
-        }
-        self.alloc_dedicated(layout, acct)
-    }
-
+    // ZST, over-aligned or over-chunk-limit request (C's BumpAllocLarge
+    // lane); a ZST of any alignment is dangling and uncharged.
     #[cold]
     #[inline(never)]
     fn alloc_dedicated(
@@ -187,8 +171,13 @@ impl BumpArena {
         layout: Layout,
         acct: &Acct,
     ) -> Result<NonNull<[u8]>, AllocError> {
-        let size = layout.size().max(1);
-        let layout = Layout::from_size_align(size, layout.align()).map_err(|_| AllocError)?;
+        let size = layout.size();
+        if size == 0 {
+            let dangling = layout.align() as *mut u8;
+            // SAFETY: align is a non-zero power of two, hence non-null.
+            let nn = unsafe { NonNull::new_unchecked(dangling) };
+            return Ok(NonNull::slice_from_raw_parts(nn, 0));
+        }
         self.oversize.try_reserve(1).map_err(|_| AllocError)?;
         acct.check_limit(size)?;
         let p = Global.allocate(layout)?;
@@ -451,11 +440,12 @@ mod tests {
     fn zero_sized_alloc_is_dangling_and_uncharged() {
         let mut a = BumpArena::new();
         let acct = acct();
-        for align in [1usize, 2, 4, 8] {
+        for align in [1usize, 2, 4, 8, 16, 32, 4096] {
             let l = Layout::from_size_align(0, align).unwrap();
             let p = a.alloc(l, &acct).unwrap();
             assert_eq!(p.len(), 0);
             assert_eq!(p.cast::<u8>().as_ptr() as usize % align, 0);
+            assert_eq!((a.footprint(), a.nblocks()), (0, 0), "align={align}");
         }
         assert_eq!(acct.self_used.get(), 0);
         assert_eq!(a.footprint(), 0);

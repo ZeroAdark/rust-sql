@@ -46,13 +46,14 @@ pub fn fc_pg_stat_get_backend_activity(
 ) -> PgResult<Datum> {
     let be = beentry(fcinfo);
     let activity = match &be {
-        None => "<backend information not available>",
-        Some(be) if !has_pgstat_permissions(be.st_userid)? => "<insufficient privilege>",
-        Some(be) if be.st_activity_raw.is_empty() => "<command string not enabled>",
-        Some(be) => be.st_activity_raw.as_str(),
+        None => "<backend information not available>".to_string(),
+        Some(be) if !has_pgstat_permissions(be.st_userid)? => {
+            "<insufficient privilege>".to_string()
+        }
+        Some(be) if be.st_activity_raw.is_empty() => "<command string not enabled>".to_string(),
+        Some(be) => backend_status::pgstat_clip_activity(&be.st_activity_raw),
     };
-    let clipped = backend_status::pgstat_clip_activity(activity.as_bytes());
-    text_datum(fcinfo, &clipped)
+    text_datum(fcinfo, &activity)
 }
 
 pub fn fc_pg_stat_get_backend_wait_event_type(

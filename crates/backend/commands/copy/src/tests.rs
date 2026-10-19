@@ -18,6 +18,8 @@ fn test_ctx() -> &'static MemoryContext {
 
 static SETUP: Once = Once::new();
 
+static INTERRUPT_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn setup_fd() {
     SETUP.call_once(|| {
         guc_tables::init_seams();
@@ -27,6 +29,15 @@ fn setup_fd() {
         aio_seams::pgaio_closing_fd::set(|_| {});
         waitevent_seams::pgstat_report_wait_start::set(|_| {});
         waitevent_seams::pgstat_report_wait_end::set(|| {});
+        postgres_seams::check_for_interrupts::set(|| {
+            if INTERRUPT_PENDING.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(Box::new(
+                    types_error::PgError::error("canceling statement due to user request")
+                        .with_sqlstate(types_error::ERRCODE_QUERY_CANCELED),
+                ));
+            }
+            Ok(())
+        });
         mbutils::init_seams();
     });
     thread_local! {
@@ -132,6 +143,7 @@ fn mk_state<'mcx>(
         relname: String::new(),
         escontext: None,
         num_errors: 0,
+        in_skip_row_notice: false,
         defaults: mcx::vec_from_elem_in(mcx, false, 8),
         bytes_processed: 0,
         volatile_defexprs: false,
@@ -847,4 +859,23 @@ fn stale_column_context_survives_the_next_line() {
     st.cur_attval_off = None;
     let e = copy_from_error_context(&st, crate::fromparse::extra_data());
     assert_eq!(e.context(), Some("COPY t3, line 3: \"2\""));
+}
+
+// regression: file_fdw.c:789 checks for interrupts with
+// CopyFromErrorCallback still installed, so a cancel there carries the COPY
+// relation and line.
+#[test]
+fn interrupt_between_soft_errors_carries_the_copy_context() {
+    setup_fd();
+    let mcx = test_ctx().mcx();
+    let mut st = mk_state(mcx, b'\t', "\\N");
+    st.relname = "t5".into();
+    st.cur_lineno = 4;
+    assert!(crate::from::check_for_interrupts_in_copy(&st).is_ok());
+    INTERRUPT_PENDING.store(true, std::sync::atomic::Ordering::SeqCst);
+    let e = crate::from::check_for_interrupts_in_copy(&st).unwrap_err();
+    INTERRUPT_PENDING.store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(e.sqlstate(), types_error::ERRCODE_QUERY_CANCELED);
+    assert_eq!(e.message(), "canceling statement due to user request");
+    assert_eq!(e.context(), Some("COPY t5, line 4"));
 }

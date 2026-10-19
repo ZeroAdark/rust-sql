@@ -134,6 +134,9 @@ impl Parser {
     // `mem::replace`, not `.clone()`: tokens are read exactly once, left to right.
     fn bump(&mut self) -> Token {
         if self.pos < self.tokens.len() {
+            if matches!(self.tokens[self.pos], Token::LexError(_)) {
+                return self.tokens[self.pos].clone();
+            }
             let tok = std::mem::replace(&mut self.tokens[self.pos], Token::Eof);
             self.pos += 1;
             tok
@@ -143,6 +146,9 @@ impl Parser {
     }
 
     fn syntax_error(&self) -> PgError {
+        if let Some(Token::LexError(e)) = self.tokens.get(self.pos) {
+            return (**e).clone();
+        }
         replication_yyerror("syntax error")
     }
 
@@ -576,8 +582,7 @@ impl Parser {
 /// `ERRCODE_SYNTAX_ERROR` on a lexical or grammatical problem, exactly as the
 /// C parser's `ereport(ERROR)` would (but as a value, not an unwind).
 pub fn replication_parse(cmd_string: &str) -> PgResult<ReplCommand> {
-    let tokens = repl_scanner::replication_lex_all(cmd_string)?;
-    parse_tokens(tokens)
+    parse_tokens(repl_scanner::replication_lex_deferred(cmd_string))
 }
 
 /// Run the grammar over an already-lexed token stream (terminated by

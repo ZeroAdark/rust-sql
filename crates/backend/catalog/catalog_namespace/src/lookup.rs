@@ -1351,7 +1351,7 @@ mod match_named_call_tests {
     }
 
     // upstream 7f0e1aac7a7b (18.6): Replace fixed-size, too-short array with a palloc'd one.
-    // CALL p110(<100 positional>, o1 => NULL, ..., o5 => NULL): positions
+    // CALL xaeg(<100 positional>, o1 => NULL, ..., o5 => NULL): positions
     // 100..104 are set by the named-argument loop and 105..109 are filled in
     // by the defaults loop -- both index arggiven past FUNC_MAX_ARGS.
     #[test]

@@ -963,7 +963,15 @@ pub fn exec_rescan_sort_chg<'mcx>(
     }
     node.sort_Done = false;
     node.tuplesortstate = None;
+    forget_sort_stats(node, estate);
     refsort_clear(node);
+}
+
+// show_sort_info reads stats only while sort_Done && tuplesortstate != NULL
+// (explain.c:3089); a destroyed sort leaves nothing to report.
+fn forget_sort_stats<'mcx>(node: &SortState<'mcx>, estate: &mut EStateData<'mcx>) {
+    let id = node.plan.plan.plan_node_id;
+    estate.es_sort_instrumentation.retain(|(i, _)| *i != id);
 }
 
 pub fn exec_rescan_sort<'mcx>(
@@ -980,6 +988,7 @@ pub fn exec_rescan_sort<'mcx>(
     {
         node.sort_Done = false;
         node.tuplesortstate = None;
+        forget_sort_stats(node, estate);
         // Refsort never arms with randomAccess, so a refsort-fed node always
         // takes this reset arm: refs/winners never cross a rescan.
         refsort_clear(node);

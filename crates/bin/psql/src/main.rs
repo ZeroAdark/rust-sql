@@ -31,6 +31,8 @@ pub struct ConnParams {
     pub user: String,
     pub dbname: String,
     pub password: Option<String>,
+    /// get_progname(argv[0]) (startup.c:152), sent as the application name.
+    pub progname: String,
 }
 
 pub struct PsqlState {
@@ -118,7 +120,7 @@ pub fn do_connect(st: &PsqlState, p: &ConnParams) -> Result<Conn, String> {
         let _ = std::io::stderr().flush();
     });
     let mut params: Vec<(&str, &str)> =
-        vec![("user", &p.user), ("database", &p.dbname), ("application_name", "psql")];
+        vec![("user", &p.user), ("database", &p.dbname), ("application_name", &p.progname)];
     let enc = std::env::var("PGCLIENTENCODING").ok().filter(|v| !v.is_empty());
     if let Some(e) = enc.as_deref() {
         params.push(("client_encoding", e));
@@ -414,7 +416,20 @@ fn prompt(st: &PsqlState, scan: &ScanState, first: bool) -> String {
 // --------------------------------------------------------------------- main
 
 fn main() {
-    let mut args = std::env::args().skip(1);
+    // C psql runs with SIGPIPE at its default: writing to a closed stdout pipe
+    // (`psql -f script.sql | head -1`) kills the process, so the rest of the
+    // script never executes. It ignores SIGPIPE only while writing to a pipe it
+    // opened itself (\o |cmd and the pager: disable_sigpipe_trap in
+    // fe_utils/print.c, common.c setQFout); this port has neither yet. Rust's
+    // runtime sets SIGPIPE to SIG_IGN before main, which made the port get
+    // EPIPE, keep running the script, then panic in println!. Restore the
+    // default before anything is written.
+    // SAFETY: single-threaded at this point; SIG_DFL is a valid disposition.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+    let mut args = std::env::args();
+    let progname = pg_path::get_progname(&args.next().unwrap_or_default()).to_string();
     let mut host = env_or("PGHOST", "/tmp");
     let mut port = env_or("PGPORT", "5432");
     let mut user = env_or("PGUSER", &os_user());
@@ -498,6 +513,7 @@ fn main() {
         user,
         dbname,
         password: std::env::var("PGPASSWORD").ok().filter(|v| !v.is_empty()),
+        progname,
     };
 
     // PSQL_INTERACTIVE overrides isatty where the host's fd report is absent

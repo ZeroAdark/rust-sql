@@ -1475,6 +1475,7 @@ fn initialize_peragg_framed<'mcx>(
     let init_value;
     let mut finalfn = None;
     let mut has_inverse = invtransfn_oid != 0;
+    let mut strictness_mismatch = false;
     match (transfn_oid, invtransfn_oid) {
         // The specialised kernel stands in for the catalog's {0,0}-seeded
         // int[24]_avg_accum[_inv] + int2int4_sum; any other aggminitval text
@@ -1510,9 +1511,9 @@ fn initialize_peragg_framed<'mcx>(
             }
             let transfn = fmgr_core::fmgr_info(t)?;
             let invtransfn = fmgr_core::fmgr_info(inv)?;
-            if transfn.fn_strict != invtransfn.fn_strict {
-                return Err(wfunc_strictness_mismatch());
-            }
+            // nodeWindowAgg.c:3116 checks input/transition compatibility
+            // before the strictness mismatch (below).
+            strictness_mismatch = transfn.fn_strict != invtransfn.fn_strict;
             fn_strict = transfn.fn_strict;
             kernel = AggKernel::MovingByVal { transfn, invtransfn };
             init_value = match initval {
@@ -1554,6 +1555,9 @@ fn initialize_peragg_framed<'mcx>(
         {
             return Err(wfunc_incompatible_trans_type(wfunc.winfnoid));
         }
+    }
+    if strictness_mismatch {
+        return Err(wfunc_strictness_mismatch());
     }
 
     Ok(PerAggData {
@@ -1740,6 +1744,8 @@ impl<'mcx> WindowAggStateData<'mcx> {
                 self.status,
                 WaStatus::PassThrough | WaStatus::PassThroughStrict
             ));
+            -1
+        } else if !self.buffer.as_ref().unwrap().in_memory() {
             -1
         } else {
             pos

@@ -118,7 +118,7 @@ fn verify_hash_page(page: &RawPage, flags: u16) -> PgResult<u16> {
                     .with_sqlstate(ERRCODE_INDEX_CORRUPTED)
                     .with_detail(format!(
                         "Expected {}, got {}.",
-                        HASH_VERSION, metap.hashm_version
+                        HASH_VERSION, metap.hashm_version as i32
                     )),
             ));
         }
@@ -177,7 +177,7 @@ pub(crate) fn fc_hash_page_stats(
 
     // SAFETY: the arming context outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
-    let tupdesc = composite_tupdesc(mcx, flinfo)?;
+    let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
 
     let values = [
         Datum::from_i32(live_items),
@@ -207,14 +207,11 @@ pub(crate) fn fc_hash_page_items(
         verify_hash_page(&page, LH_BUCKET_PAGE | LH_OVERFLOW_PAGE)?;
         let b = page.bytes();
 
-        let tupdesc = composite_tupdesc(mcx, flinfo)?;
+        let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
         let maxoff = page_max_offset_number(b);
         let mut rows = Vec::with_capacity(maxoff);
         for offnum in 1..=maxoff {
             let id = page_item_id(b, offnum);
-            if !id.is_valid() {
-                return Err(Box::new(PgError::error("invalid ItemId")));
-            }
             let pos = id.off as usize;
             // The IndexTupleData header (t_tid + t_info, 8 bytes) must lie within
             // the page image before t_info can be trusted; tid_datum below also
@@ -385,7 +382,7 @@ pub(crate) fn fc_hash_bitmap_info(
 
     rel.close(types_rel::AccessShareLock)?;
 
-    let tupdesc = composite_tupdesc(mcx, flinfo)?;
+    let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
     let values = [
         Datum::from_i64(bitmapblkno as i64),
         Datum::from_i32(bitmapbit as i32),
@@ -407,7 +404,7 @@ pub(crate) fn fc_hash_metapage_info(
 
     // SAFETY: the arming context outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
-    let tupdesc = composite_tupdesc(mcx, flinfo)?;
+    let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
 
     let mut spares = Vec::with_capacity(HASH_MAX_SPLITPOINTS);
     for i in 0..HASH_MAX_SPLITPOINTS {

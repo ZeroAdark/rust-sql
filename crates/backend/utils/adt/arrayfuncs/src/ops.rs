@@ -843,7 +843,7 @@ fn fill_param_ints<'m>(mcx: Mcx<'m>, img: &[u8]) -> PgResult<(i32, PgVec<'m, i32
                 .with_detail("Dimension array must be one dimensional."),
         ));
     }
-    if crate::construct::array_contains_nulls(img) {
+    if crate::construct::array_contains_nulls(img)? {
         return Err(Box::new(
             PgError::error("dimension values cannot be null")
                 .with_sqlstate(ERRCODE_NULL_VALUE_NOT_ALLOWED),
@@ -1152,7 +1152,7 @@ pub fn fc_width_bucket_array(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo)
                 .with_sqlstate(ERRCODE_ARRAY_SUBSCRIPT_ERROR),
         ));
     }
-    if array_contains_nulls(&thresholds) {
+    if array_contains_nulls(&thresholds)? {
         return Err(Box::new(
             PgError::error("thresholds array must not contain NULLs")
                 .with_sqlstate(ERRCODE_NULL_VALUE_NOT_ALLOWED),

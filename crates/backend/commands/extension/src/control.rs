@@ -144,11 +144,31 @@ fn absolute_search_path(path: &str) -> PgResult<String> {
 fn find_in_paths(basename: &str, paths: &[String]) -> PgResult<Option<String>> {
     for path in paths {
         let full = format!("{}/{basename}", absolute_search_path(path)?);
-        if std::fs::metadata(&full).is_ok() {
+        if pg_file_exists(std::path::Path::new(&full))? {
             return Ok(Some(full));
         }
     }
     Ok(None)
+}
+
+// pg_file_exists (fd.c:503-516): a directory is a miss; only ENOENT, ENOTDIR
+// and EACCES are misses, every other stat failure is an error.
+fn pg_file_exists(full: &std::path::Path) -> PgResult<bool> {
+    use std::io::ErrorKind::{NotADirectory, NotFound, PermissionDenied};
+    match std::fs::metadata(full) {
+        Ok(st) => Ok(!st.is_dir()),
+        Err(e) if matches!(e.kind(), NotFound | NotADirectory | PermissionDenied) => Ok(false),
+        Err(e) => {
+            let mut b = ereport(ERROR);
+            if let Some(errno) = e.raw_os_error() {
+                b = b.with_saved_errno(errno).errcode_for_file_access();
+            }
+            Err(b
+                .errmsg(format!("could not access file \"{}\": %m", full.display()))
+                .into_error()
+                .into())
+        }
+    }
 }
 
 fn exists_in_paths(basename: &[u8], paths: &[String]) -> PgResult<bool> {
@@ -159,7 +179,7 @@ fn exists_in_paths(basename: &[u8], paths: &[String]) -> PgResult<bool> {
     for path in paths {
         let full = std::path::Path::new(&absolute_search_path(path)?)
             .join(std::ffi::OsStr::from_bytes(basename));
-        if std::fs::metadata(&full).is_ok() {
+        if pg_file_exists(&full)? {
             return Ok(true);
         }
     }
@@ -555,4 +575,31 @@ pub(crate) fn parse_control_in_dir(
     control.control_dir = Some(location.to_string());
     parse_extension_control_file(&mut control, None)?;
     Ok(control)
+}
+
+#[cfg(test)]
+mod pg_file_exists_tests {
+    use super::pg_file_exists;
+
+    // fd.c:503-516: a directory is a miss, ENOENT is a miss, ELOOP is an error.
+    #[test]
+    fn directories_miss_and_symlink_loops_error() {
+        let dir = std::env::temp_dir().join(format!("pgrust-ext-b94-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("x.control")).unwrap();
+        assert!(!pg_file_exists(&dir.join("x.control")).unwrap());
+        assert!(!pg_file_exists(&dir.join("absent.control")).unwrap());
+        std::fs::write(dir.join("y.control"), b"comment = 'y'\n").unwrap();
+        assert!(pg_file_exists(&dir.join("y.control")).unwrap());
+        std::os::unix::fs::symlink("loop.control", dir.join("loop.control")).unwrap();
+        let e = pg_file_exists(&dir.join("loop.control")).unwrap_err();
+        assert_eq!(
+            e.message(),
+            format!(
+                "could not access file \"{}\": Too many levels of symbolic links",
+                dir.join("loop.control").display()
+            )
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

@@ -503,6 +503,7 @@ fn skeleton_disarm_in_place(qd: &mut QueryDescData) -> PgResult<Option<i32>> {
 }
 
 pub(crate) fn executor_start_seam(h: QueryDescHandle, eflags: i32) -> PgResult<()> {
+    querydesc::with_qd(h, |qd| qd.start_eflags = eflags);
     tap_executor_start::call_if(|f| f(h));
     querydesc::with_qd(h, |qd| {
         backend_status_seams::pgstat_report_query_id::call(unsafe { qd.plannedstmt().queryId.get() }, false);
@@ -511,14 +512,14 @@ pub(crate) fn executor_start_seam(h: QueryDescHandle, eflags: i32) -> PgResult<(
 }
 
 // ---------------------------------------------------------------------------
-// SERIAL LEASE — v2 engine lives in crate::slease (GL-SLEASE-2: floor-gated
+// SERIAL LEASE — v2 engine lives in crate::slease (regression: floor-gated
 // admission + I/O donation; the module doc there is the design authority).
 // This file keeps only the RAII bracket in executor_run_seam below and the
 // engagement-yield re-export for lanev2's standing channel.
 // ---------------------------------------------------------------------------
 pub(crate) use crate::slease::{serial_lease_yield_for_engagement, SerialLease};
 
-/// GL-STMTTASK-2 change 3 × GL-SLEASE-2 (t44 composition bridge): true ⇔
+/// regression change 3 × regression (t44 composition bridge): true ⇔
 /// THIS top-level run currently HOLDS a serial-lease permit — the session
 /// is already seat-accounted, so the inline-execute path must not borrow a
 /// SECOND seat (double-count; a saturated pool would refuse inline for
@@ -570,6 +571,7 @@ impl ::trigger::AfterTriggerInstrSink for EstateTrigInstr {
                     Some(ix) => ix,
                     None => match es.register_trig_instrument(
                         ::executils::TrigInstrRelKind::Target,
+                        false,
                         relid,
                         rel.name(),
                         Some(trigdesc),
@@ -694,8 +696,21 @@ fn exec_check_xact_read_only(pstmt: &PlannedStmt<'_>) -> PgResult<()> {
 
 // CreateCommandName over a PlannedStmt: the CreateCommandTag commandType arm.
 fn create_command_name(pstmt: &PlannedStmt<'_>) -> &'static str {
+    use ::types_nodes::nodes_enums::LockClauseStrength::*;
     match pstmt.commandType {
-        CmdType::CMD_SELECT => "SELECT",
+        CmdType::CMD_SELECT => match pstmt
+            .rowMarks
+            .iter()
+            .next()
+            .and_then(|n| n.as_plan_row_mark())
+            .map(|r| r.strength)
+        {
+            Some(LCS_FORKEYSHARE) => "SELECT FOR KEY SHARE",
+            Some(LCS_FORSHARE) => "SELECT FOR SHARE",
+            Some(LCS_FORNOKEYUPDATE) => "SELECT FOR NO KEY UPDATE",
+            Some(LCS_FORUPDATE) => "SELECT FOR UPDATE",
+            _ => "SELECT",
+        },
         CmdType::CMD_INSERT => "INSERT",
         CmdType::CMD_UPDATE => "UPDATE",
         CmdType::CMD_DELETE => "DELETE",
@@ -974,12 +989,12 @@ pub fn standard_executor_start(qd: &mut QueryDescData, mut eflags: i32) -> PgRes
         // SAFETY: the registered params live in the portal context, which
         // outlives this executor state (PortalDrop frees the handle after
         // PortalCleanup's ExecutorEnd).
-        // [sqe-cursors] PL provenance (C: params->paramFetch != NULL):
-        // a hooked list is a PL's variable environment (plpgsql passes
-        // its whole datum table), not protocol bind values — the sqe
+        // [sqe-cursors] PL provenance: a PL-owned list is a PL's variable
+        // environment (plpgsql passes its whole datum table; a SQL
+        // function its arguments), not protocol bind values — the sqe
         // bind-params gate reads this bit (SPI posture, P6-4).
         es.es_param_list_hooked =
-            !params.is_null() && types_portal::params::is_fetch_hooked(params);
+            !params.is_null() && types_portal::params::is_pl_owned(params);
         es.es_param_list_info = if params.is_null() {
             None
         } else {
@@ -1422,7 +1437,7 @@ pub(crate) fn execute_plan<'m, 'mcx>(
     // sidecar stay aligned no matter which engine drove. Knob-OFF and
     // unarmed fills read one more None here, per RUN only.
     // World-B parallel passthrough funnel (gather-elimination Phase 2, Stage 3;
-    // default ON since the GL-FUNNEL-4 flip — PGRUST_RUNTIME_ROW_FUNNEL=0
+    // default ON since the regression flip — PGRUST_RUNTIME_ROW_FUNNEL=0
     // kills). Runs a lane-ownable bare passthrough SeqScan in parallel through
     // the runtime funnel and streams the rows to `dest` (dest.startup/shutdown
     // stay the caller's). Fail-closed: any ineligibility returns false and the
@@ -1431,7 +1446,7 @@ pub(crate) fn execute_plan<'m, 'mcx>(
     // clears parallelModeNeeded, so the funnel's own in-parallel-machinery
     // gate does the worker-side refusal.
     //
-    // GL-STMTTASK-2: the inline-execute run cargo (change 3: the borrowed
+    // regression: the inline-execute run cargo (change 3: the borrowed
     // seat; the quantum-yield span when the experiment is armed) — held
     // across the serial loop below when the statement-task hook answers
     // Inline; released at frame exit on every path (RAII).
@@ -1520,7 +1535,7 @@ pub(crate) fn execute_plan<'m, 'mcx>(
                 let Some(mut slot_id) = exec_proc_node(planstate, estate)? else {
                     break;
                 };
-                // Antithesis r10 SIGSEGV-0x26 class: the old premise here
+                // regression test SIGSEGV-0x26 class: the old premise here
                 // ("capture-armed fills are junk-free") is FALSE — the §4.1
                 // eligibility probe (plan_has_capturable_scan) accepts any
                 // Scan/Append/Result/Limit/SubqueryScan top, so an eligible
@@ -1786,6 +1801,8 @@ pub fn standard_executor_end(qd: &mut QueryDescData) -> PgResult<()> {
             // SAFETY: registered by exec_init_sub_plan_expr; dropped once here.
             unsafe { dropper(p) };
         }
+        estate.es_subplan_param_indexed = 0;
+        estate.es_subplan_param_index.clear();
         estate.exec_reset_tuple_table(false);
         estate.exec_close_result_relations();
         estate.exec_close_range_table_relations()?;

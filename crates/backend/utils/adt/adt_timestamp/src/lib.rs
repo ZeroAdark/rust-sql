@@ -683,16 +683,21 @@ fn require_session_timezone() -> &'static PgTz {
     tz::session_timezone().unwrap_or_else(|| no_session_timezone())
 }
 
+/// pg_mbcliplen in byte terms: the longest whole-character prefix of `s`
+/// within `limit` bytes (the whole slice when it already fits).
+pub fn mbcliplen(s: &[u8], limit: usize) -> usize {
+    if s.len() > limit {
+        mbutils::pg_mbcliplen(s, s.len() as i32, limit as i32) as usize
+    } else {
+        s.len()
+    }
+}
+
 // C text_to_cstring_buffer(zone, buf, TZ_STRLEN_MAX + 1): at most
 // TZ_STRLEN_MAX bytes, clipped at a character boundary, C-string semantics
 // end at an embedded NUL.
 fn text_to_tzname(zone: &[u8]) -> &[u8] {
-    let n = if zone.len() > TZ_STRLEN_MAX {
-        mbutils::pg_mbcliplen(zone, zone.len() as i32, TZ_STRLEN_MAX as i32) as usize
-    } else {
-        zone.len()
-    };
-    let z = &zone[..n];
+    let z = &zone[..mbcliplen(zone, TZ_STRLEN_MAX)];
     match z.iter().position(|&b| b == 0) {
         Some(i) => &z[..i],
         None => z,
@@ -1080,16 +1085,29 @@ fn type_name(is_tz: bool) -> &'static str {
     }
 }
 
+// timestamp.c:4841 (and its siblings) errmsg("unit \"%s\" ...", lowunits):
+// the unit's bytes verbatim (SQL_ASCII high bytes survive downcasing).
+#[track_caller]
+#[cold]
+pub(crate) fn unit_error(unit: &[u8], suffix: &str) -> PgError {
+    match core::str::from_utf8(unit) {
+        Ok(s) => PgError::error(format!("unit \"{s}\"{suffix}")),
+        Err(_) => {
+            let mut msg = b"unit \"".to_vec();
+            msg.extend_from_slice(unit);
+            msg.push(b'"');
+            msg.extend_from_slice(suffix.as_bytes());
+            PgError::error_raw_message(msg)
+        }
+    }
+}
+
 #[track_caller]
 #[cold]
 fn unit_not_supported(lowunits: &[u8], is_tz: bool) -> Box<PgError> {
     Box::new(
-        PgError::error(format!(
-            "unit \"{}\" not supported for type {}",
-            String::from_utf8_lossy(lowunits),
-            type_name(is_tz)
-        ))
-        .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
+        unit_error(lowunits, &format!(" not supported for type {}", type_name(is_tz)))
+            .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
     )
 }
 
@@ -1097,12 +1115,8 @@ fn unit_not_supported(lowunits: &[u8], is_tz: bool) -> Box<PgError> {
 #[cold]
 fn unit_not_recognized(lowunits: &[u8], is_tz: bool) -> Box<PgError> {
     Box::new(
-        PgError::error(format!(
-            "unit \"{}\" not recognized for type {}",
-            String::from_utf8_lossy(lowunits),
-            type_name(is_tz)
-        ))
-        .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE),
+        unit_error(lowunits, &format!(" not recognized for type {}", type_name(is_tz)))
+            .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE),
     )
 }
 

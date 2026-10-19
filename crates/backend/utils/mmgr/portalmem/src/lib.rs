@@ -479,9 +479,49 @@ pub fn PortalDefineQuery(
         Some(s) => Some(PgString::from_str_in(s, mcx)?),
         None => None,
     };
-    p.sourceText = Some(PgString::from_str_in(sourceText, mcx)?);
+    // SAFETY: bytes copied from a `&str` are valid UTF-8; the copy lives in
+    // TopPortalContext for the portal's lifetime.
+    let copy: &'static [u8] = mcx::slice_in(mcx, sourceText.as_bytes())?.leak();
+    p.sourceText = Some(unsafe { core::str::from_utf8_unchecked(copy) });
     p.status = PORTAL_DEFINED;
     Ok(())
+}
+
+/// `PortalDefineQuery` for a caller whose source text outlives the portal.
+/// This is C's own contract — `portal->sourceText = sourceText` shares the
+/// caller's pointer — and avoids copying a whole multi-statement message
+/// once per statement (exec_simple_query's 25 000-INSERT scripts were 79%
+/// memmove before this).
+///
+/// The portal registry stores `Portal<'static>`, so the borrow's lifetime is
+/// extended here, in the one place that states the rule, rather than at the
+/// call site.
+///
+/// # Safety
+/// `sourceText` must outlive the portal: it must stay valid and unmoved until
+/// `PortalDrop` runs for `portal`. For exec_simple_query the text is the
+/// MessageContext message and the unnamed portal is dropped — on success in
+/// the statement loop, on error by `error_recovery`'s AbortCurrentTransaction
+/// — before the main loop resets MessageContext for the next message.
+pub unsafe fn PortalDefineQuerySharedText<'a>(
+    portal: &Portal<'static>,
+    sourceText: &'a str,
+    commandTag: CommandTag,
+    stmts: StmtListHandle,
+    cplan: CachedPlanHandle,
+) {
+    // SAFETY: the caller guarantees `sourceText` outlives the portal (see
+    // above); this is the only lifetime extension for `sourceText`.
+    let shared: &'static str = unsafe { core::mem::transmute::<&'a str, &'static str>(sourceText) };
+    let mut p = portal.borrow_mut();
+    debug_assert_eq!(p.status, PORTAL_NEW);
+    p.stmts = stmts;
+    p.cplan = cplan;
+    p.qc = QueryCompletion { commandTag, nprocessed: 0 };
+    p.commandTag = commandTag;
+    p.prepStmtName = None;
+    p.sourceText = Some(shared);
+    p.status = PORTAL_DEFINED;
 }
 
 fn PortalReleaseCachedPlan(portal: &Portal<'static>) {
@@ -994,6 +1034,8 @@ pub fn TakeParkedPortal(plansource: PlanSourceHandle) -> PgResult<Option<Portal<
         }
         None => PgBox::new_in(m.top.new_child("PortalContext"), m.top.mcx()),
     })?;
+    // portalmem.c:225: the reused unnamed portal is identified like a fresh one.
+    portal_context.set_ident(Some("<unnamed>"));
     {
         let mut p = shell.borrow_mut();
         debug_assert!(p.name.is_empty() && p.status == PORTAL_NEW);
@@ -1400,7 +1442,7 @@ pub fn pg_cursor_rows<'a>(mcx: Mcx<'a>) -> PgResult<PgVec<'a, PgCursorRow<'a>>> 
             let Some(source_text) = &p.sourceText else { continue };
             rows.push(PgCursorRow {
                 name: p.name.clone_in(mcx)?,
-                statement: source_text.clone_in(mcx)?,
+                statement: PgString::from_str_in(source_text, mcx)?,
                 is_holdable: (p.cursorOptions & CURSOR_OPT_HOLD) != 0,
                 is_binary: (p.cursorOptions & CURSOR_OPT_BINARY) != 0,
                 is_scrollable: (p.cursorOptions & CURSOR_OPT_SCROLL) != 0,

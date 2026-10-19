@@ -1,0 +1,61 @@
+-- bugs/batch-194-backend-commands-tsearchcmds: SQL-level regressions, expected captured from C 18.6.
+\set VERBOSITY verbose
+-- regression / regression / regression / regression /
+-- regression: the init method reads an option's value only when it asks
+-- for it (defGetString), so an unknown valueless option is 22023, a known one 42601, and
+-- a valueless boolean (defGetBoolean) means true.
+CREATE TEXT SEARCH DICTIONARY b194_d (TEMPLATE = simple, bogus);
+ERROR:  22023: unrecognized simple dictionary parameter: "bogus"
+CREATE TEXT SEARCH DICTIONARY b194_d (TEMPLATE = simple, stopwords);
+ERROR:  42601: stopwords requires a parameter
+CREATE TEXT SEARCH DICTIONARY b194_d (TEMPLATE = simple, accept, bogus);
+ERROR:  22023: unrecognized simple dictionary parameter: "bogus"
+CREATE TEXT SEARCH DICTIONARY b194_d (TEMPLATE = simple, accept);
+ERROR:  42601: accept requires a parameter
+CREATE TEXT SEARCH DICTIONARY b194_d (TEMPLATE = simple, stopwords = 'english', stopwords);
+ERROR:  22023: multiple StopWords parameters
+CREATE TEXT SEARCH DICTIONARY b194_d (TEMPLATE = snowball, language = english, bogus);
+ERROR:  22023: unrecognized Snowball parameter: "bogus"
+CREATE TEXT SEARCH DICTIONARY b194_d (TEMPLATE = snowball, language);
+ERROR:  42601: language requires a parameter
+CREATE TEXT SEARCH DICTIONARY b194_d (TEMPLATE = synonym, bogus);
+ERROR:  22023: unrecognized synonym parameter: "bogus"
+CREATE TEXT SEARCH DICTIONARY b194_d (TEMPLATE = synonym, synonyms = synonym_sample, casesensitive);
+ERROR:  42601: casesensitive requires a parameter
+CREATE TEXT SEARCH DICTIONARY b194_d (TEMPLATE = thesaurus, bogus);
+ERROR:  22023: unrecognized Thesaurus parameter: "bogus"
+CREATE TEXT SEARCH DICTIONARY b194_d (TEMPLATE = ispell, bogus);
+ERROR:  22023: unrecognized Ispell parameter: "bogus"
+CREATE EXTENSION unaccent;
+CREATE TEXT SEARCH DICTIONARY b194_d (TEMPLATE = unaccent, bogus);
+ERROR:  22023: unrecognized Unaccent parameter: "bogus"
+CREATE TEXT SEARCH DICTIONARY b194_d (TEMPLATE = unaccent, rules);
+ERROR:  42601: rules requires a parameter
+CREATE TEXT SEARCH DICTIONARY b194_d2 (TEMPLATE = simple);
+ALTER TEXT SEARCH DICTIONARY b194_d2 (bogus);
+ALTER TEXT SEARCH DICTIONARY b194_d2 (accept, bogus);
+ALTER TEXT SEARCH DICTIONARY b194_d2 (stopwords);
+SELECT dictinitoption FROM pg_ts_dict WHERE dictname = 'b194_d2';
+ dictinitoption 
+----------------
+ 
+(1 row)
+
+-- regression: an internal-language alias of void_send as a template
+-- init method runs with an active allocation context (OidFunctionCall1).
+CREATE FUNCTION b194_init(internal) RETURNS internal LANGUAGE internal AS 'void_send';
+CREATE TEXT SEARCH TEMPLATE b194_t (INIT = b194_init, LEXIZE = dsimple_lexize);
+CREATE TEXT SEARCH DICTIONARY b194_d3 (TEMPLATE = b194_t, anything = 1);
+SELECT dictinitoption FROM pg_ts_dict WHERE dictname = 'b194_d3';
+ dictinitoption 
+----------------
+ anything = 1
+(1 row)
+
+ALTER TEXT SEARCH DICTIONARY b194_d3 (other = 2);
+SELECT dictinitoption FROM pg_ts_dict WHERE dictname = 'b194_d3';
+     dictinitoption      
+-------------------------
+ anything = 1, other = 2
+(1 row)
+

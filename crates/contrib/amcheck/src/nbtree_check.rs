@@ -18,7 +18,7 @@ use ::types_core::{
     XLogRecPtr, BLCKSZ, BTREE_AM_OID, INDEX_MAX_KEYS,
 };
 use ::types_error::{
-    PgError, PgResult, DEBUG1, ERRCODE_DATA_CORRUPTED, ERRCODE_FEATURE_NOT_SUPPORTED,
+    PgError, PgResult, DEBUG1, DEBUG2, ERRCODE_DATA_CORRUPTED, ERRCODE_FEATURE_NOT_SUPPORTED,
     ERRCODE_INDEX_CORRUPTED, ERRCODE_INTERNAL_ERROR, ERRCODE_NO_DATA,
     ERRCODE_T_R_SERIALIZATION_FAILURE,
 };
@@ -687,6 +687,16 @@ fn bt_target_page_check(state: &mut BtreeCheckState<'_>) -> PgResult<()> {
     };
     let is_leaf = P_ISLEAF(&topaque);
     let is_rightmost = P_RIGHTMOST(&topaque);
+
+    // verify_nbtree.c:1253
+    elog_seams::ereport::call(PgError::new(
+        DEBUG2,
+        format!(
+            "verifying {max} items on {} block {}",
+            if is_leaf { "leaf" } else { "internal" },
+            state.targetblock
+        ),
+    ))?;
 
     if !is_rightmost {
         let _itemid =
@@ -1880,7 +1890,8 @@ fn bt_tuple_present_callback(
 
 
 fn heap_entry_is_visible(state: &BtreeCheckState<'_>, tid: &ItemPointerData) -> PgResult<bool> {
-    let mcx = state.mcx;
+    // C's slot lives in the per-page targetcontext (verify_nbtree.c:858-863).
+    let mcx = state.scratch.mcx();
     let mut slot = ::tableam::table_slot_create(mcx, &state.heaprel)?;
     let visible = ::tableam::table_tuple_fetch_row_version(
         mcx,

@@ -93,8 +93,12 @@ pub fn fold_pg_statistic(
     }
     let mut by_count: Vec<(&[u8], u64)> = merged.into_iter().collect();
     by_count.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    // analyze.c: a value seen once is never a most-common value, and with
+    // no repeated value at all the column is taken as unique.
+    let no_repeats = !by_count.is_empty() && by_count[0].1 <= 1;
     let sta_mcv: Vec<(Vec<u8>, f64)> = by_count
         .iter()
+        .filter(|(_, c)| *c >= 2)
         .take(crate::format::sidecar::STATS_MCV_K)
         .map(|(v, c)| (v.to_vec(), *c as f64 / total_rows as f64))
         .collect();
@@ -149,7 +153,7 @@ pub fn fold_pg_statistic(
     Some(PgStatColumn {
         stanullfrac,
         stawidth,
-        stadistinct: ndv_estimate,
+        stadistinct: if no_repeats { total_nonnull as f64 } else { ndv_estimate },
         sta_mcv,
         sta_histogram,
         stacorrelation,
@@ -251,5 +255,26 @@ mod tests {
         .expect("fold");
         assert_eq!(out.sta_mcv[0], (b"x".to_vec(), 0.7), "counts sum by value");
         assert_eq!(out.stacorrelation, 0.0);
+    }
+
+    #[test]
+    fn unique_column_has_no_mcv_and_counts_every_value() {
+        let r = rec(100, Sortedness::Ascending, 0);
+        let sketch = ColDistribution {
+            nonnull: 100,
+            ndv_eligible: 100,
+            long_values: 0,
+            mcv: (1u8..=32).map(|v| (vec![v], 1)).collect(),
+            hist_bounds: vec![vec![1], vec![50], vec![100]],
+        };
+        let out = fold_pg_statistic(
+            &[PartColInput { part_record: &r, rows: 100, sketch: Some(&sketch) }],
+            99.0,
+            false,
+        )
+        .expect("fold");
+        assert!(out.sta_mcv.is_empty());
+        assert_eq!(out.stadistinct, 100.0);
+        assert_eq!(out.sta_histogram.len(), 3);
     }
 }

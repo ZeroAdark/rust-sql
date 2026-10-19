@@ -24,12 +24,10 @@ enum DsState {
 #[track_caller]
 #[cold]
 fn bad_format(input: &[u8]) -> Box<PgError> {
-    PgError::error(format!(
-        "invalid parameter list format: \"{}\"",
-        String::from_utf8_lossy(input)
-    ))
-    .with_sqlstate(ERRCODE_SYNTAX_ERROR)
-    .into()
+    let mut msg = b"invalid parameter list format: \"".to_vec();
+    msg.extend_from_slice(input);
+    msg.push(b'"');
+    PgError::error_raw_message(msg).with_sqlstate(ERRCODE_SYNTAX_ERROR).into()
 }
 
 // buildDefItem (tsearchcmds.c): unquoted values try integer (i32, exact, with

@@ -95,9 +95,19 @@ fn int4_ge_key(attno: AttrNumber, value: i32) -> ScanKeyData {
 fn open_lo_relation<'mcx>(mcx: Mcx<'mcx>) -> PgResult<(Relation<'mcx>, Relation<'mcx>)> {
     // C caches these in statics until xact end; the relcache makes per-op
     // opens equivalent, and the NoLock closes retain the lock to xact end.
-    let lo_heap_r = table::table_open(mcx, LargeObjectRelationId, RowExclusiveLock)?;
-    let lo_index_r = indexam::index_open(mcx, LargeObjectLOidPNIndexId, RowExclusiveLock)?;
-    Ok((lo_heap_r, lo_index_r))
+    // The locks belong to the top transaction (inv_api.c:82-88), so a
+    // subtransaction abort does not release them.
+    let current_owner = resowner::CurrentResourceOwner();
+    resowner::SetCurrentResourceOwner(resowner::TopTransactionResourceOwner());
+    let opened = table::table_open(mcx, LargeObjectRelationId, RowExclusiveLock).and_then(
+        |lo_heap_r| {
+            let lo_index_r =
+                indexam::index_open(mcx, LargeObjectLOidPNIndexId, RowExclusiveLock)?;
+            Ok((lo_heap_r, lo_index_r))
+        },
+    );
+    resowner::SetCurrentResourceOwner(current_owner);
+    opened
 }
 
 pub fn close_lo_relation(_isCommit: bool) -> PgResult<()> {

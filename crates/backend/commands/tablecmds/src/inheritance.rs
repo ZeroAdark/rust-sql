@@ -848,7 +848,7 @@ pub(crate) fn store_inherited_checks<'mcx>(
             }
         }
         let mut entry = pg_constraint::ConstraintEntry::base(
-            check.name,
+            check.name.as_bytes(),
             rel.rd_rel.relnamespace,
             pg_constraint::CONSTRAINT_CHECK,
             relation_id,
@@ -1229,6 +1229,13 @@ pub(crate) fn CreateInheritance<'mcx>(
             pg_depend::DependencyType::Normal
         },
     )?;
+    objectaccess::InvokeObjectPostAlterHookArg(
+        pg_inherits::InheritsRelationId,
+        child_rel.rd_id,
+        0,
+        parent_rel.rd_id,
+        false,
+    )?;
     crate::partition::SetRelationHasSubclass(mcx, parent_rel.rd_id, true)
 }
 
@@ -1239,6 +1246,11 @@ fn MergeAttributesIntoExisting<'mcx>(
     parent_rel: &Relation<'mcx>,
     ispartition: bool,
 ) -> PgResult<()> {
+    let attrrel = table::table_open(
+        mcx,
+        types_core::ATTRIBUTE_RELATION_ID,
+        types_rel::RowExclusiveLock,
+    )?;
     let parent_desc = parent_rel.descr();
     let child_desc = child_rel.descr();
     let child_name = child_rel.name().to_string();
@@ -1352,7 +1364,7 @@ fn MergeAttributesIntoExisting<'mcx>(
         }
         crate::alter::update_pg_attribute(mcx, child_rel.rd_id, child_attno, &fields)?;
     }
-    Ok(())
+    attrrel.close(types_rel::RowExclusiveLock)
 }
 
 struct ConRow {

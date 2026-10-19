@@ -20,6 +20,12 @@ pub struct PgpContext {
     pub debug: i32,
     pub debug_notices: Vec<String>,
     pub unexpected_binary: bool,
+    pub corrupt_prefix: bool,
+    pub unsupported_compr: bool,
+    /// mbuf.c:79 prepare_room: the output MBuf's capacity (pgp-pgsql.c:479
+    /// sizes it from the input); literal data grows it by 2*STEP at a time
+    /// and past MaxAllocSize that is mcxt.c's alloc-size error.
+    pub mbuf_cap: usize,
 
     pub expect: bool,
     pub exp_cipher_algo: i32,
@@ -52,6 +58,9 @@ impl Default for PgpContext {
             debug: 0,
             debug_notices: Vec::new(),
             unexpected_binary: false,
+            corrupt_prefix: false,
+            unsupported_compr: false,
+            mbuf_cap: usize::MAX,
             expect: false,
             exp_cipher_algo: -1,
             exp_s2k_mode: -1,
@@ -173,20 +182,28 @@ impl PgpContext {
                 }
                 _ => false,
             };
-            let mut acc: i64 = 0;
+            // atoi is (int) strtol: the long saturates at LONG_MIN/LONG_MAX,
+            // then truncates to int ("4294967299" -> 3, LONG_MAX -> -1).
+            let mut acc: u64 = 0;
             while i < b.len() && b[i].is_ascii_digit() {
-                acc = (acc * 10 + i64::from(b[i] - b'0')).min(i64::from(i32::MAX) + 1);
+                acc = acc.saturating_mul(10).saturating_add(u64::from(b[i] - b'0'));
                 i += 1;
             }
-            let v = if neg { -acc } else { acc };
-            v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+            let v = if neg {
+                i64::try_from(acc).map_or(i64::MIN, |a| a.checked_neg().unwrap_or(i64::MIN))
+            } else {
+                i64::try_from(acc).unwrap_or(i64::MAX)
+            };
+            v as i32
         };
+        // pgp.c:225-245 / :348: the boolean setters store `x ? 1 : 0`.
+        let flag = |v: &str| i32::from(atoi(v) != 0);
         match key {
             "cipher-algo" => {
                 self.cipher_algo = cipher_code(val).ok_or(UNSUPPORTED_CIPHER.to_string())?;
             }
-            "disable-mdc" => self.disable_mdc = atoi(val),
-            "sess-key" => self.use_sess_key = atoi(val),
+            "disable-mdc" => self.disable_mdc = flag(val),
+            "sess-key" => self.use_sess_key = flag(val),
             "s2k-mode" => {
                 let m = atoi(val);
                 if m != PGP_S2K_SIMPLE && m != PGP_S2K_SALTED && m != PGP_S2K_ISALTED {
@@ -225,10 +242,10 @@ impl PgpContext {
                 }
                 self.compress_level = l;
             }
-            "convert-crlf" => self.convert_crlf = atoi(val),
-            "unicode-mode" => self.unicode_mode = atoi(val),
+            "convert-crlf" => self.convert_crlf = flag(val),
+            "unicode-mode" => self.unicode_mode = flag(val),
             // upstream 4c5128ca0b30 (18.6): pgcrypto: Add option to revert to prior decryption behavior
-            "ignore-cipher-failure" => self.ignore_cipher_failure = i32::from(atoi(val) != 0),
+            "ignore-cipher-failure" => self.ignore_cipher_failure = flag(val),
             "debug" => self.debug = atoi(val),
             "expect-cipher-algo" => {
                 self.expect = true;
@@ -377,5 +394,50 @@ mod parse_args_tests {
             PgpContext::default().parse_args(b"ignore-cipher-failure=").unwrap_err(),
             "Illegal argument to function"
         );
+    }
+
+    /// pgp-pgsql.c:176 set_arg feeds atoi(val) = (int) strtol(val): a 64-bit
+    /// long truncates to int, and beyond LONG_MAX/LONG_MIN it saturates first.
+    #[test]
+    fn atoi_truncates_like_int_strtol() {
+        let mut c = PgpContext::default();
+        c.parse_args(b"s2k-mode=4294967299, compress-algo=4294967297, s2k-count=4294968320, compress-level=4294967301")
+            .unwrap();
+        assert_eq!((c.s2k_mode, c.compress_algo, c.s2k_count, c.compress_level), (3, 1, 1024, 5));
+        let mut c = PgpContext::default();
+        c.parse_args(b"s2k-mode=-4294967293, compress-algo=4294967296").unwrap();
+        assert_eq!((c.s2k_mode, c.compress_algo), (3, 0));
+        let mut c = PgpContext::default();
+        c.parse_args(b"s2k-mode=-99999999999999999999").unwrap();
+        assert_eq!(c.s2k_mode, 0);
+        for (arg, want) in [
+            (&b"expect-s2k-count=2147483647"[..], 2147483647),
+            (&b"expect-s2k-count=2147483648"[..], -2147483648),
+            (&b"expect-s2k-count=-2147483649"[..], 2147483647),
+            (&b"expect-s2k-count=9223372036854775807"[..], -1),
+            (&b"expect-s2k-count=99999999999999999999"[..], -1),
+            (&b"expect-s2k-count=-9223372036854775808"[..], 0),
+            (&b"expect-s2k-count=-99999999999999999999"[..], 0),
+        ] {
+            let mut c = PgpContext::default();
+            c.parse_args(arg).unwrap();
+            assert_eq!(c.exp_s2k_count, want, "{}", String::from_utf8_lossy(arg));
+        }
+        const ARG: &str = "Illegal argument to function";
+        let mut c = PgpContext::default();
+        assert_eq!(c.parse_args(b"s2k-mode=9223372036854775807").unwrap_err(), ARG);
+        assert_eq!(c.parse_args(b"s2k-mode=99999999999999999999").unwrap_err(), ARG);
+    }
+
+    /// pgp.c:225-245/:348: sess-key, disable-mdc, convert-crlf and
+    /// unicode-mode are stored as `x ? 1 : 0`.
+    #[test]
+    fn boolean_setters_normalise_to_0_or_1() {
+        let mut c = PgpContext::default();
+        c.parse_args(b"sess-key=5, disable-mdc=-2, convert-crlf=7, unicode-mode=4294967296").unwrap();
+        assert_eq!((c.use_sess_key, c.disable_mdc, c.convert_crlf, c.unicode_mode), (1, 1, 1, 0));
+        let mut c = PgpContext::default();
+        c.parse_args(b"expect-sess-key=5").unwrap();
+        assert_eq!(c.exp_use_sess_key, 5);
     }
 }

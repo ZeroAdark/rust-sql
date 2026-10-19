@@ -6,6 +6,7 @@ use mcx::{Mcx, MemoryContext, PgFxHashMap, PgVec};
 use types_core::{InvalidOid, Oid};
 use types_error::{PgError, PgResult};
 
+use crate::dynahash_order::DynaHash;
 use crate::{ComputeStats, FetchSource, StdCompute, VacAttrStats, STATISTIC_NUM_SLOTS};
 
 pub(crate) const STATISTIC_KIND_MCELEM: i16 = 4;
@@ -44,16 +45,25 @@ pub(crate) fn setup(stats: &mut VacAttrStats<'_>) -> PgResult<bool> {
     Ok(true)
 }
 
-#[derive(Clone, Copy)]
-struct TrackItem {
+struct TrackItem<'k> {
     key: Datum,
-    hash: u32,
+    // Owns a by-reference key; None once pruned (array_typanalyze.c:698 pfree).
+    key_buf: Option<PgVec<'k, u8>>,
     frequency: i32,
     delta: i32,
     last_container: i32,
 }
 
-type Buckets<'col> = PgFxHashMap<'col, u32, PgVec<'col, i32>>;
+// array_typanalyze.c:733 trackCmp.
+fn track_cmp(a: i32, b: i32) -> i32 {
+    if a == b {
+        0
+    } else if a > b {
+        -1
+    } else {
+        1
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_array_stats<'mcx>(
@@ -105,8 +115,11 @@ pub(crate) fn compute_array_stats<'mcx>(
     let num_mcelem_target = stats.attstattarget * 10;
     let bucket_width = num_mcelem_target * 1000 / 7;
 
-    let mut items: PgVec<'_, TrackItem> = PgVec::new_in(col_mcx);
-    let mut buckets: Buckets<'_> = PgFxHashMap::with_hasher_in(Default::default(), col_mcx);
+    // aset: pruned key copies and chain growth free per C's pfree.
+    let key_cx = col_mcx.context().new_child("compute_array_stats keys");
+    let key_mcx = key_cx.mcx();
+    let mut items: PgVec<'_, TrackItem<'_>> = PgVec::new_in(col_mcx);
+    let mut elements_tab = DynaHash::new(key_mcx, num_mcelem_target as i64)?;
     let mut count_tab: PgFxHashMap<'_, i32, i32> =
         PgFxHashMap::with_hasher_in(Default::default(), col_mcx);
 
@@ -158,17 +171,16 @@ pub(crate) fn compute_array_stats<'mcx>(
                     continue;
                 }
                 let h = hash_elem(elem_value)?;
-                let bucket = buckets.entry(h).or_insert_with(|| PgVec::new_in(col_mcx));
                 let mut found = None;
-                for &idx in bucket.iter() {
-                    if cmp_elems(items[idx as usize].key, elem_value)? == 0 {
-                        found = Some(idx);
+                for &(hh, id) in elements_tab.enter(h)? {
+                    if hh == h && cmp_elems(items[id as usize].key, elem_value)? == 0 {
+                        found = Some(id as usize);
                         break;
                     }
                 }
                 match found {
                     Some(idx) => {
-                        let it = &mut items[idx as usize];
+                        let it = &mut items[idx];
                         if it.last_container == array_no {
                             continue;
                         }
@@ -176,20 +188,22 @@ pub(crate) fn compute_array_stats<'mcx>(
                         it.last_container = array_no;
                     }
                     None => {
-                        let key = crate::datum_copy_in(col_mcx, elem_value, typbyval, typlen)?;
-                        bucket.push(items.len() as i32);
+                        let (key, key_buf) =
+                            crate::datum_copy_owned(key_mcx, elem_value, typbyval, typlen)?;
+                        let id = items.len() as u32;
                         items.push(TrackItem {
                             key,
-                            hash: h,
+                            key_buf,
                             frequency: 1,
                             delta: b_current - 1,
                             last_container: array_no,
                         });
+                        elements_tab.insert(h, id);
                     }
                 }
                 element_no += 1;
                 if element_no % bucket_width as i64 == 0 {
-                    prune_element_table(&mut items, &mut buckets, b_current, col_mcx);
+                    prune_element_table(&mut items, &mut elements_tab, b_current);
                     b_current += 1;
                 }
             }
@@ -217,12 +231,14 @@ pub(crate) fn compute_array_stats<'mcx>(
         let nonnull_cnt = analyzed_rows;
         let cutoff_freq = 9 * element_no / bucket_width as i64;
 
-        let mut sort_idx: PgVec<'_, i32> = mcx::vec_with_capacity_in(col_mcx, items.len())?;
+        let mut sort_idx: PgVec<'_, u32> =
+            mcx::vec_with_capacity_in(col_mcx, elements_tab.len())?;
         let mut minfreq = element_no;
         let mut maxfreq = 0i64;
-        for (i, it) in items.iter().enumerate() {
+        for id in elements_tab.seq() {
+            let it = &items[id as usize];
             if it.frequency as i64 > cutoff_freq {
-                sort_idx.push(i as i32);
+                sort_idx.push(id);
                 minfreq = minfreq.min(it.frequency as i64);
                 maxfreq = maxfreq.max(it.frequency as i64);
             }
@@ -237,18 +253,20 @@ pub(crate) fn compute_array_stats<'mcx>(
                 num_mcelem_target,
                 bucket_width,
                 element_no,
-                items.len(),
+                elements_tab.len(),
                 track_len
             ))
             .finish(types_error::ErrorLocation::new(file!(), line!() as i32, "compute_array_stats"))?;
 
         let mut num_mcelem = num_mcelem_target;
         if num_mcelem < track_len {
-            // C's qsort tie order is hash-iteration-dependent; ties at the
-            // truncation boundary can keep a different (equal-frequency) set.
-            sort_idx.sort_unstable_by(|&a, &b| {
-                items[b as usize].frequency.cmp(&items[a as usize].frequency)
-            });
+            // array_typanalyze.c:503 qsort_interruptible(trackCmp) over the
+            // hash_seq order: equal frequencies at the cutoff keep C's set.
+            ::pg_qsort::pg_qsort_interruptible(
+                &mut sort_idx[..],
+                |&a, &b| track_cmp(items[a as usize].frequency, items[b as usize].frequency),
+                postgres_seams::check_for_interrupts::call,
+            )?;
             minfreq = items[sort_idx[num_mcelem as usize - 1] as usize].frequency as i64;
         } else {
             num_mcelem = track_len;
@@ -297,7 +315,20 @@ pub(crate) fn compute_array_stats<'mcx>(
             for (&count, &freq) in count_tab.iter() {
                 sorted_counts.push((count, freq));
             }
-            sorted_counts.sort_unstable_by_key(|&(c, _)| c);
+            // array_typanalyze.c:600 qsort_interruptible(countitem_compare_count).
+            ::pg_qsort::pg_qsort_interruptible(
+                &mut sorted_counts[..],
+                |a, b| {
+                    if a.0 < b.0 {
+                        -1
+                    } else if a.0 == b.0 {
+                        0
+                    } else {
+                        1
+                    }
+                },
+                postgres_seams::check_for_interrupts::call,
+            )?;
 
             let mut hist: PgVec<'mcx, f32> =
                 mcx::vec_with_capacity_in(anl_mcx, num_hist as usize + 1)?;
@@ -324,20 +355,15 @@ pub(crate) fn compute_array_stats<'mcx>(
     Ok(())
 }
 
-// Pruned keys stay in the column bump until its reset (C pfrees per prune);
-// the retained-set bound is C's, the leak is bounded by total sampled bytes.
-fn prune_element_table<'col>(
-    items: &mut PgVec<'col, TrackItem>,
-    buckets: &mut Buckets<'col>,
-    b_current: i32,
-    col_mcx: Mcx<'col>,
-) {
-    items.retain(|it| it.frequency + it.delta > b_current);
-    buckets.clear();
-    for (i, it) in items.iter().enumerate() {
-        buckets
-            .entry(it.hash)
-            .or_insert_with(|| PgVec::new_in(col_mcx))
-            .push(i as i32);
-    }
+// array_typanalyze.c:681 prune_element_hashtable: HASH_REMOVE + pfree of the
+// discarded keys (the aset child releases them).
+fn prune_element_table(items: &mut [TrackItem<'_>], elements_tab: &mut DynaHash<'_>, b_current: i32) {
+    elements_tab.prune(|id| {
+        let it = &mut items[id as usize];
+        let keep = it.frequency + it.delta > b_current;
+        if !keep {
+            it.key_buf = None;
+        }
+        keep
+    });
 }

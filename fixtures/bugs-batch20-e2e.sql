@@ -5,7 +5,7 @@
 CREATE DATABASE b20e2e TEMPLATE template0 ENCODING 'UTF8';
 \c b20e2e
 \set VERBOSITY verbose
--- fp-executor-execExprInterp-p2#1: FieldStore re-forms through HeapTupleGetDatum (external TOAST flattened)
+-- regression: FieldStore re-forms through HeapTupleGetDatum (external TOAST flattened)
 CREATE TYPE b20_comp AS (f text);
 CREATE TABLE b20_src(t text);
 ALTER TABLE b20_src ALTER COLUMN t SET STORAGE EXTERNAL;
@@ -17,10 +17,10 @@ DROP TABLE b20_src;
 SELECT length((c).f), md5((c).f) FROM b20_dst;
 DROP TABLE b20_dst;
 DROP TYPE b20_comp;
--- fp-adt-arrayfuncs-p1#2: slices of fixed-length arrays error before the datum is read as varlena
+-- regression: slices of fixed-length arrays error before the datum is read as varlena
 SELECT ('(1.0000000000000002,2)'::point)[0:1];
 SELECT ('(1,2)'::point)[0:1];
--- fp-executor-execExpr-p1#1 / -p2#1 / execExprInterp-p1#1: DISTINCT and NULLIF over a tracked function
+-- regression / -p2#1 / execExprInterp-p1#1: DISTINCT and NULLIF over a tracked function
 CREATE SCHEMA b20s;
 CREATE FUNCTION b20s.eq(integer, integer) RETURNS boolean LANGUAGE SQL VOLATILE AS 'SELECT $1 OPERATOR(pg_catalog.=) $2';
 CREATE OPERATOR b20s.= (LEFTARG = integer, RIGHTARG = integer, FUNCTION = b20s.eq);
@@ -33,7 +33,7 @@ SELECT NULLIF(x, 2), x IS DISTINCT FROM 2 FROM (VALUES (1), (2)) v(x) ORDER BY x
 RESET search_path;
 RESET track_functions;
 DROP SCHEMA b20s CASCADE;
--- fp-executor-execExpr-p1#2: SQL/JSON constructors keep the full argument count
+-- regression: SQL/JSON constructors keep the full argument count
 DO $$
 DECLARE n int; l int;
 BEGIN
@@ -41,7 +41,7 @@ BEGIN
   EXECUTE 'SELECT length(JSON_OBJECT(' || repeat('''k'':1,', 65535) || '''k'':1)::text)' INTO l;
   RAISE NOTICE 'json_array_length=% json_object_length=%', n, l;
 END $$;
--- fp-executor-execExpr-p2#2 / execExprInterp-p3#1 / nodeAgg-p1#2: SubPlans in DISTINCT / ORDER BY aggregate arguments
+-- regression / execExprInterp-p3#1 / nodeAgg-p1#2: SubPlans in DISTINCT / ORDER BY aggregate arguments
 CREATE TABLE b20_t(x integer);
 INSERT INTO b20_t VALUES (1), (2);
 SET enable_presorted_aggregate = off;
@@ -50,7 +50,7 @@ SELECT count(DISTINCT (SELECT b.x FROM (VALUES (1), (2)) AS b(x) WHERE b.x = a.x
 SELECT array_agg((SELECT t.x OFFSET 0) ORDER BY t.x) FROM (VALUES (2), (1)) AS t(x);
 RESET enable_presorted_aggregate;
 DROP TABLE b20_t;
--- fp-executor-execExprInterp-p1#2: IS [NOT] NULL on a named composite refreshes after ALTER TYPE
+-- regression: IS [NOT] NULL on a named composite refreshes after ALTER TYPE
 CREATE TYPE b20_pair AS (a int, b int);
 CREATE FUNCTION b20_f(i int) RETURNS text LANGUAGE plpgsql VOLATILE AS $$
 BEGIN
@@ -61,7 +61,7 @@ END $$;
 SELECT g, b20_f(g)::b20_pair IS NOT NULL FROM generate_series(1, 2) g;
 DROP FUNCTION b20_f(int);
 DROP TYPE b20_pair;
--- fp-nodes-nodeFuncs-p1#1: anonymous RowExpr fields carry the length-coercion typmod
+-- regression: anonymous RowExpr fields carry the length-coercion typmod
 CREATE TABLE b20_typmod(s text);
 INSERT INTO b20_typmod VALUES ('abc');
 CREATE FUNCTION b20_probe(r record) RETURNS text LANGUAGE plpgsql AS $$
@@ -71,14 +71,14 @@ END $$;
 SELECT b20_probe(ROW(s::varchar(3))), b20_probe(ROW(s::varchar(10))) FROM b20_typmod;
 DROP FUNCTION b20_probe(record);
 DROP TABLE b20_typmod;
--- fp-parser-parse_agg#1: the transition FuncExpr keeps agg_variadic
+-- regression: the transition FuncExpr keeps agg_variadic
 CREATE AGGREGATE b20_agg_ws(VARIADIC "any") (SFUNC = concat_ws, STYPE = text, INITCOND = ',');
 SELECT b20_agg_ws(VARIADIC ARRAY['a', 'b']);
 SELECT b20_agg_ws(VARIADIC ARRAY['a', 'b']) FROM generate_series(1, 2);
 SELECT b20_agg_ws(VARIADIC ARRAY['a', 'b'] ORDER BY 1) FROM generate_series(1, 2);
 SELECT b20_agg_ws('a', 'b');
 DROP AGGREGATE b20_agg_ws(VARIADIC "any");
--- fp-common-b1#1: ConvertRowtypeExpr converts (not relabels) when the input has fast-default columns
+-- regression: ConvertRowtypeExpr converts (not relabels) when the input has fast-default columns
 CREATE TABLE b20_p(a int);
 CREATE TABLE b20_c(a int);
 DO $$

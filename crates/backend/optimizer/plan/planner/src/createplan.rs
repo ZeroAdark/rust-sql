@@ -1276,8 +1276,8 @@ pub fn make_foreignscan<'mcx>(
 }
 
 // create_worktablescan_plan (createplan.c): the wt param ID comes from the
-// cteroot, resolved at set_worktable_pathlist time (the parent-root chain is
-// detached here; see PlannerInfo.self_ref_wt_param).
+// cteroot, resolved per RTE at set_worktable_pathlist time (the parent-root
+// chain is detached here; see PlannerInfo.self_ref_wt_params).
 fn create_worktablescan_plan<'mcx>(
     run: &mut PlannerRun<'mcx>,
     best_path: PathId,
@@ -1291,7 +1291,12 @@ fn create_worktablescan_plan<'mcx>(
     let rte = run.rte(scan_relid as usize);
     debug_assert!(rte.rtekind == types_nodes::parsenodes::RTEKind::RTE_CTE);
     debug_assert!(rte.self_reference);
-    let wt_param = run.root.self_ref_wt_param;
+    let wt_param = run
+        .root
+        .self_ref_wt_params
+        .iter()
+        .find(|&&(rti, _)| rti == scan_relid as u32)
+        .map_or(-1, |&(_, p)| p);
     assert!(
         wt_param >= 0,
         "could not find param ID for CTE \"{}\"",
@@ -1556,17 +1561,19 @@ fn create_bitmap_scan_plan<'mcx>(
     scan_clauses: mcx::PgVec<'mcx, RinfoId>,
 ) -> PgResult<Node<'mcx>> {
     let mcx = run.mcx;
-    let (baserelid, bitmapqual) = {
+    let (baserelid, bitmapqual, parallel_aware) = {
         let PathNode::BitmapHeapPath(p) = run.root.path(best_path) else {
             panic!("create_bitmap_scan_plan: not a BitmapHeapPath")
         };
-        (p.path.parent, p.bitmapqual.expect("BitmapHeapPath bitmapqual"))
+        (p.path.parent, p.bitmapqual.expect("BitmapHeapPath bitmapqual"), p.path.parallel_aware)
     };
     let scan_relid = run.root.rel(baserelid).relid;
     debug_assert!(scan_relid > 0);
 
+    // bitmap_subplan_mark_shared (createplan.c:3218): a parallel-aware heap
+    // scan shares the leftmost index scan's bitmap.
     let (bitmapqualplan, indexquals, mut bitmapqualorig, indexecs) =
-        create_bitmap_subplan(run, bitmapqual)?;
+        create_bitmap_subplan(run, bitmapqual, parallel_aware)?;
 
     // scan_clauses minus indexquals (C list_member -> equal()).
     let mut qpqual_rinfos: mcx::PgVec<'mcx, RinfoId> = mcx::PgVec::new_in(mcx);
@@ -1624,6 +1631,7 @@ fn create_bitmap_scan_plan<'mcx>(
 fn create_bitmap_subplan<'mcx>(
     run: &mut PlannerRun<'mcx>,
     bitmapqual: PathId,
+    shared: bool,
 ) -> PgResult<(
     Node<'mcx>,
     NodeList<'mcx>,
@@ -1645,9 +1653,9 @@ fn create_bitmap_subplan<'mcx>(
             let mut subquals = NodeList::nil();
             let mut subindexquals = NodeList::nil();
             let mut indexecs: mcx::PgVec<'mcx, types_pathnodes::EcId> = mcx::PgVec::new_in(mcx);
-            for &sub in subs.iter() {
+            for (i, &sub) in subs.iter().enumerate() {
                 let (subplan, subindexqual, subqual, subindexec) =
-                    create_bitmap_subplan(run, sub)?;
+                    create_bitmap_subplan(run, sub, shared && i == 0)?;
                 subplans.lappend(mcx, subplan)?;
                 list_concat_unique(mcx, &mut subquals, &subqual)?;
                 list_concat_unique(mcx, &mut subindexquals, &subindexqual)?;
@@ -1679,10 +1687,11 @@ fn create_bitmap_subplan<'mcx>(
             let mut subindexquals = NodeList::nil();
             let mut const_true_subqual = false;
             let mut const_true_subindexqual = false;
-            for &sub in subs.iter() {
+            for (i, &sub) in subs.iter().enumerate() {
                 // Per-arm indexECs are dropped: EC-derived quals can't be
                 // redundant across OR arms.
-                let (subplan, subindexqual, subqual, _) = create_bitmap_subplan(run, sub)?;
+                let (subplan, subindexqual, subqual, _) =
+                    create_bitmap_subplan(run, sub, shared && i == 0)?;
                 subplans.lappend(mcx, subplan)?;
                 if subqual.is_nil() {
                     const_true_subqual = true;
@@ -1701,7 +1710,7 @@ fn create_bitmap_subplan<'mcx>(
                 subplans.nth(0)
             } else {
                 let mut plan = Node::build::<types_nodes::plannodes::BitmapOr<'mcx>>(mcx)?;
-                plan.isshared = false;
+                plan.isshared = shared;
                 plan.bitmapplans = subplans;
                 plan.plan.startup_cost = startup_cost;
                 plan.plan.total_cost = total_cost;
@@ -1773,7 +1782,7 @@ fn create_bitmap_subplan<'mcx>(
     let mut plan = Node::build::<types_nodes::plannodes::BitmapIndexScan<'mcx>>(mcx)?;
     plan.scan.scanrelid = run.root.rel(parent).relid;
     plan.indexid = indexoid;
-    plan.isshared = false;
+    plan.isshared = shared;
     plan.indexqual = fixed_indexquals;
     plan.indexqualorig = stripped_indexquals;
     plan.scan.plan.startup_cost = 0.0;
@@ -1962,15 +1971,10 @@ fn fix_indexqual_operand<'mcx>(
             if var.varno as u32 == index_relid
                 && index.indexkeys[indexcol as usize] == var.varattno as i32
             {
-                return Node::mk_var(
-                    mcx,
-                    INDEX_VAR,
-                    (indexcol + 1) as i16,
-                    var.vartype,
-                    var.vartypmod,
-                    var.varcollid,
-                    0,
-                );
+                let mut newvar = crate::inherit::copy_var(mcx, var)?;
+                newvar.varno = INDEX_VAR;
+                newvar.varattno = (indexcol + 1) as i16;
+                return Node::mk(mcx, newvar);
             }
         }
         panic!("index key does not match expected index column");
@@ -2293,6 +2297,17 @@ fn create_modifytable_plan<'mcx>(
             let kind = if rte.rtekind == types_nodes::parsenodes::RTEKind::RTE_RELATION
                 && rte.relkind == types_rel::RELKIND_FOREIGN_TABLE
             {
+                if guc_tables::backing::restrict_nonsystem_relation_kind()
+                    & guc_tables::consts::RESTRICT_RELKIND_FOREIGN_TABLE
+                    != 0
+                {
+                    return Err(Box::new(
+                        types_error::PgError::error(
+                            "access to non-system foreign table is restricted".to_string(),
+                        )
+                        .with_sqlstate(types_error::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+                    ));
+                }
                 Some(foreigncmds_seams::get_fdw_routine_by_rel_id::call(mcx, rte.relid)?)
             } else {
                 None
@@ -2742,6 +2757,9 @@ fn create_minmaxagg_plan<'mcx>(
         lim.plan.lefttree = Some(subplan);
         lim.limitOffset = subparse.limitOffset;
         lim.limitCount = subparse.limitCount;
+        // Deliberate divergence from createplan.c:2572, which forwards
+        // subparse->limitOption: a WITH TIES outer LIMIT makes C's LIMIT 1
+        // initplan return every row (21000).
         lim.limitOption = types_nodes::nodes_enums::LimitOption::LIMIT_OPTION_COUNT;
         {
             let p = run.root.path(sub_path).base();
@@ -4261,9 +4279,16 @@ fn create_hashjoin_plan<'mcx>(run: &mut PlannerRun<'mcx>, path_id: PathId) -> Pg
     for te in inner_plan.as_plan().expect("inner plan").targetlist.iter() {
         inner_tlist.lappend(mcx, te)?;
     }
-    let (i_startup, i_total, i_rows, i_width, i_disabled) = {
+    let (i_startup, i_total, i_rows, i_width, i_disabled, i_parallel_safe) = {
         let p = inner_plan.as_plan().unwrap();
-        (p.startup_cost, p.total_cost, p.plan_rows, p.plan_width, p.disabled_nodes)
+        (
+            p.startup_cost,
+            p.total_cost,
+            p.plan_rows,
+            p.plan_width,
+            p.disabled_nodes,
+            p.parallel_safe,
+        )
     };
     hash_plan.plan.targetlist = inner_tlist;
     hash_plan.plan.qual = NodeList::nil();
@@ -4284,6 +4309,7 @@ fn create_hashjoin_plan<'mcx>(run: &mut PlannerRun<'mcx>, path_id: PathId) -> Pg
     hash_plan.plan.plan_width = i_width;
     hash_plan.plan.total_cost = i_total;
     hash_plan.plan.startup_cost = i_total;
+    hash_plan.plan.parallel_safe = i_parallel_safe;
     let _ = i_startup;
     // Parallel-aware: the executor sizes the shared table from the total rows
     // expected across all participants.

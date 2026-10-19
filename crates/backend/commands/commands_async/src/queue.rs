@@ -548,13 +548,23 @@ pub(crate) fn signal_backends() -> PgResult<()> {
             crate::set_notify_interrupt_pending();
             continue;
         }
-        let _ = procsignal::SendProcSignal(
+        if procsignal::SendProcSignal(
             pid,
             types_storage::storage::ProcSignalReason::PROCSIG_NOTIFY_INTERRUPT,
             procno,
-        );
+        ) < 0
+        {
+            could_not_signal_backend(pid).finish(loc("SignalBackends"))?;
+        }
     }
     Ok(())
+}
+
+// async.c:1655: the listener exited between the NotifyQueueLock release and
+// the signal; C logs it at DEBUG3 with %m.
+fn could_not_signal_backend(pid: i32) -> elog::ErrorBuilder {
+    ereport(types_error::DEBUG3)
+        .errmsg_internal(format!("could not signal backend with PID {pid}: %m"))
 }
 
 pub(crate) struct ReadPositions {
@@ -759,6 +769,22 @@ pub fn check_notify_buffers(newval: i32) -> (bool, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signal_failure_is_a_debug3_with_errno() {
+        let saved = elog::config::log_min_messages();
+        elog::config::set_log_min_messages(types_error::DEBUG3);
+        let e = could_not_signal_backend(4242).into_error();
+        elog::config::set_log_min_messages(saved);
+        assert_eq!(e.level(), types_error::DEBUG3);
+        assert_eq!(
+            e.message(),
+            format!(
+                "could not signal backend with PID 4242: {}",
+                elog::errno::strerror(elog::errno::current_errno())
+            )
+        );
+    }
 
     #[test]
     fn layout_matches_c() {

@@ -1068,7 +1068,11 @@ pub fn build_column_default<'mcx>(
     rel: &types_rel::Relation<'mcx>,
     attrno: usize,
 ) -> PgResult<Option<types_nodes::Node<'mcx>>> {
-    let att = rel.rd_att.attr(attrno - 1);
+    // A nailed catalog keeps its bootstrap-width descriptor; C reads past it
+    // for a column added beyond that width and fails on atttypid 0.
+    let Some(att) = rel.rd_att.attrs.get(attrno - 1) else {
+        return lsyscache::get_typdefault(mcx, InvalidOid).map(|_| None);
+    };
     if att.attidentity != 0 {
         let seqid = pg_depend::getIdentitySequence(mcx, rel.rd_id, attrno as i32, false)?;
         return Ok(Some(types_nodes::Node::mk(

@@ -1,5 +1,5 @@
 // VACUUM error-path pin release: real bufmgr over an in-memory smgr, an
-// injected WAL failure mid lazy_scan_heap (heap buffer pinned), then
+// injected ERROR mid lazy_scan_heap (heap buffer pinned), then
 // AbortCurrentTransaction must leave every buffer unpinned — C's mechanism is
 // ResourceOwnerReleaseAll(BEFORE_LOCKS), not a manual unpin on the error path.
 // Harness cloned from vacuum_e2e.rs (separate test binary, own data dir).
@@ -114,36 +114,42 @@ fn install_smgr_disk() {
     smgr_seams::smgr_set_cached_nblocks::set(|_loc, _fork, _n| Ok(()));
 }
 
-// Fail the Nth HEAP2 PRUNE_VACUUM_SCAN record while armed: an ereport-shaped
-// error surfacing from lazy_scan_prune with the heap buffer pinned.
+// Fault: the first clog lookup after a HEAP2 PRUNE_VACUUM_SCAN record fails =
+// C's SLRU I/O ERROR out of HeapTupleSatisfiesVacuum while pruning the next
+// block, before pruneheap.c:754 START_CRIT_SECTION (a WAL fault would PANIC).
 static INJECT_ARMED: AtomicBool = AtomicBool::new(false);
+static INJECTED: AtomicBool = AtomicBool::new(false);
 static PRUNE_RECORDS: AtomicU32 = AtomicU32::new(0);
-const FAIL_ON_PRUNE: u32 = 2;
 
-fn maybe_inject(rmid: u8, info: u8) -> types_error::PgResult<()> {
+fn count_prune(rmid: u8, info: u8) {
+    if rmid == RM_HEAP2_ID && info & 0xF0 == XLOG_HEAP2_PRUNE_VACUUM_SCAN {
+        PRUNE_RECORDS.fetch_add(1, Relaxed);
+    }
+}
+
+fn did_commit_inject(xid: types_core::TransactionId) -> types_error::PgResult<bool> {
     if INJECT_ARMED.load(Relaxed)
-        && rmid == RM_HEAP2_ID
-        && info & 0xF0 == XLOG_HEAP2_PRUNE_VACUUM_SCAN
-        && PRUNE_RECORDS.fetch_add(1, Relaxed) + 1 == FAIL_ON_PRUNE
+        && PRUNE_RECORDS.load(Relaxed) >= 1
+        && !INJECTED.swap(true, Relaxed)
     {
         return Err(types_error::PgError::error("injected mid-scan vacuum failure").into());
     }
-    Ok(())
+    transam::TransactionIdDidCommit(xid)
 }
 
 fn install_wal_seams() {
     xloginsert_seams::xlog_check_buffer_needs_backup::set(|_| false);
     xloginsert_seams::xlog_reset_insertion::set(xloginsert::XLogResetInsertion);
     xloginsert_seams::xlog_insert::set(|rmid, info, fragments| {
-        maybe_inject(rmid, info)?;
+        count_prune(rmid, info);
         xloginsert::insert_record(rmid, info, 0, fragments, &[])
     });
     xloginsert_seams::xlog_insert_with_flags::set(|rmid, info, _flags, fragments| {
-        maybe_inject(rmid, info)?;
+        count_prune(rmid, info);
         xloginsert::insert_record(rmid, info, 0, fragments, &[])
     });
     xloginsert_seams::xlog_insert_record::set(|rmid, info, flags, main_data, bufs| {
-        maybe_inject(rmid, info)?;
+        count_prune(rmid, info);
         let mut blocks: Vec<xloginsert::RegBlock<'_>> = Vec::with_capacity(bufs.len());
         for b in bufs {
             let tag = bufmgr::BufferGetTag(b.buffer);
@@ -688,7 +694,13 @@ fn vacuum_error_mid_scan_abort_releases_all_pins() {
     heapam_visibility::init_seams();
     clog::init_seams();
     subtrans::init_seams();
-    transam::init_seams();
+    transam_seams::transaction_id_did_commit::set(did_commit_inject);
+    transam_seams::transaction_id_did_abort::set(transam::TransactionIdDidAbort);
+    transam_seams::transaction_id_commit_tree::set(transam::TransactionIdCommitTree);
+    transam_seams::transaction_id_async_commit_tree::set(transam::TransactionIdAsyncCommitTree);
+    transam_seams::transaction_id_abort_tree::set(transam::TransactionIdAbortTree);
+    transam_seams::transaction_id_latest::set(transam::TransactionIdLatest);
+    transam_seams::transaction_id_get_commit_lsn::set(transam::TransactionIdGetCommitLSN);
     varsup::init_seams();
     xact::init_seams();
     snapmgr::init_seams();
@@ -803,8 +815,6 @@ fn vacuum_error_mid_scan_abort_releases_all_pins() {
     xact::CommitTransactionCommand().unwrap();
     assert_no_pins("after seeding");
 
-    // VACUUM through the real grammar; the injected WAL failure surfaces from
-    // lazy_scan_prune with the heap buffer still pinned.
     let ctx: &'static MemoryContext = Box::leak(Box::new(MemoryContext::new("vac")));
     let stmt = parse_vacuum("VACUUM (SKIP_DATABASE_STATS) t", ctx.mcx());
     xact::StartTransactionCommand().unwrap();
@@ -816,11 +826,8 @@ fn vacuum_error_mid_scan_abort_releases_all_pins() {
         err.to_string().contains("injected mid-scan vacuum failure"),
         "unexpected error: {err}"
     );
-    assert!(
-        PRUNE_RECORDS.load(Relaxed) >= FAIL_ON_PRUNE,
-        "fault fired mid-scan (saw {} prune records)",
-        PRUNE_RECORDS.load(Relaxed)
-    );
+    assert!(INJECTED.load(Relaxed), "fault fired mid-scan");
+    assert!(PRUNE_RECORDS.load(Relaxed) >= 1, "at least one block was pruned first");
     assert!(pinned_count() > 0, "error path left a pinned buffer (the leak under test)");
 
     // C: no manual unpin on this path — AbortTransaction's

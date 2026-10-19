@@ -281,6 +281,7 @@ fn new_page(special_flags: u16, level: u32, prev: BlockNumber, next: BlockNumber
     put_u16(&mut p, 12, SizeOfPageHeaderData as u16); // pd_lower
     put_u16(&mut p, 14, special as u16); // pd_upper
     put_u16(&mut p, 16, special as u16); // pd_special
+    put_u16(&mut p, 18, BLCKSZ as u16 | 4); // pd_pagesize_version
     let opaque = BTPageOpaqueData {
         btpo_prev: prev,
         btpo_next: next,
@@ -2548,7 +2549,7 @@ fn vacuum_cycleid_registry_roundtrip_over_the_shared_table() {
     crate::utils::bt_end_vacuum(&rel).unwrap();
 }
 
-// fp-adt-datum#1: datum_image_eq compares the whole eight-byte Datum word,
+// regression: datum_image_eq compares the whole eight-byte Datum word,
 // not a usize truncation of it (wasm32: usize is four bytes).
 #[test]
 fn datum_image_eq_compares_the_whole_eight_byte_word() {
@@ -2561,7 +2562,7 @@ fn datum_image_eq_compares_the_whole_eight_byte_word() {
     }
 }
 
-// fp-nbtree-nbtsplitloc#2: equal-delta split candidates come out in
+// regression: equal-delta split candidates come out in
 // pg_qsort's permutation (expected orders computed by C's pg_qsort over
 // src/port/qsort.c with _bt_splitcmp).
 #[test]
@@ -2592,7 +2593,7 @@ fn split_candidates_sort_in_pg_qsort_tie_order() {
     );
 }
 
-// fp-nbtree-nbtree#2 / fp-commands-vacuum#3: the per-page delay point
+// regression / regression: the per-page delay point
 // reaches vacuum_delay_point even while VacuumCostActive is false, so a
 // pending autovacuum config reload is processed mid-scan (nbtree.c:1305).
 static DELAY_POINT_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -2612,5 +2613,134 @@ fn vacuum_delay_point_reaches_the_seam_without_cost_active() {
     assert_eq!(
         DELAY_POINT_CALLS.load(std::sync::atomic::Ordering::SeqCst),
         before + 1
+    );
+}
+
+
+// regression (and nbtdedup#1, nbtsplitloc#1): datum.c:303-324
+// compares varlena payloads after detoasting, so a short-header and a
+// four-byte-header image of one value are the same image; the old port
+// compared whole stored images, headers included.
+#[test]
+fn datum_image_eq_compares_varlena_payloads_not_headers() {
+    let payload = b"abcdef";
+    let mut short = vec![((payload.len() as u8 + 1) << 1) | 1];
+    short.extend_from_slice(payload);
+    let mut four = ((payload.len() as u32 + 4) << 2).to_ne_bytes().to_vec();
+    four.extend_from_slice(payload);
+    let mut other = ((payload.len() as u32 + 4) << 2).to_ne_bytes().to_vec();
+    other.extend_from_slice(b"abcdeg");
+    let d = |v: &Vec<u8>| Datum::from_usize(v.as_ptr() as usize);
+    // SAFETY: live varlena images of the declared shapes.
+    unsafe {
+        assert!(crate::utils::datum_image_eq(d(&short), d(&four), false, -1));
+        assert!(crate::utils::datum_image_eq(d(&four), d(&short), false, -1));
+        assert!(!crate::utils::datum_image_eq(d(&short), d(&other), false, -1));
+        assert!(!crate::utils::datum_image_eq(d(&four), d(&other), false, -1));
+    }
+}
+
+// bug_082c6e0e: nbtutils.c:3183-3186 caps the look-ahead ramp at
+// MaxIndexTuplesPerPage / 2 (line pointers), not MaxTIDsPerBTreePage / 2.
+#[test]
+fn look_ahead_ramp_is_capped_in_line_pointers() {
+    use crate::utils::look_ahead_targetdistance;
+    let mut d = look_ahead_targetdistance(0);
+    assert_eq!(d, 5);
+    for _ in 0..12 {
+        d = look_ahead_targetdistance(d);
+    }
+    assert_eq!(d, 320, "5,10,...,160 doubles once more to 320 and stops there");
+    assert!(
+        (320usize) >= ::types_storage::bufpage::MaxIndexTuplesPerPage / 2
+            && (160usize) < ::types_storage::bufpage::MaxIndexTuplesPerPage / 2
+    );
+    assert!((320usize) < ::types_nbtree::MaxTIDsPerBTreePage / 2, "the old cap kept doubling");
+}
+
+// regression / nbtsearch#1 / nbtree#2: nbtutils.c:571-578 pfrees
+// the superseded by-ref skip-array argument before the next datumCopy; the
+// port reuses one buffer per array, so repeated element changes do not grow
+// the scan arena by one copy per distinct key.
+#[test]
+fn skip_datum_copy_reuses_the_arrays_buffer() {
+    let cx = MemoryContext::new("skipcopy");
+    let mcx = cx.mcx();
+    let mut buf: PgVec<'_, u8> = PgVec::new_in(mcx);
+    let img = |s: &[u8]| {
+        let mut v = ((s.len() as u32 + 4) << 2).to_ne_bytes().to_vec();
+        v.extend_from_slice(s);
+        v
+    };
+    let a = img(b"first-key");
+    let b = img(b"other-key");
+    let da = Datum::from_usize(a.as_ptr() as usize);
+    let db = Datum::from_usize(b.as_ptr() as usize);
+    let first = crate::utils::skip_datum_copy(&mut buf, da, false, -1).unwrap();
+    let second = crate::utils::skip_datum_copy(&mut buf, db, false, -1).unwrap();
+    assert_eq!(first.as_usize(), second.as_usize(), "same-size replacement reuses the buffer");
+    // SAFETY: the copy is a live buf-backed image of b.
+    let got = unsafe { core::slice::from_raw_parts(second.as_usize() as *const u8, b.len()) };
+    assert_eq!(got, &b[..]);
+    assert_eq!(crate::utils::skip_datum_copy(&mut buf, Datum::from_i32(7), true, 4).unwrap().as_usize(), 7);
+}
+
+// regression: nbtree.c:927 sleeps under WAIT_EVENT_BTREE_PAGE while a
+// participant waits for the advancing one; pg_stat_activity shows
+// IPC/BtreePage for the parked seizer.
+#[test]
+fn parallel_seize_park_reports_btree_page_wait_event() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    use ::types_core::InvalidBlockNumber;
+    use ::types_relscan::parallel::{BTParallelScanShared, BtParallelScanState, BtPsState};
+
+    use crate::parallel::{bt_parallel_seize, WAIT_EVENT_BTREE_PAGE};
+
+    static STARTS: AtomicU32 = AtomicU32::new(0);
+    static LAST: AtomicU32 = AtomicU32::new(0);
+    static ENDS: AtomicU32 = AtomicU32::new(0);
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        waitevent_seams::pgstat_report_wait_start::set(|info| {
+            STARTS.fetch_add(1, Ordering::SeqCst);
+            LAST.store(info, Ordering::SeqCst);
+        });
+        waitevent_seams::pgstat_report_wait_end::set(|| {
+            ENDS.fetch_add(1, Ordering::SeqCst);
+        });
+    });
+
+    let cx = MemoryContext::new("seize-wait");
+    let mcx = cx.mcx();
+    let mut so = ::types_nbtree::BTScanOpaqueData::alloc_in(mcx).unwrap();
+    let shared = Arc::new(BTParallelScanShared {
+        state: pgsync::Mutex::new(BtParallelScanState {
+            next_scan_page: InvalidBlockNumber,
+            last_curr_page: InvalidBlockNumber,
+            page_status: BtPsState::Advancing,
+            arr_elems: Vec::new(),
+        }),
+        lot: pgsync::ParkLot::new(),
+    });
+    let advancer = {
+        let shared = Arc::clone(&shared);
+        std::thread::spawn(move || {
+            std::thread::sleep(core::time::Duration::from_millis(40));
+            shared.state.lock().unwrap().page_status = BtPsState::Done;
+            shared.lot.wake_all();
+        })
+    };
+    let before = STARTS.load(Ordering::SeqCst);
+    let (status, _, _) = bt_parallel_seize(&mut so, &shared, true).unwrap();
+    advancer.join().unwrap();
+    assert!(!status, "the scan ended while we were parked");
+    assert!(STARTS.load(Ordering::SeqCst) > before, "the park reported a wait start");
+    assert_eq!(LAST.load(Ordering::SeqCst), WAIT_EVENT_BTREE_PAGE);
+    assert_eq!(
+        ENDS.load(Ordering::SeqCst),
+        STARTS.load(Ordering::SeqCst),
+        "every wait start is closed by a wait end"
     );
 }

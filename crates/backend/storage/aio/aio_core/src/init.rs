@@ -74,7 +74,7 @@ pub fn AioShmemSize() -> PgResult<usize> {
     sz = shmem::add_size(sz, std::mem::size_of::<PgAioHandle>() * procs * imc)?;
     sz = shmem::add_size(sz, std::mem::size_of::<libc::iovec>() * procs * per_backend_iovecs)?;
     sz = shmem::add_size(sz, std::mem::size_of::<u64>() * procs * per_backend_iovecs)?;
-    sz = shmem::add_size(sz, crate::method_worker::pgaio_worker_shmem_size())?;
+    sz = shmem::add_size(sz, pgaio_method_shmem_size(crate::io_method()))?;
     Ok(sz)
 }
 
@@ -162,8 +162,20 @@ pub fn AioShmemInit() -> PgResult<()> {
         publish_ctl(ctl);
     }
 
-    crate::method_worker::pgaio_worker_shmem_init(!found)?;
+    if crate::pgaio_workers_enabled() {
+        crate::method_worker::pgaio_worker_shmem_init(!found)?;
+    }
     Ok(())
+}
+
+// aio_init.c:142/213: only the selected method's shmem_size/shmem_init run;
+// the sync method has neither (method_sync.c:28-31).
+pub(crate) fn pgaio_method_shmem_size(method: i32) -> usize {
+    if method == guc_tables::consts::IOMETHOD_WORKER {
+        crate::method_worker::pgaio_worker_shmem_size()
+    } else {
+        0
+    }
 }
 
 /// Crash-cycle in-place reset (ipci ResetShmemAfterCrash walk arm): all

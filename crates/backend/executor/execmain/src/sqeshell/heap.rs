@@ -71,10 +71,13 @@ use super::seam::{
     resolve_var, sortproc_dir, OutSlot, OutSrc, Render,
 };
 
-/// Granule = fixed block run (heap-face.md Q2, blessed): B=256 blocks
-/// keeps worst-case rows (256 × MaxHeapTuplesPerPage) under 65536 and
-/// the walk a pure function of nblocks.
-const GRANULE_BLOCKS: u64 = 256;
+/// Granule = fixed block run (heap-face.md Q2): B=224 blocks keeps
+/// worst-case rows (224 × MaxHeapTuplesPerPage = 65,184) within the fold's
+/// u16 row ordinals and the walk a pure function of nblocks.
+const GRANULE_BLOCKS: u64 = 224;
+const _: () = assert!(
+    GRANULE_BLOCKS as usize * ::types_storage::bufpage::MaxHeapTuplesPerPage <= u16::MAX as usize + 1
+);
 
 /// [b1] Bare top-n bound cap: past it the incumbent owns the sort.
 const TOPN_CAP: u64 = 1 << 16;
@@ -407,9 +410,10 @@ fn recognize(
         let (Ok(off), Ok(cnt)) = (bound(lim.limitOffset), bound(lim.limitCount)) else {
             return Rec::Miss(Miss("limit"));
         };
-        // A negative COUNT raises in the incumbent executor — route it
-        // there; a negative OFFSET clamps to 0 (recompute_limits).
-        if cnt.is_some_and(|c| c < 0) {
+        // A negative COUNT or OFFSET raises in the incumbent executor
+        // (recompute_limits) and LIMIT 0 never pulls its child there
+        // (ExecLimit LIMIT_EMPTY, no scan opened) — route all three there.
+        if cnt.is_some_and(|c| c <= 0) || off.is_some_and(|o| o < 0) {
             return Rec::Miss(Miss("limit"));
         }
         let Some(child) = lim.plan.lefttree else { return Rec::Miss(Miss("limit")) };
@@ -418,7 +422,7 @@ fn recognize(
         top_limit = true;
         top = child;
     }
-    let skip = lim_offset.map_or(0usize, |o| o.max(0) as usize);
+    let skip = lim_offset.map_or(0usize, |o| o as usize);
     let take = lim_count.map_or(usize::MAX, |c| c as usize);
     // The adjudicated bounded-answer witness: offset+count <= GROUP_CAP.
     let bounded = lim_count.is_some() && (skip as u64).saturating_add(take as u64) <= GROUP_CAP;
@@ -1147,7 +1151,15 @@ impl ScanFace for HeapFace<'_, '_> {
                             // points inside this tuple, so bytes to the
                             // tuple's end cap any trusted-header read.
                             let tend = tup.header_ptr() as usize + tup.t_len as usize;
-                            let avail = tend.saturating_sub(p as usize);
+                            // An attribute past the tuple's natts deforms to
+                            // the descriptor's attmissingval image, not the page.
+                            let avail = if i >= tup.t_data().natts() as usize {
+                                // SAFETY: attmissingval is a catalog-built
+                                // in-memory varlena owned by the descriptor.
+                                unsafe { ::types_tuple::varatt::varsize_any(p) }
+                            } else {
+                                tend.saturating_sub(p as usize)
+                            };
                             // SAFETY: non-null varlena datum deformed off
                             // a page pinned for the duration of the fill;
                             // `avail` stops the read at the tuple's end.

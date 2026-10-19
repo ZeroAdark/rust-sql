@@ -159,3 +159,38 @@ fn synonym_duplicate_keys_follow_c_sort_and_bsearch() {
     assert_eq!(lex(&d, b"bar"), Some((b"three".to_vec(), 0)));
     assert_eq!(lex(&d, b"BAR"), None);
 }
+
+// pg_get_line_buf (src/common/pg_get_line.c): fgets + strlen per chunk, so
+// the bytes after an embedded NUL up to the chunk's end are dropped and the
+// unterminated text absorbs the following line; a NUL past the first
+// 1023-byte chunk only drops its own chunk's tail. Oracle: C 18.6 synonym
+// dictionaries over the same bytes.
+#[test]
+fn readline_drops_bytes_after_an_embedded_nul_like_fgets() {
+    let fixtures = fixtures_dir();
+    let mcx = leaked_mcx();
+    let read_all = |name: &str| {
+        let path = format!("{fixtures}/tsearch_data/{name}").into_bytes();
+        let mut rd = ::ts_locale::tsearch_readline_begin(mcx, &path).unwrap();
+        let mut lines = Vec::new();
+        while let Some(line) = rd.readline().unwrap() {
+            lines.push(line.to_vec());
+        }
+        lines
+    };
+    assert_eq!(read_all("b109_nul.syn"), vec![b"foo barbaz qux\n".to_vec()]);
+    let mut chunked = b"x ".to_vec();
+    chunked.extend(std::iter::repeat(b'a').take(1500));
+    assert_eq!(read_all("b109_nul_chunk.syn"), vec![chunked]);
+}
+
+// dict_thesaurus.c:193 skips every leading isspace byte, carriage return
+// included, before the comment / empty-line test.
+#[test]
+fn thesaurus_rule_after_a_leading_carriage_return_is_read() {
+    fixtures_dir();
+    let mcx = leaked_mcx();
+    let mut build = crate::thesaurus::ThesaurusBuild::new(mcx);
+    crate::thesaurus::thesaurus_read(&mut build, b"b109_cr").unwrap();
+    assert_eq!(build.lexemes(), vec![b"foo".to_vec()]);
+}

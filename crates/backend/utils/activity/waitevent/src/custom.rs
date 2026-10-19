@@ -18,14 +18,14 @@ use types_error::{
     ErrorLocation, PgResult, ERRCODE_DUPLICATE_OBJECT, ERRCODE_PROGRAM_LIMIT_EXCEEDED, ERROR,
 };
 use types_hash::hsearch::{
-    HASHCTL, HASH_BLOBS, HASH_ELEM, HASH_ENTER, HASH_FIND, HASH_FIXED_SIZE, HASH_SEQ_STATUS,
-    HASH_STRINGS, HTAB,
+    HASHCTL, HASH_BLOBS, HASH_ELEM, HASH_ENTER, HASH_FIND, HASH_SEQ_STATUS, HASH_STRINGS, HTAB,
 };
 use types_storage::storage::{Spinlock, SyncCell, WAIT_EVENT_CUSTOM_LOCK};
 
 use crate::{PG_WAIT_EXTENSION, WAIT_EVENT_CLASS_MASK};
 
 const NAMEDATALEN: usize = C_NAMEDATALEN as usize;
+const WAIT_EVENT_CUSTOM_HASH_INIT_SIZE: i32 = 16;
 const WAIT_EVENT_CUSTOM_HASH_MAX_SIZE: i32 = 128;
 const WAIT_EVENT_CUSTOM_INITIAL_ID: i32 = 1;
 
@@ -90,9 +90,13 @@ fn key_buf(name: &str) -> [u8; NAMEDATALEN] {
     key
 }
 
+// MAXALIGN(sizeof(WaitEventCustomCounterData)): slock_t + uint32 nextId.
+const C_SIZEOF_WAIT_EVENT_CUSTOM_COUNTER_DATA: usize = 8;
+
 #[allow(non_snake_case)] // C-parity name
 pub fn WaitEventCustomShmemSize() -> usize {
-    dynahash::hash_estimate_size(WAIT_EVENT_CUSTOM_HASH_MAX_SIZE as i64, size_of::<EntryByInfo>())
+    C_SIZEOF_WAIT_EVENT_CUSTOM_COUNTER_DATA
+        + dynahash::hash_estimate_size(WAIT_EVENT_CUSTOM_HASH_MAX_SIZE as i64, size_of::<EntryByInfo>())
         + dynahash::hash_estimate_size(
             WAIT_EVENT_CUSTOM_HASH_MAX_SIZE as i64,
             size_of::<EntryByName>(),
@@ -105,18 +109,22 @@ pub fn WaitEventCustomShmemInit() -> PgResult<()> {
         return Ok(());
     }
 
+    // wait_event.c:125-127: the counter is a named ShmemInitStruct; the
+    // Rust counter lives in CUSTOM, its C-sized row is registered.
+    shmem::ShmemInitStruct("WaitEventCustomCounterData", C_SIZEOF_WAIT_EVENT_CUSTOM_COUNTER_DATA)?;
+
     let mut by_info_ctl = HASHCTL::default();
     by_info_ctl.keysize = size_of::<u32>();
     by_info_ctl.entrysize = size_of::<EntryByInfo>();
     // wait_event.c:139-144: ShmemInitHash registers the table in the
-    // ShmemIndex. HASH_FIXED_SIZE forbids growth: preallocate at max (C grows
-    // WAIT_EVENT_CUSTOM_HASH_INIT_SIZE 16 -> 128).
+    // ShmemIndex; 16 initial entries growing to 128 as in C, so hash_seq
+    // traversal (pg_get_wait_events) and the shmem charge match C's.
     let by_info = shmem::ShmemInitHash(
         "WaitEventCustom hash by wait event information",
-        WAIT_EVENT_CUSTOM_HASH_MAX_SIZE as i64,
+        WAIT_EVENT_CUSTOM_HASH_INIT_SIZE as i64,
         WAIT_EVENT_CUSTOM_HASH_MAX_SIZE as i64,
         &mut by_info_ctl,
-        HASH_ELEM | HASH_BLOBS | HASH_FIXED_SIZE,
+        HASH_ELEM | HASH_BLOBS,
     )?;
 
     let mut by_name_ctl = HASHCTL::default();
@@ -125,10 +133,10 @@ pub fn WaitEventCustomShmemInit() -> PgResult<()> {
     // wait_event.c:149-154
     let by_name = shmem::ShmemInitHash(
         "WaitEventCustom hash by name",
-        WAIT_EVENT_CUSTOM_HASH_MAX_SIZE as i64,
+        WAIT_EVENT_CUSTOM_HASH_INIT_SIZE as i64,
         WAIT_EVENT_CUSTOM_HASH_MAX_SIZE as i64,
         &mut by_name_ctl,
-        HASH_ELEM | HASH_STRINGS | HASH_FIXED_SIZE,
+        HASH_ELEM | HASH_STRINGS,
     )?;
 
     let _ = CUSTOM.set(CustomTables {
@@ -147,7 +155,8 @@ pub fn WaitEventCustomShmemInit() -> PgResult<()> {
 pub fn WaitEventCustomShmemResetAfterCrash() {
     let Some(t) = CUSTOM.get() else { return };
     // SAFETY: crash choreography — children dead, postmaster thread only;
-    // both tables are shared + fixed-size (asserted by the callee).
+    // both tables are shared (asserted by the callee); growth segments stay
+    // mapped (shmem is never rewound), so the reset relinks in place.
     unsafe {
         dynahash::hash_reset_after_crash(t.by_info);
         dynahash::hash_reset_after_crash(t.by_name);
@@ -283,8 +292,8 @@ pub fn GetWaitEventCustomIdentifier(wait_event_info: u32) -> PgResult<&'static s
         )?;
         unreachable!("elog(ERROR) returns Err");
     }
-    // SAFETY: the entry lives in a fixed-size table for the process lifetime
-    // (never removed, never resized past its shmem-sized bound).
+    // SAFETY: the entry lives in a shared table for the process lifetime
+    // (never removed; dynahash growth relinks elements, never moves them).
     let entry: &'static EntryByInfo = unsafe { &*(entry as *const EntryByInfo) };
     Ok(trim_name(&entry.wait_event_name))
 }
@@ -309,7 +318,7 @@ pub fn GetWaitEventCustomNames(class_id: u32) -> Vec<String> {
         if entry.is_null() {
             break;
         }
-        // SAFETY: hash_seq_search yields entries from a fixed-size table that
+        // SAFETY: hash_seq_search yields entries from a shared table that
         // lives for the process lifetime (never removed, never relocated).
         let entry: &'static EntryByName = unsafe { &*(entry as *const EntryByName) };
         if entry.wait_event_info & WAIT_EVENT_CLASS_MASK != class_id {

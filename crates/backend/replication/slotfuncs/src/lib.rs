@@ -35,8 +35,6 @@ pub(crate) fn create_physical_replication_slot(
     temporary: bool,
     restart_lsn: XLogRecPtr,
 ) -> PgResult<()> {
-    assert!(slot::MyReplicationSlot().is_none());
-
     slot::ReplicationSlotCreate(
         name,
         false,
@@ -71,8 +69,6 @@ pub(crate) fn create_logical_replication_slot(
     restart_lsn: XLogRecPtr,
     find_startpoint: bool,
 ) -> PgResult<()> {
-    assert!(slot::MyReplicationSlot().is_none());
-
     slot::ReplicationSlotCreate(
         name,
         true,

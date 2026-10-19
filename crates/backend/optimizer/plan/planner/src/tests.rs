@@ -128,7 +128,7 @@ const JT3: u32 = 16402;
 const JT4: u32 = 16403;
 const STT: u32 = 16410;
 const PTT: u32 = 16411;
-// Torn-stats fixtures (GL-STATSLOT-1): slot kinds recorded at bundle-probe
+// Torn-stats fixtures (regression): slot kinds recorded at bundle-probe
 // time paired with arrays from a later row generation — the MCV slot carries
 // values but an EMPTY numbers array, the shape a concurrent ANALYZE rewrite
 // produces through the lazy per-slot image re-probe (RWREG-2 rung b2/post-7
@@ -3898,7 +3898,7 @@ mod stats_arms {
     }
 }
 
-// GL-STATSLOT-1: torn statistics slots must degrade like C (soft fallback),
+// regression: torn statistics slots must degrade like C (soft fallback),
 // never panic. C reads pg_statistic from a pinned tuple copy, so a slot's
 // kind and its arrays can never disagree; our lazy per-slot image re-probe
 // can pair a bundle-time kind with arrays from a rewritten row (ANALYZE

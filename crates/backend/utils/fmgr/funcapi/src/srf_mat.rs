@@ -24,6 +24,7 @@ fn materialize_not_allowed() -> Box<PgError> {
 pub struct MaterializedSRF<'m> {
     pub tupdesc: TupleDescData<'m>,
     store: tuplestore::Tuplestore,
+    random_access: bool,
 }
 
 impl core::fmt::Debug for MaterializedSRF<'_> {
@@ -38,6 +39,17 @@ impl core::fmt::Debug for MaterializedSRF<'_> {
 impl<'m> MaterializedSRF<'m> {
     pub fn putvalues(&mut self, values: &[Datum], isnull: &[bool]) -> PgResult<()> {
         self.store.putvalues(&self.tupdesc, values, isnull)
+    }
+
+    /// A fresh, empty store budgeted with the current work_mem, for callers
+    /// whose C original runs tuplestore_begin_heap only after other SQL
+    /// (crosstab_hash: after the categories query, tablefunc.c:805).
+    pub fn restart_store(&mut self) {
+        self.store = tuplestore::Tuplestore::begin_heap(
+            self.random_access,
+            false,
+            init_small::globals::work_mem(),
+        );
     }
 
     // C materialize SRFs `return (Datum) 0` and the executor's Materialize
@@ -94,5 +106,5 @@ pub fn InitMaterializedSRF<'m>(
         false,
         init_small::globals::work_mem(),
     );
-    Ok(MaterializedSRF { tupdesc, store })
+    Ok(MaterializedSRF { tupdesc, store, random_access })
 }

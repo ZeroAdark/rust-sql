@@ -146,7 +146,7 @@ thread_local! {
 // packet — returned ESRCH and was silently dropped. C cannot lose that
 // signal (kill() is kernel-queued and runs process_startup_packet_die when
 // unblocked); here the drop left the backend parked in secure_read forever:
-// PM_WAIT_BACKENDS never drained, the GL-GANGWEDGE-1 watchdog escalated to
+// PM_WAIT_BACKENDS never drained, the regression watchdog escalated to
 // immediate shutdown, and the next start ran crash recovery.
 //
 // The channel: the LAUNCHER registers `pid -> pending word` BEFORE the pid
@@ -620,6 +620,11 @@ pub fn pqsignal_thread(signo: i32, handler: ThreadSignalHandler) {
         handlers[signo as usize] = handler;
         t.set(handlers);
     });
+}
+
+pub fn thread_signal_disposition_installed(signo: i32) -> bool {
+    THREAD_SIGNAL_HANDLERS
+        .with(|t| !matches!(t.get()[signo as usize], ThreadSignalHandler::Unset))
 }
 
 // kill(pid, signo)'s thread rendering: pend signo on the target's slot and

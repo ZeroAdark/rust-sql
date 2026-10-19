@@ -701,3 +701,69 @@ fn tablesync_slot_drop_triages_results_like_c() {
     cancelled.diag = Some(ErrorFields { sqlstate: "57014".to_string(), ..Default::default() });
     assert!(matches!(drop_slot_outcome(&cancelled, true), DropSlotOutcome::Failed));
 }
+
+// handle_streamed_transaction (worker.c:579) reads the streamed XID through
+// pq_getmsgint, so a message truncated inside the XID is pq_copymsgbytes'
+// "insufficient data left in message"; only a complete zero XID is "invalid
+// transaction ID in streamed replication transaction".
+#[test]
+fn streamed_message_truncated_in_xid_is_insufficient_data() {
+    let cx = mcx::MemoryContext::new("t");
+    // SAFETY: `cx` outlives every use within this test.
+    let mcx: mcx::Mcx<'static> = unsafe { std::mem::transmute(cx.mcx()) };
+    super::stream_apply::IN_STREAMED_TRANSACTION.set(true);
+    super::stream_apply::STREAM_XID.set(700);
+
+    let short = [b'I', 0, 0, 2];
+    let err = super::stream_apply::handle_streamed_transaction(mcx, b'I', &short).err().unwrap();
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_PROTOCOL_VIOLATION);
+    assert_eq!(err.message(), "insufficient data left in message");
+
+    let zero = [b'I', 0, 0, 0, 0];
+    let err = super::stream_apply::handle_streamed_transaction(mcx, b'I', &zero).err().unwrap();
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_PROTOCOL_VIOLATION);
+    assert_eq!(err.message(), "invalid transaction ID in streamed replication transaction");
+
+    super::stream_apply::IN_STREAMED_TRANSACTION.set(false);
+    super::stream_apply::STREAM_XID.set(types_core::InvalidTransactionId);
+}
+
+// worker.c:3919: force is %d and every LSN is %X/%X.
+#[test]
+fn feedback_debug_line_matches_c_format() {
+    assert_eq!(
+        super::feedback_debug_line(true, 0x1_0000_0010, 0x20, 0x30),
+        "sending feedback (force 1) to recv 1/10, write 0/20, flush 0/30"
+    );
+    assert_eq!(
+        super::feedback_debug_line(false, 0, 0, 0),
+        "sending feedback (force 0) to recv 0/0, write 0/0, flush 0/0"
+    );
+}
+
+// maybe_reread_subscription's LOG lines carry C's exact wording (worker.c:4005,
+// 4019, 4050, 4054); stream_open_file's DEBUG1 line (worker.c:4354).
+#[test]
+fn reread_and_stream_open_messages_match_c() {
+    use super::{reread_change_message, RereadChange};
+    assert_eq!(
+        reread_change_message(RereadChange::Removed, "s", false),
+        "logical replication worker for subscription \"s\" will stop because the subscription was removed"
+    );
+    assert_eq!(
+        reread_change_message(RereadChange::Disabled, "s", true),
+        "logical replication worker for subscription \"s\" will stop because the subscription was disabled"
+    );
+    assert_eq!(
+        reread_change_message(RereadChange::ParamChange, "s", false),
+        "logical replication worker for subscription \"s\" will restart because of a parameter change"
+    );
+    assert_eq!(
+        reread_change_message(RereadChange::ParamChange, "s", true),
+        "logical replication parallel apply worker for subscription \"s\" will stop because of a parameter change"
+    );
+    assert_eq!(
+        super::stream_apply::stream_open_file_message("16394-742.changes"),
+        "opening file \"16394-742.changes\" for streamed changes"
+    );
+}

@@ -285,3 +285,117 @@ SELECT count(*) FROM fta1;
 SELECT count(*) FROM (SELECT * FROM fta1 UNION ALL SELECT * FROM fta2) x;
 COMMIT;
 ALTER SERVER loopback OPTIONS (DROP async_capable);
+
+-- ===================================================================
+-- a pseudoconstant local qual on a pushed-down join belongs to the
+-- gating Result alone (extract_actual_clauses(local_conds, false))
+-- ===================================================================
+CREATE TABLE "S 1"."T 6" (id int, v text);
+INSERT INTO "S 1"."T 6" VALUES (1, 'p'), (2, 'q');
+CREATE FOREIGN TABLE ft6 (id int, v text)
+  SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 6');
+CREATE FOREIGN TABLE ft6b (id int, v text)
+  SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 6');
+ANALYZE ft6; ANALYZE ft6b;
+CREATE FUNCTION notice_true() RETURNS bool STABLE LANGUAGE plpgsql
+  AS $$ BEGIN RAISE NOTICE 'notice_true called'; RETURN true; END $$;
+ALTER SERVER loopback OPTIONS (ADD use_remote_estimate 'true');
+SET enable_hashjoin = off;
+SET enable_mergejoin = off;
+SET enable_nestloop = off;
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT a.id, b.v FROM ft6 a JOIN ft6b b ON a.id = b.id WHERE notice_true();
+SELECT a.id, b.v FROM ft6 a JOIN ft6b b ON a.id = b.id WHERE notice_true() ORDER BY 1;
+RESET enable_hashjoin;
+RESET enable_mergejoin;
+RESET enable_nestloop;
+ALTER SERVER loopback OPTIONS (DROP use_remote_estimate);
+
+-- ===================================================================
+-- batch insert: a full buffer is flushed when the next source row
+-- arrives (nodeModifyTable.c:950), not when it fills
+-- ===================================================================
+CREATE TABLE "S 1"."T 7" (a int);
+CREATE FOREIGN TABLE ft7 (a int)
+  SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 7', batch_size '2');
+INSERT INTO ft7
+  SELECT (SELECT count(*) FROM ft7 WHERE a < g * 1000)::int FROM generate_series(1, 5) g;
+SELECT a FROM "S 1"."T 7" ORDER BY a;
+TRUNCATE "S 1"."T 7";
+ALTER TABLE "S 1"."T 7" ADD CONSTRAINT t7_pos CHECK (a > 0);
+INSERT INTO ft7 SELECT CASE WHEN g = 3 THEN 1 / (g - 3) ELSE -g END FROM generate_series(1, 3) g;
+SELECT a FROM "S 1"."T 7" ORDER BY a;
+
+-- ===================================================================
+-- conversion_error_callback stays installed while input functions
+-- run: a WARNING raised there carries the column context
+-- ===================================================================
+CREATE FUNCTION warn_check(int) RETURNS bool IMMUTABLE LANGUAGE plpgsql
+  AS $$ BEGIN RAISE WARNING 'warn_check %', $1; RETURN true; END $$;
+CREATE DOMAIN warn_dom AS int CHECK (warn_check(VALUE));
+CREATE FOREIGN TABLE ft6w (id warn_dom, v text)
+  SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 6');
+SELECT id, v FROM ft6w ORDER BY id;
+
+-- ===================================================================
+-- abort-cleanup-failed connection whose server was dropped: the
+-- pre-commit rejection propagates GetForeignServer's lookup error
+-- ===================================================================
+DO $d$
+    BEGIN
+        EXECUTE $$CREATE SERVER loopback_acf FOREIGN DATA WRAPPER postgres_fdw
+            OPTIONS (host '$$||current_setting('unix_socket_directories')||$$',
+                     port '$$||current_setting('port')||$$',
+                     dbname '$$||current_database()||$$'
+            )$$;
+        EXECUTE $$CREATE USER MAPPING FOR CURRENT_USER SERVER loopback_acf
+            OPTIONS (user '$$||current_user||$$')$$;
+    END;
+$d$;
+CREATE FOREIGN TABLE ft_acf (id int, v text)
+  SERVER loopback_acf OPTIONS (schema_name 'S 1', table_name 'T 6');
+CREATE FUNCTION wait_backend_gone(p int) RETURNS void LANGUAGE plpgsql AS $$
+    BEGIN
+        FOR i IN 1..400 LOOP
+            EXIT WHEN NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = p);
+            PERFORM pg_sleep(0.05);
+        END LOOP;
+    END;
+$$;
+BEGIN;
+SET LOCAL client_min_messages = error;
+SAVEPOINT s1;
+SELECT id FROM ft_acf ORDER BY id;
+SELECT remote_backend_pid AS acf_pid FROM postgres_fdw_get_connections(true)
+  WHERE server_name = 'loopback_acf' \gset
+SELECT pg_terminate_backend(:acf_pid);
+SELECT wait_backend_gone(:acf_pid);
+ROLLBACK TO SAVEPOINT s1;
+DROP SERVER loopback_acf CASCADE;
+\set VERBOSITY sqlstate
+COMMIT;
+\set VERBOSITY default
+DROP SERVER loopback_acf CASCADE;
+
+-- ===================================================================
+-- option readers apply defGetBoolean even without a validator:
+-- anything but true/false/on/off is a syntax error, never false
+-- ===================================================================
+ALTER FOREIGN DATA WRAPPER postgres_fdw NO VALIDATOR;
+ALTER SERVER loopback OPTIONS (ADD use_remote_estimate 'maybe');
+SELECT id FROM ft6 ORDER BY id;
+ALTER SERVER loopback OPTIONS (DROP use_remote_estimate);
+ALTER SERVER loopback OPTIONS (ADD async_capable '1');
+SELECT id FROM ft6 ORDER BY id;
+ALTER SERVER loopback OPTIONS (DROP async_capable);
+ALTER FOREIGN TABLE ft6 OPTIONS (ADD updatable 'yes');
+INSERT INTO ft6 VALUES (3, 'r');
+ALTER FOREIGN TABLE ft6 OPTIONS (DROP updatable);
+ALTER SERVER loopback OPTIONS (ADD truncatable 't');
+TRUNCATE ft6;
+ALTER SERVER loopback OPTIONS (DROP truncatable);
+ALTER SERVER loopback OPTIONS (ADD keep_connections 'y');
+SELECT id FROM ft6 ORDER BY id;
+ALTER SERVER loopback OPTIONS (DROP keep_connections);
+ALTER FOREIGN DATA WRAPPER postgres_fdw VALIDATOR postgres_fdw_validator;
+SELECT id FROM ft6 ORDER BY id;

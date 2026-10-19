@@ -60,7 +60,7 @@ pub fn DetermineSleepTime() -> i64 {
             let seconds = FORCED_EXIT_AFTER_LETHAL_SECS - (now_secs() - lethal_time);
             return (seconds * 1000).max(0);
         }
-        // GL-GANGWEDGE-1: wake in time for the shutdown-stall watchdog. A
+        // regression: wake in time for the shutdown-stall watchdog. A
         // wedged shutdown produces no events at all, so without this the
         // postmaster would sleep on its latch for the full 60s tick and the
         // bound would be quantized to it. Gate on `shutdown_stall_armed` — the
@@ -118,7 +118,7 @@ fn now_secs() -> i64 {
     pg_clock::wall_secs()
 }
 
-/// GL-GANGWEDGE-1 shutdown-stall predicate — the pure half, unit-pinned.
+/// regression shutdown-stall predicate — the pure half, unit-pinned.
 ///
 /// True when a NON-immediate shutdown has sat in one shutdown state, without
 /// advancing, for at least `bound` seconds. Deliberately excluded:
@@ -187,7 +187,7 @@ pub fn ServerLoop() -> PgResult<i32> {
     // what makes the analytics fast path engage at DOP=cores out of the box
     // for router-covered shapes — no SET, no env var required.
     let _ = launch_backend::rtpool::start_if_enabled();
-    // GL-MEMWATCH-1: the process memory watchdog sampler thread. Near-free
+    // regression: the process memory watchdog sampler thread. Near-free
     // (a 1s tick off every query path); pgrust.memory_watchdog gates the
     // work per tick, so SIGHUP can arm/disarm without a restart.
     {
@@ -207,7 +207,7 @@ pub fn ServerLoop() -> PgResult<i32> {
     // engagement). No-op unless PGRUST_RUNTIME=1, with PGRUST_RUNTIME_
     // POOLBIND=0 as the increment kill — the pool's layering above.
     launch_backend::rtgang::install_if_enabled();
-    // GL-GANGWEDGE-1: test-only fault injector for the shutdown backstop
+    // regression: test-only fault injector for the shutdown backstop
     // (PGRUST_TEST_WEDGE_SHM_BUSY_MS). Inert unless the env var is set; routed
     // through launch_backend because tcop/postmaster cannot name parallel
     // (the seam package-cycle rule).
@@ -269,7 +269,7 @@ pub fn ServerLoop() -> PgResult<i32> {
 
         let now = now_secs();
 
-        // GL-GANGWEDGE-1 SHUTDOWN-STALL WATCHDOG. A fast/smart shutdown that
+        // regression SHUTDOWN-STALL WATCHDOG. A fast/smart shutdown that
         // stops advancing through the shutdown states is a WEDGE, not a slow
         // shutdown: every gate past PM_STOP_BACKENDS waits only on children
         // that have already been told to stop. C can wait forever there
@@ -344,7 +344,7 @@ pub fn ServerLoop() -> PgResult<i32> {
                 pm.abort_start_time = 0;
                 // Arm the forced-exit floor: the thread rendering of SIGKILL
                 // (SendThreadKill) lands only at a drain point, so unlike
-                // C's, this broadcast can LOSE (GL-DISCONNECT-WEDGE-1).
+                // C's, this broadcast can LOSE (regression).
                 pm.lethal_time = now;
             });
         }
@@ -511,7 +511,7 @@ pub fn BackendStartup(client_sock: ClientSocket) -> i32 {
 // the postmaster still owns its fork copy of the accepted socket and closes
 // it on the way out of BackendStartup. Here the socket was handed to a child
 // that never started, so nobody else will ever close it — and an unclosed
-// socket is a client that waits forever (GL-FDLIMIT-1).
+// socket is a client that waits forever (regression).
 pub(crate) fn report_fork_failure_to_client(client_sock: &ClientSocket, errnum: i32) {
     // postmaster.c:3614-3616: "E%s%s\n" with the message and strerror(errnum).
     launch_backend::report_startup_failure_to_client(
@@ -565,7 +565,7 @@ pub fn maybe_adjust_io_workers() {
     if with_pm(|pm| pm.io_worker_count) > target {
         let victim = with_pm(|pm| pm.io_worker_children.iter().rev().flatten().next().copied());
         if let Some(child) = victim {
-            crate::statemachine::signal_child(&child, procsignal::signums::SIGUSR2);
+            let _ = procsignal::SendThreadSignal(child.pid, procsignal::signums::SIGUSR2);
         }
     }
 }

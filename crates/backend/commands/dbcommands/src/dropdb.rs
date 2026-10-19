@@ -40,9 +40,15 @@ fn oid_key(attno: i32, arg: Oid) -> ScanKeyData {
     key
 }
 
-fn delete_where(mcx: Mcx<'_>, relid: Oid, index_id: Oid, keys: &[ScanKeyData]) -> PgResult<()> {
+fn delete_where(
+    mcx: Mcx<'_>,
+    relid: Oid,
+    index_id: Oid,
+    index_ok: bool,
+    keys: &[ScanKeyData],
+) -> PgResult<()> {
     let rel = table::table_open(mcx, relid, RowExclusiveLock)?;
-    let mut scan = genam::systable_beginscan(mcx, &rel, index_id, true, None, keys)?;
+    let mut scan = genam::systable_beginscan(mcx, &rel, index_id, index_ok, None, keys)?;
     while let Some(tup) = genam::systable_getnext(mcx, &mut scan)? {
         catalog_indexing::CatalogTupleDelete(&rel, &tup.t_self)?;
     }
@@ -60,16 +66,18 @@ fn delete_shared_object_rows(
     classoid: Oid,
 ) -> PgResult<()> {
     let keys = [oid_key(1, oid), oid_key(2, classoid)];
-    delete_where(mcx, relid, index_id, &keys)
+    delete_where(mcx, relid, index_id, true, &keys)
 }
 
-// DropSetting (pg_db_role_setting.c) with databaseid valid, roleid invalid.
+// DropSetting (pg_db_role_setting.c:199) with databaseid valid, roleid
+// invalid: table_beginscan_catalog, never the index.
 fn drop_setting(mcx: Mcx<'_>, databaseid: Oid) -> PgResult<()> {
     let keys = [oid_key(1, databaseid)];
     delete_where(
         mcx,
         DbRoleSettingRelationId,
         DbRoleSettingDatidRolidIndexId,
+        false,
         &keys,
     )
 }
@@ -265,6 +273,8 @@ fn dropdb_guts(
             dbname,
         )?;
     }
+
+    objectaccess::InvokeObjectDropHook(DATABASE_RELATION_ID, db_id, 0)?;
 
     if db.datistemplate {
         return Err(ereport(ERROR)

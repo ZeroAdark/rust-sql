@@ -1,0 +1,336 @@
+-- Differential fixture for the 2026-09-13 audit bug batch 97
+-- (contrib/hstore). Run via scripts/bugs-batch97-e2e.sh against the frozen
+-- expected captured from C PostgreSQL 18.6.
+\pset pager off
+\set VERBOSITY verbose
+CREATE EXTENSION hstore;
+-- regression / #4 / bug_e5480d1f: type_is_rowtype accepts
+-- a domain over composite and lookup_rowtype_tupdesc_domain peels it, so
+-- populate_record / hstore(record) take a domain first argument (and apply
+-- the domain's constraints).
+CREATE TYPE b97_r AS (a integer, b text);
+CREATE DOMAIN b97_d AS b97_r;
+CREATE DOMAIN b97_dchk AS b97_r CHECK ((VALUE).a > 0);
+SELECT populate_record(NULL::b97_d, 'a=>1'::hstore);
+ populate_record 
+-----------------
+ (1,)
+(1 row)
+
+SELECT populate_record(NULL::b97_d, 'a=>1, b=>x'::hstore);
+ populate_record 
+-----------------
+ (1,x)
+(1 row)
+
+SELECT populate_record(ROW(5,'q')::b97_d, 'a=>7'::hstore);
+ populate_record 
+-----------------
+ (7,q)
+(1 row)
+
+SELECT populate_record(ROW(5,'q')::b97_d, NULL::hstore);
+ populate_record 
+-----------------
+ (5,q)
+(1 row)
+
+SELECT populate_record(NULL::b97_dchk, 'a=>1'::hstore);
+ populate_record 
+-----------------
+ (1,)
+(1 row)
+
+SELECT populate_record(NULL::b97_dchk, 'a=>-1'::hstore);
+ERROR:  23514: value for domain b97_dchk violates check constraint "b97_dchk_check"
+SCHEMA NAME:  public
+DATATYPE NAME:  b97_dchk
+CONSTRAINT NAME:  b97_dchk_check
+SELECT populate_record(ROW(5,'q')::b97_dchk, 'a=>-3'::hstore);
+ERROR:  23514: value for domain b97_dchk violates check constraint "b97_dchk_check"
+SCHEMA NAME:  public
+DATATYPE NAME:  b97_dchk
+CONSTRAINT NAME:  b97_dchk_check
+SELECT populate_record(NULL::b97_d, NULL::hstore);
+ populate_record 
+-----------------
+ 
+(1 row)
+
+SELECT populate_record(NULL::b97_d, ''::hstore);
+ populate_record 
+-----------------
+ (,)
+(1 row)
+
+SELECT populate_record(NULL::int, 'a=>1'::hstore);
+ERROR:  42804: first argument must be a rowtype
+SELECT hstore(NULL::b97_d);
+        hstore        
+----------------------
+ "a"=>NULL, "b"=>NULL
+(1 row)
+
+SELECT hstore(ROW(3,'z')::b97_d);
+       hstore       
+--------------------
+ "a"=>"3", "b"=>"z"
+(1 row)
+
+SELECT hstore(ROW(3,'z')::b97_dchk);
+       hstore       
+--------------------
+ "a"=>"3", "b"=>"z"
+(1 row)
+
+SELECT hstore(NULL::b97_dchk);
+        hstore        
+----------------------
+ "a"=>NULL, "b"=>NULL
+(1 row)
+
+SELECT NULL::b97_d #= 'a=>9'::hstore;
+ ?column? 
+----------
+ (9,)
+(1 row)
+
+SELECT ROW(1,'y')::b97_d #= 'b=>w'::hstore;
+ ?column? 
+----------
+ (1,w)
+(1 row)
+
+SELECT pg_typeof(populate_record(NULL::b97_d, 'a=>1'::hstore));
+ pg_typeof 
+-----------
+ b97_d
+(1 row)
+
+-- regression / hstore_op#4: the HSTORE_POLLUTE legacy
+-- symbol names (tconvert, fetchval, ...) resolve in the hstore library.
+CREATE FUNCTION b97_tconvert(text,text) RETURNS hstore AS '$libdir/hstore', 'tconvert' LANGUAGE C IMMUTABLE;
+CREATE FUNCTION b97_fetchval(hstore, text) RETURNS text AS '$libdir/hstore', 'fetchval' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION b97_exists(hstore, text) RETURNS bool AS '$libdir/hstore', 'exists' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION b97_defined(hstore, text) RETURNS bool AS '$libdir/hstore', 'defined' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION b97_delete(hstore, text) RETURNS hstore AS '$libdir/hstore', 'delete' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION b97_hs_concat(hstore, hstore) RETURNS hstore AS '$libdir/hstore', 'hs_concat' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION b97_hs_contains(hstore, hstore) RETURNS bool AS '$libdir/hstore', 'hs_contains' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION b97_hs_contained(hstore, hstore) RETURNS bool AS '$libdir/hstore', 'hs_contained' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION b97_akeys(hstore) RETURNS text[] AS '$libdir/hstore', 'akeys' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION b97_avals(hstore) RETURNS text[] AS '$libdir/hstore', 'avals' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION b97_skeys(hstore) RETURNS SETOF text AS '$libdir/hstore', 'skeys' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION b97_svals(hstore) RETURNS SETOF text AS '$libdir/hstore', 'svals' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION b97_each(IN hs hstore, OUT key text, OUT value text) RETURNS SETOF record AS '$libdir/hstore', 'each' LANGUAGE C IMMUTABLE STRICT;
+SELECT b97_tconvert('a','b'), b97_tconvert('a',NULL), b97_tconvert(NULL,'b');
+ b97_tconvert | b97_tconvert | b97_tconvert 
+--------------+--------------+--------------
+ "a"=>"b"     | "a"=>NULL    | 
+(1 row)
+
+SELECT b97_fetchval('a=>b'::hstore, 'a'), b97_exists('a=>b'::hstore,'a'), b97_defined('a=>NULL'::hstore,'a');
+ b97_fetchval | b97_exists | b97_defined 
+--------------+------------+-------------
+ b            | t          | f
+(1 row)
+
+SELECT b97_delete('a=>b,c=>d'::hstore,'a'), b97_hs_concat('a=>b'::hstore,'c=>d'::hstore);
+ b97_delete |   b97_hs_concat    
+------------+--------------------
+ "c"=>"d"   | "a"=>"b", "c"=>"d"
+(1 row)
+
+SELECT b97_hs_contains('a=>b,c=>d'::hstore,'a=>b'::hstore), b97_hs_contained('a=>b'::hstore,'a=>b,c=>d'::hstore);
+ b97_hs_contains | b97_hs_contained 
+-----------------+------------------
+ t               | t
+(1 row)
+
+SELECT b97_akeys('a=>b,c=>d'::hstore), b97_avals('a=>b,c=>d'::hstore);
+ b97_akeys | b97_avals 
+-----------+-----------
+ {a,c}     | {b,d}
+(1 row)
+
+SELECT * FROM b97_skeys('a=>b,c=>d'::hstore);
+ b97_skeys 
+-----------
+ a
+ c
+(2 rows)
+
+SELECT * FROM b97_svals('a=>b,c=>NULL'::hstore);
+ b97_svals 
+-----------
+ b
+ 
+(2 rows)
+
+SELECT * FROM b97_each('a=>b,c=>NULL'::hstore);
+ key | value 
+-----+-------
+ a   | b
+ c   | 
+(2 rows)
+
+-- regression: skeys / svals / each return value-per-call,
+-- so a target-list call needs no tuplestore (FROM-clause calls still
+-- materialize through the FunctionScan, on both engines).
+SET work_mem = '64kB';
+SET temp_file_limit = 0;
+SELECT length(svals(hstore('k', repeat('x', 1000000)))) LIMIT 1;
+ length  
+---------
+ 1000000
+(1 row)
+
+SELECT length(skeys(hstore(repeat('x', 1000000), 'k'))) LIMIT 1;
+ length  
+---------
+ 1000000
+(1 row)
+
+SELECT length((e).value) FROM (SELECT each(hstore('k', repeat('x', 1000000))) AS e) s;
+ length  
+---------
+ 1000000
+(1 row)
+
+SELECT length(v) FROM svals(hstore('k', repeat('x', 1000000))) v;
+ERROR:  53400: temporary file size exceeds "temp_file_limit" (0kB)
+RESET temp_file_limit;
+RESET work_mem;
+SELECT skeys('a=>1, b=>NULL, cc=>3'::hstore);
+ skeys 
+-------
+ a
+ b
+ cc
+(3 rows)
+
+SELECT svals('a=>1, b=>NULL, cc=>3'::hstore);
+ svals 
+-------
+ 1
+ 
+ 3
+(3 rows)
+
+SELECT each('a=>1, b=>NULL, cc=>3'::hstore);
+  each  
+--------
+ (a,1)
+ (b,)
+ (cc,3)
+(3 rows)
+
+SELECT (each('a=>1, b=>NULL, cc=>3'::hstore)).*;
+ key | value 
+-----+-------
+ a   | 1
+ b   | 
+ cc  | 3
+(3 rows)
+
+SELECT * FROM each('a=>1, b=>NULL, cc=>3'::hstore);
+ key | value 
+-----+-------
+ a   | 1
+ b   | 
+ cc  | 3
+(3 rows)
+
+SELECT * FROM each(''::hstore);
+ key | value 
+-----+-------
+(0 rows)
+
+SELECT * FROM svals(''::hstore);
+ svals 
+-------
+(0 rows)
+
+SELECT * FROM skeys('a=>1'::hstore) WITH ORDINALITY;
+ skeys | ordinality 
+-------+------------
+ a     |          1
+(1 row)
+
+SELECT * FROM ROWS FROM (skeys('a=>1, b=>2'::hstore), svals('x=>9'::hstore));
+ skeys | svals 
+-------+-------
+ a     | 9
+ b     | 
+(2 rows)
+
+SELECT h, (each(h)).key, (each(h)).value FROM (VALUES ('a=>1, b=>2'::hstore), ('c=>NULL'::hstore)) v(h);
+         h          | key | value 
+--------------------+-----+-------
+ "a"=>"1", "b"=>"2" | a   | 1
+ "a"=>"1", "b"=>"2" | b   | 2
+ "c"=>NULL          | c   | 
+(3 rows)
+
+SELECT count(*) FROM (SELECT svals(h) FROM (VALUES ('a=>1, b=>2'::hstore), (''::hstore), ('c=>3'::hstore)) v(h)) s;
+ count 
+-------
+     3
+(1 row)
+
+SELECT key, value FROM (VALUES ('z=>1'::hstore)) v(h), LATERAL each(h);
+ key | value 
+-----+-------
+ z   | 1
+(1 row)
+
+SELECT svals('a=>1, b=>NULL'::hstore) IS NULL;
+ ?column? 
+----------
+ f
+ t
+(2 rows)
+
+-- bug_74b20fc4: the syntax-error snippet is the pg_mblen_cstr bytes at the
+-- error position in the server encoding, sent verbatim; in a SQL_ASCII
+-- database that is exactly one byte, not a UTF-8 character.
+CREATE DATABASE b97ascii TEMPLATE template0 ENCODING 'SQL_ASCII';
+\c b97ascii
+\set VERBOSITY verbose
+CREATE EXTENSION hstore;
+SELECT ('a=>b ' || convert_from('\xE9'::bytea, 'SQL_ASCII'))::hstore;
+ERROR:  42601: syntax error in hstore, near "é" at position 5
+SELECT ('a=>b ' || convert_from('\xE9AA'::bytea, 'SQL_ASCII'))::hstore;
+ERROR:  42601: syntax error in hstore, near "é" at position 5
+SELECT ('a=>b ' || convert_from('\xC3A9'::bytea, 'SQL_ASCII'))::hstore;
+ERROR:  42601: syntax error in hstore, near "Ã" at position 5
+SELECT ('a=' || convert_from('\xE9'::bytea, 'SQL_ASCII'))::hstore;
+ERROR:  42601: syntax error in hstore, near "é" at position 2
+SELECT 'a=>b x'::hstore;
+ERROR:  42601: syntax error in hstore, near "x" at position 5
+LINE 1: SELECT 'a=>b x'::hstore;
+               ^
+SELECT 'a=b'::hstore;
+ERROR:  42601: syntax error in hstore, near "b" at position 2
+LINE 1: SELECT 'a=b'::hstore;
+               ^
+SELECT 'a=>b, '::hstore;
+  hstore  
+----------
+ "a"=>"b"
+(1 row)
+
+\c postgres
+\set VERBOSITY verbose
+SELECT E'a=>b Ã©'::hstore;
+ERROR:  42601: syntax error in hstore, near "Ã©" at position 5
+LINE 1: SELECT E'a=>b Ã©'::hstore;
+               ^
+SELECT E'a=>b \U0001F600'::hstore;
+ERROR:  42601: syntax error in hstore, near "ðŸ˜€" at position 5
+LINE 1: SELECT E'a=>b \U0001F600'::hstore;
+               ^
+SELECT 'a=>b x'::hstore;
+ERROR:  42601: syntax error in hstore, near "x" at position 5
+LINE 1: SELECT 'a=>b x'::hstore;
+               ^
+DROP DATABASE b97ascii;

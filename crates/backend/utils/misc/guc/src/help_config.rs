@@ -18,7 +18,7 @@ fn display_struct(var: &GucVariable) -> bool {
 // printMixedStruct (help_config.c:84-131).
 fn print_mixed_struct(out: &mut String, var: &GucVariable) {
     let gen = var.gen();
-    out.push_str(gen.name);
+    out.push_str(&gen.name);
     out.push('\t');
     out.push_str(GucContext_Names[gen.context as usize]);
     out.push('\t');
@@ -63,7 +63,7 @@ fn print_mixed_struct(out: &mut String, var: &GucVariable) {
 pub fn guc_info_text() -> String {
     let mut vars: Vec<GucVariable> =
         all_settings().filter_map(crate::store::build_variable).collect();
-    vars.sort_by(|a, b| guc_name_compare(a.gen().name, b.gen().name));
+    vars.sort_by(|a, b| guc_name_compare(&a.gen().name, &b.gen().name));
     let mut out = String::with_capacity(64 * 1024);
     for var in &vars {
         if display_struct(var) {

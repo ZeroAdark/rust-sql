@@ -21,6 +21,14 @@ fn data_corrupted(level: ErrorLevel, message: alloc::string::String) -> ! {
     ))
 }
 
+// A forged line pointer is a corrupt page, not a broken invariant: it must
+// raise the same catchable XX001 error as bufpage.c's own corruption checks.
+#[cold]
+#[inline(never)]
+fn corrupt_line_pointer(message: &'static str) -> ! {
+    data_corrupted(ERROR, alloc::string::String::from(message))
+}
+
 /// PageAddItemExtended's `elog(WARNING, ...)` arms (bufpage.c:235/:292/:299):
 /// the warning goes out on elog's ereport channel from inside the page code,
 /// as in C (no caller forwards it; every C caller goes on to PANIC/ERROR on
@@ -297,11 +305,11 @@ impl<'a> PageRef<'a> {
     #[inline]
     pub unsafe fn item_id_unchecked(&self, offnum: OffsetNumber) -> ItemIdData {
         let offnum = offnum as usize;
-        assert!(
-            offnum >= 1
-                && SizeOfPageHeaderData + offnum * core::mem::size_of::<ItemIdData>() <= BLCKSZ,
-            "corrupt line pointer offset"
-        );
+        if !(offnum >= 1
+            && SizeOfPageHeaderData + offnum * core::mem::size_of::<ItemIdData>() <= BLCKSZ)
+        {
+            corrupt_line_pointer("corrupt line pointer offset");
+        }
         let off = SizeOfPageHeaderData + (offnum - 1) * core::mem::size_of::<ItemIdData>();
         // SAFETY: in-bounds (caller contract), 4-aligned (header is MAXALIGNed).
         unsafe { self.ptr.as_ptr().add(off).cast::<ItemIdData>().read() }
@@ -312,7 +320,9 @@ impl<'a> PageRef<'a> {
     pub fn item_raw(&self, id: ItemIdData) -> (*const u8, u32) {
         let off = id.lp_off() as usize;
         let len = id.lp_len() as usize;
-        assert!(off >= SizeOfPageHeaderData && off + len <= BLCKSZ, "corrupt line pointer");
+        if !(off >= SizeOfPageHeaderData && off + len <= BLCKSZ) {
+            corrupt_line_pointer("corrupt line pointer");
+        }
         // SAFETY: bounds checked above.
         unsafe { self.item_raw_unchecked(id) }
     }
@@ -335,10 +345,9 @@ impl<'a> PageRef<'a> {
     pub unsafe fn item_raw_unchecked(&self, id: ItemIdData) -> (*const u8, u32) {
         let off = id.lp_off() as usize;
         let len = id.lp_len() as usize;
-        assert!(
-            off >= SizeOfPageHeaderData && off + len <= BLCKSZ,
-            "corrupt line pointer"
-        );
+        if !(off >= SizeOfPageHeaderData && off + len <= BLCKSZ) {
+            corrupt_line_pointer("corrupt line pointer");
+        }
         // SAFETY: bounds asserted above; base is 4-aligned (header MAXALIGNed).
         (unsafe { self.ptr.as_ptr().add(off) }, len as u32)
     }
@@ -361,6 +370,16 @@ impl<'a> PageRef<'a> {
     #[inline]
     pub fn pd_special(&self) -> uint16 {
         self.read_u16(core::mem::offset_of!(PageHeaderData, pd_special))
+    }
+
+    #[inline]
+    pub fn page_size(&self) -> uint16 {
+        self.read_u16(core::mem::offset_of!(PageHeaderData, pd_pagesize_version)) & 0xFF00
+    }
+
+    #[inline]
+    pub fn special_size(&self) -> uint16 {
+        self.page_size().wrapping_sub(self.pd_special())
     }
 
     #[inline]
@@ -1801,7 +1820,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "corrupt line pointer")]
     fn item_raw_unchecked_rejects_forged_extent() {
         // A heap scan reaches item_raw_unchecked for every line pointer. A page
         // crafted on disk / restored from a WAL full-page image can forge the
@@ -1817,16 +1835,18 @@ mod tests {
         // this 8KB image in the contiguous buffer pool).
         pm.set_item_id(1, ItemIdData::new(0x7fff, LP_NORMAL, 0x7fff));
         let r = pm.as_ref();
-        // SAFETY: exercising the malformed path; the release assert must fire
+        // SAFETY: exercising the malformed path; the release check must fire
         // before any pointer arithmetic dereferences out-of-page memory.
-        let _ = unsafe {
+        let err = unwind_pg_error(|| unsafe {
             let id = r.item_id_unchecked(1);
             r.item_raw_unchecked(id)
-        };
+        });
+        assert_data_corrupted(&err, ERROR, "corrupt line pointer");
+        let err = unwind_pg_error(|| r.item_raw(ItemIdData::new(0x7fff, LP_NORMAL, 0x7fff)));
+        assert_data_corrupted(&err, ERROR, "corrupt line pointer");
     }
 
     #[test]
-    #[should_panic(expected = "corrupt line pointer offset")]
     fn item_id_unchecked_rejects_out_of_page_offnum() {
         // A forged pd_lower can make max_offset_number report more line
         // pointers than fit; item_id_unchecked must not read the ItemIdData
@@ -1836,8 +1856,9 @@ mod tests {
         pm.init(0);
         let r = pm.as_ref();
         let bad = (BLCKSZ / core::mem::size_of::<ItemIdData>()) as OffsetNumber + 1;
-        // SAFETY: exercising the malformed path; the release assert must fire.
-        let _ = unsafe { r.item_id_unchecked(bad) };
+        // SAFETY: exercising the malformed path; the release check must fire.
+        let err = unwind_pg_error(|| unsafe { r.item_id_unchecked(bad) });
+        assert_data_corrupted(&err, ERROR, "corrupt line pointer offset");
     }
 
     fn fill_index_page(pm: &mut PageMut<'_>, n: usize) -> alloc::vec::Vec<[u8; 16]> {

@@ -1,0 +1,60 @@
+-- Differential fixture for the 2026-09-13 audit bug batch 165
+-- (backend/utils/adt: text_to_cstring NUL prefix in textToQualifiedNameList /
+-- pg_split_walfile_name, RETURNS record aliases of pg_split_walfile_name and
+-- pg_walfile_name_offset, check_acl element type before dimensionality,
+-- array_contains_nulls propagating ArrayGetNItems' 54000). Run via
+-- scripts/bugs-batch165-e2e.sh against the frozen expected captured from C
+-- PostgreSQL 18.6.
+\set VERBOSITY verbose
+\pset pager off
+
+-- byteain through a text-returning internal alias: text carrying NUL / raw
+-- bytes, the way a C extension could hand them in.
+CREATE FUNCTION b165_bi(cstring) RETURNS text LANGUAGE internal AS 'byteain';
+
+-- regression: pg_split_walfile_name validates the prefix before
+-- the first NUL (xlogfuncs.c:466 text_to_cstring)
+SELECT * FROM pg_split_walfile_name(b165_bi('000000010000000000000001\000'));
+SELECT * FROM pg_split_walfile_name(b165_bi('000000010000000000000001\000zz'));
+SELECT * FROM pg_split_walfile_name(b165_bi('00000001000000000000000\000'));
+
+-- regression: textToQualifiedNameList stops at the first NUL
+-- (varlena.c:3626 SplitIdentifierString over a C string)
+CREATE EXTENSION pgrowlocks;
+CREATE TABLE b165_t(a int);
+SELECT * FROM pgrowlocks(b165_bi('b165_t\000.a.b.c'));
+SELECT * FROM pgrowlocks('b165_t');
+SELECT * FROM pgrowlocks('b165_t.a.b.c');
+
+-- regression: a RETURNS record alias resolves through the column
+-- definition list (get_call_result_type(fcinfo, ...))
+CREATE FUNCTION b165_split(text) RETURNS record LANGUAGE internal AS 'pg_split_walfile_name';
+SELECT * FROM b165_split('000000010000000000000001') AS (segno numeric, tli int);
+SELECT b165_split('000000010000000000000001');
+
+-- regression: pg_walfile_name_offset builds and blesses its own
+-- (file_name text, file_offset integer) descriptor (xlogfuncs.c:397-406)
+CREATE FUNCTION b165_wno(pg_lsn) RETURNS record LANGUAGE internal AS 'pg_walfile_name_offset';
+SELECT b165_wno('0/1');
+SELECT * FROM b165_wno('0/1') AS (f text, o int);
+SELECT (b165_wno('0/1')).file_name;
+SELECT * FROM pg_walfile_name_offset('0/1');
+
+-- regression: check_acl tests the element type before dimensionality
+-- (acl.c:593-600); an empty integer array has no dimension words at all
+CREATE FUNCTION b165_aclc(int[], int[]) RETURNS bool LANGUAGE internal AS 'aclcontains';
+SELECT b165_aclc('{}'::int[], '{}'::int[]);
+SELECT b165_aclc('{1}'::int[], '{1}'::int[]);
+CREATE FUNCTION b165_aclc2(aclitem[], int[]) RETURNS bool LANGUAGE internal AS 'aclcontains';
+SELECT b165_aclc2('{}'::aclitem[], '{}'::int[]);
+
+-- regression / regression:
+-- array_contains_nulls propagates ArrayGetNItems' 54000 for a null-bitmapped
+-- array whose dimension is negative (arrayfuncs.c:3733, arrayutils.c:80)
+CREATE EXTENSION pg_surgery;
+CREATE FUNCTION b165_bia(cstring) RETURNS tid[] LANGUAGE internal AS 'byteain';
+CREATE FUNCTION b165_bif(cstring) RETURNS real[] LANGUAGE internal AS 'byteain';
+SELECT heap_force_kill('b165_t'::regclass, b165_bia('\x01000000180000001b000000ffffffff01000000ff000000'));
+SELECT pg_restore_attribute_stats('schemaname','public','relname','b165_t','attname','a','inherited',false,'null_frac',0.1::real,'most_common_freqs', b165_bif('\x0100000018000000bc020000ffffffff01000000ff000000'));
+SELECT array_position(b165_bif('\x0100000018000000bc020000ffffffff01000000ff000000'), NULL);
+SELECT array_position(b165_bif('\x0100000018000000bc020000ffffffff01000000ff000000'), 1.0::real);

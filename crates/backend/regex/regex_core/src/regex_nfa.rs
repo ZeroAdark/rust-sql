@@ -2680,16 +2680,16 @@ pub fn compact<'mcx>(mcx: Mcx<'mcx>, nfa: &Nfa, cm: &ColorMap, cnfa: &mut Cnfa) 
                 });
             } else if arc.type_ == LACON {
                 debug_assert!(s_no != cnfa.pre);
-                debug_assert!(arc.co >= 0);
                 // LACON arcs occupy the color space above the real colors
                 // ([ncolors, MAX_COLOR]); the executor tells them apart by
-                // co >= ncolors. Bound the sum before the i16 cast so a huge
-                // lookaround count can't wrap a LACON color back into the
-                // char-color range.
+                // co >= ncolors. Only surviving LACON arcs are bounded (C
+                // newlacon has no cap: lookarounds whose arcs were deleted
+                // before compaction may exceed it); an index that wrapped the
+                // i16 in newarc (C's assert(a->co >= 0)) is the same class.
                 // upstream f3cee4dc4330 (18.4): Harden our regex engine against integer overflow in size calculations.
                 // C: `a->co > MAX_COLOR - cnfa->ncolors` -> NERR(REG_ECOLORS).
                 let laco = ncolors + arc.co as i32;
-                if laco > MAX_COLOR as i32 {
+                if arc.co < 0 || laco > MAX_COLOR as i32 {
                     return Err(err_ecolors());
                 }
                 arcs.push(Carc {

@@ -1,12 +1,11 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
-use core::alloc::Layout;
 use core::cell::Cell;
 use std::rc::Rc;
 
 use ::datum::Datum;
-use ::mcx::{alloc_in, vec_with_capacity_in, Allocator, Mcx, PgString, PgVec};
+use ::mcx::{alloc_in, vec_with_capacity_in, Mcx, PgString, PgVec};
 use ::types_core::{
     AttrNumber, InvalidOid, Oid, BOOLOID, DEFAULT_COLLATION_OID, FLOAT8PASSBYVAL, INT4OID, INT8OID,
     OIDOID, RECORDOID, TEXTARRAYOID, TEXTOID,
@@ -131,20 +130,17 @@ pub fn CreateTupleDescCopyConstr<'mcx>(
             });
         }
 
-        let mut missing: PgVec<'mcx, AttrMissing> =
-            vec_with_capacity_in(mcx, constr.missing.len())?;
+        let mut values: Vec<(usize, MissingValue<'_>)> = Vec::with_capacity(constr.missing.len());
         for (i, m) in constr.missing.iter().enumerate() {
-            let am_value = if m.am_present {
-                let cattr = tupdesc.compact_attr(i);
-                datum_copy_in(mcx, m.am_value, cattr.attbyval, cattr.attlen)?
-            } else {
-                m.am_value
-            };
-            missing.push(AttrMissing {
-                am_present: m.am_present,
-                am_value,
-            });
+            if !m.am_present {
+                continue;
+            }
+            let cattr = tupdesc.compact_attr(i);
+            // SAFETY: a present tupdesc missing value is a live datum image.
+            let v = unsafe { MissingValue::of(m.am_value, cattr.attbyval, cattr.attlen) };
+            values.push((i, v));
         }
+        let (missing, missing_store) = build_missing(mcx, constr.missing.len(), &values)?;
 
         let mut check: PgVec<'mcx, ConstrCheck<'mcx>> =
             vec_droppy_with_capacity(mcx, constr.check.len())?;
@@ -164,6 +160,7 @@ pub fn CreateTupleDescCopyConstr<'mcx>(
                 defval,
                 check,
                 missing,
+                missing_store,
                 num_defval: constr.num_defval,
                 num_check: constr.num_check,
                 relchecks: constr.relchecks,
@@ -560,31 +557,61 @@ unsafe fn datum_size(p: *const u8, attlen: i16) -> usize {
     }
 }
 
-// datumCopy scoped to the attmissing payload (datum.c is not yet a unit here).
-fn datum_copy_in<'mcx>(
+/// One present attmissingval: by-value word, or the by-ref image bytes.
+pub enum MissingValue<'a> {
+    ByVal(Datum),
+    ByRef(&'a [u8]),
+}
+
+impl<'a> MissingValue<'a> {
+    /// # Safety
+    /// A by-ref `value` points at a live datum image per `datum_size`.
+    pub unsafe fn of(value: Datum, attbyval: bool, attlen: i16) -> MissingValue<'a> {
+        if attbyval {
+            return MissingValue::ByVal(value);
+        }
+        let p = value.as_usize() as *const u8;
+        // SAFETY: caller contract.
+        MissingValue::ByRef(unsafe { core::slice::from_raw_parts(p, datum_size(p, attlen)) })
+    }
+}
+
+/// datumCopy of each by-ref attmissingval into one MAXALIGN-laid-out store
+/// that the descriptor owns (the AttrMissing entries point into it), so the
+/// images free with the descriptor exactly as FreeTupleDesc pfrees them.
+pub fn build_missing<'mcx>(
     mcx: Mcx<'mcx>,
-    value: Datum,
-    attbyval: bool,
-    attlen: i16,
-) -> PgResult<Datum> {
-    if attbyval {
-        return Ok(value);
+    natts: usize,
+    values: &[(usize, MissingValue<'_>)],
+) -> PgResult<(PgVec<'mcx, AttrMissing>, PgVec<'mcx, u8>)> {
+    let maxalign = |n: usize| (n + MAXIMUM_ALIGNOF - 1) & !(MAXIMUM_ALIGNOF - 1);
+    let total: usize = values
+        .iter()
+        .map(|(_, v)| match v {
+            MissingValue::ByVal(_) => 0,
+            MissingValue::ByRef(b) => maxalign(b.len()),
+        })
+        .sum();
+    // The store never grows past this exact capacity, so its base is stable.
+    let mut store: PgVec<'mcx, u8> = vec_with_capacity_in(mcx, total)?;
+    let mut missing: PgVec<'mcx, AttrMissing> = vec_with_capacity_in(mcx, natts)?;
+    missing.resize(natts, AttrMissing { am_present: false, am_value: Datum::null() });
+    for (i, v) in values {
+        let am_value = match v {
+            MissingValue::ByVal(d) => *d,
+            MissingValue::ByRef(b) => {
+                let off = store.len();
+                store.extend_from_slice(b);
+                store.resize(maxalign(store.len()), 0);
+                // SAFETY: off < capacity; the buffer is never reallocated.
+                Datum::from_usize(unsafe { store.as_ptr().add(off) } as usize)
+            }
+        };
+        missing[*i] = AttrMissing { am_present: true, am_value };
     }
-    let p = value.as_usize() as *const u8;
-    if p.is_null() {
-        return Ok(Datum::null());
-    }
-    // SAFETY: non-null by-ref tupdesc missing value (see datum_size contract).
-    let size = unsafe { datum_size(p, attlen) };
-    // SAFETY: size >= 1; MAXIMUM_ALIGNOF is a power of two.
-    let layout = unsafe { Layout::from_size_align_unchecked(size, MAXIMUM_ALIGNOF) };
-    let dst = mcx
-        .allocate(layout)
-        .map_err(|_| Box::new(mcx.oom(size)))?
-        .cast::<u8>();
-    // SAFETY: dst freshly allocated for `size` bytes; src readable for `size`.
-    unsafe { core::ptr::copy_nonoverlapping(p, dst.as_ptr(), size) };
-    Ok(Datum::from_usize(dst.as_ptr() as usize))
+    debug_assert!(store.len() == total);
+    debug_assert!(total == 0 || store.as_ptr() as usize % MAXIMUM_ALIGNOF == 0);
+    Ok((missing, store))
 }
 
 // datumIsEqual over the attmissing payload: by-val word equality, by-ref byte

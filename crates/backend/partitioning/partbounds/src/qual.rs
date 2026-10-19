@@ -863,9 +863,9 @@ fn make_ands_implicit<'mcx>(mcx: Mcx<'mcx>, clause: Node<'mcx>) -> PgResult<Node
     NodeList::make1(mcx, clause)
 }
 
-// get_proposed_default_constraint (catalog/partition.c). C also runs
-// canonicalize_qual after simplification; skipped — consumers here evaluate
-// the expression directly, so canonical form is not load-bearing.
+// get_proposed_default_constraint (catalog/partition.c:389). The
+// canonical form is load-bearing: it drops redundant OR arms whose
+// functions the default-partition scan would otherwise evaluate.
 pub fn get_proposed_default_constraint<'mcx>(
     mcx: Mcx<'mcx>,
     new_part_constraints: NodeList<'mcx>,
@@ -873,7 +873,8 @@ pub fn get_proposed_default_constraint<'mcx>(
     let def = make_ands_explicit(mcx, new_part_constraints)?;
     let not = make_bool_expr(mcx, BoolExprType::NOT_EXPR, NodeList::make1(mcx, def)?)?;
     let simplified = clauses_seams::eval_const_expressions::call(mcx, not)?;
-    make_ands_implicit(mcx, simplified)
+    let canon = planner_seams::canonicalize_qual::call(mcx, simplified, true)?;
+    make_ands_implicit(mcx, canon)
 }
 
 // PartConstraintImpliedByRelConstraint (tablecmds.c:20051-20103): do the

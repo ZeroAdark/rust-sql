@@ -321,11 +321,9 @@ fn recovery_create_dbdir(path: &str, only_tblspc: bool) -> PgResult<()> {
             .into_error()
             .into());
     }
-    if reached_consistency {
-        ereport(WARNING)
-            .errmsg(format!("creating missing directory: {path}"))
-            .finish(loc("recovery_create_dbdir"))?;
-    }
+    ereport(if reached_consistency { WARNING } else { types_error::DEBUG1 })
+        .errmsg(format!("creating missing directory: {path}"))
+        .finish(loc("recovery_create_dbdir"))?;
     // dbcommands.c:3300: a failed mkdir here halts recovery (PANIC) rather
     // than surfacing as a catchable ERROR over a half-built directory tree.
     fd::pg_mkdir_p(path).map_err(|e| {
@@ -574,6 +572,39 @@ mod tests {
             "{}",
             err.message()
         );
+    }
+
+    /// dbcommands.c:3297: before consistency the missing directory is
+    /// announced at DEBUG1 (WARNING only once consistency is reached).
+    #[test]
+    fn recovery_create_dbdir_announces_at_debug1_before_consistency() {
+        static EMITTED: std::sync::Mutex<Vec<(types_error::ErrorLevel, String)>> =
+            std::sync::Mutex::new(Vec::new());
+        fn capture(err: &types_error::PgError, _output_to_server: &mut bool) {
+            EMITTED.lock().unwrap().push((err.level(), err.message().to_string()));
+        }
+        if !xlogrecovery_seams::reached_consistency::is_installed() {
+            xlogrecovery_seams::reached_consistency::set(|| false);
+        }
+        let dir = std::env::temp_dir().join(format!("pgrust_b230_dbdir_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("16384").to_string_lossy().into_owned();
+        let prev_min = elog::config::log_min_messages();
+        elog::config::set_log_min_messages(types_error::DEBUG1);
+        let prev = elog::set_emit_log_hook(Some(capture));
+        let r = recovery_create_dbdir(&path, false);
+        elog::set_emit_log_hook(prev);
+        elog::config::set_log_min_messages(prev_min);
+        r.expect("mkdir under a temp dir succeeds");
+        let emitted = EMITTED.lock().unwrap();
+        let msg = format!("creating missing directory: {path}");
+        let row = emitted
+            .iter()
+            .find(|(_, m)| *m == msg)
+            .unwrap_or_else(|| panic!("{msg:?} not emitted; got {emitted:?}"));
+        assert_eq!(row.0, types_error::DEBUG1);
+        drop(emitted);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -114,6 +114,11 @@ fn lsn_fmt(lsn: XLogRecPtr) -> String {
     format!("{:X}/{:X}", lsn >> 32, lsn as u32)
 }
 
+// %X/%08X (xlogrecovery.c:823).
+fn lsn_fmt08(lsn: XLogRecPtr) -> String {
+    format!("{:X}/{:08X}", lsn >> 32, lsn as u32)
+}
+
 // The XLogRecoveryCtlData fields live consumers reach (single address space:
 // plain atomics stand in for the spinlocked shmem struct).
 static RECOVERY_TARGET_TLI: AtomicU32 = AtomicU32::new(0);
@@ -332,6 +337,7 @@ struct PageSource {
     backup_end_required: bool,
     redo_start_lsn: XLogRecPtr,
     redo_start_tli: TimeLineID,
+    system_identifier: u64,
 }
 
 impl PageSource {
@@ -370,6 +376,7 @@ impl PageSource {
             backup_end_required: false,
             redo_start_lsn: InvalidXLogRecPtr,
             redo_start_tli: 0,
+            system_identifier: 0,
         }
     }
 
@@ -835,14 +842,6 @@ fn rec_end_for_report(target_page_ptr: XLogRecPtr, req_len: i32) -> XLogRecPtr {
     target_page_ptr + req_len as u64
 }
 
-// The recycled-segment signature: wrong magic or a page address belonging to
-// the segment's previous life. Full validation stays in the reader.
-fn page_header_plausible(page: &[u8], target_page_ptr: XLogRecPtr) -> bool {
-    let magic = u16::from_ne_bytes(page[0..2].try_into().unwrap());
-    let pageaddr = u64::from_ne_bytes(page[8..16].try_into().unwrap());
-    magic == xlogreader::XLOG_PAGE_MAGIC && pageaddr == target_page_ptr
-}
-
 thread_local! {
     // InRedo (xlogrecovery.c file static; startup-thread only).
     static IN_REDO: Cell<bool> = const { Cell::new(false) };
@@ -915,7 +914,7 @@ impl XLogReaderRoutine for PageSource {
                 {
                     return Ok(XLREAD_WOULDBLOCK);
                 }
-                let replay_lsn = REPLAY_END_REC_PTR.load(Relaxed);
+                let replay_lsn = v.EndRecPtr;
                 self.read_rec_ptr = v.ReadRecPtr;
                 match self.wait_for_wal(
                     target_page_ptr + req_len as u64,
@@ -966,7 +965,7 @@ impl XLogReaderRoutine for PageSource {
                 let (msg, code) = if r < 0 {
                     (
                         format!(
-                            "could not read from WAL segment {fname}, LSN {}, offset {}: {errno}",
+                            "could not read from WAL segment {fname}, LSN {}, offset {}: %m",
                             lsn_fmt(target_page_ptr),
                             self.read_off
                         ),
@@ -989,28 +988,27 @@ impl XLogReaderRoutine for PageSource {
                 self.report(emode, target_page_ptr + req_len as u64, msg, code)?;
             } else {
                 v.seg.ws_tli = self.cur_file_tli;
-                // In standby mode, sanity-check a segment-start page header
-                // now: a contrecord's second half read from a recycled local
-                // segment must retry another source here, or ReadRecord's
-                // whole-record retry loops forever (xlogrecovery.c:3498).
-                if StandbyMode()
-                    && target_page_ptr % wal_segsz as u64 == 0
-                    && !page_header_plausible(cur_page, target_page_ptr)
-                {
+                // In standby mode, validate a segment-start page header now,
+                // logging the validator's own message: a contrecord's second
+                // half read from a recycled local segment must retry another
+                // source here, or ReadRecord's whole-record retry loops
+                // forever (xlogrecovery.c:3498).
+                let invalid = if StandbyMode() && target_page_ptr % wal_segsz as u64 == 0 {
+                    xlogreader::validate_view_page_header(
+                        v,
+                        self.system_identifier,
+                        target_page_ptr,
+                        &cur_page[..],
+                    )
+                } else {
+                    None
+                };
+                if let Some(msg) = invalid {
                     let emode = self.emode;
-                    let fname = transam_xlog::XLogFileName(
-                        self.cur_file_tli,
-                        self.read_seg_no,
-                        wal_segsz,
-                    );
                     self.report(
                         emode,
                         rec_end_for_report(target_page_ptr, req_len),
-                        format!(
-                            "invalid page header in WAL segment {fname}, LSN {}, offset {}",
-                            lsn_fmt(target_page_ptr),
-                            target_page_off
-                        ),
+                        msg,
                         ReadFailCode::None,
                     )?;
                 } else {
@@ -1347,7 +1345,11 @@ pub fn InitWalRecovery() -> PgResult<InitWalRecoveryResult> {
         context,
         reader,
         prefetcher,
-        src: PageSource::new(),
+        src: {
+            let mut src = PageSource::new();
+            src.system_identifier = cf.system_identifier;
+            src
+        },
         check_point_loc: cf.checkPoint,
         check_point_tli: cf.checkPointCopy.ThisTimeLineID,
         aborted_rec_ptr: InvalidXLogRecPtr,
@@ -1549,8 +1551,8 @@ pub fn InitWalRecovery() -> PgResult<InitWalRecoveryResult> {
                 ereport(PANIC)
                     .errmsg(format!(
                         "could not find redo location {} referenced by checkpoint record at {}",
-                        lsn_fmt(check_point.redo),
-                        lsn_fmt(rec.check_point_loc)
+                        lsn_fmt08(check_point.redo),
+                        lsn_fmt08(rec.check_point_loc)
                     ))
                     .finish(loc("InitWalRecovery"))?;
             }
@@ -2754,15 +2756,25 @@ pub fn StartupRereadWalRcvConfig() {
     let Some((conninfo, slotname, temp_slot)) = started else {
         return;
     };
-    let conninfo_changed = conninfo != read_str(&guc_tables::vars::PrimaryConnInfo);
-    let slotname_changed = slotname != read_str(&guc_tables::vars::PrimarySlotName);
+    let new_conninfo = read_str(&guc_tables::vars::PrimaryConnInfo);
+    let new_slotname = read_str(&guc_tables::vars::PrimarySlotName);
+    let new_temp_slot = if guc_tables::vars::wal_receiver_create_temp_slot.installed() {
+        guc_tables::vars::wal_receiver_create_temp_slot.read()
+    } else {
+        temp_slot
+    };
+    let conninfo_changed = conninfo != new_conninfo;
+    let slotname_changed = slotname != new_slotname;
     // wal_receiver_create_temp_slot only matters with no slot configured.
-    let temp_slot_changed = !slotname_changed
-        && slotname.is_empty()
-        && guc_tables::vars::wal_receiver_create_temp_slot.installed()
-        && temp_slot != guc_tables::vars::wal_receiver_create_temp_slot.read();
+    let temp_slot_changed = !slotname_changed && slotname.is_empty() && temp_slot != new_temp_slot;
 
     if conninfo_changed || slotname_changed || temp_slot_changed {
+        // startup.c:136-151 diffs each reload against the values the previous
+        // one left, so an unchanged reload while a restart is pending does
+        // not request (and log) it again.
+        WALRCV_STARTED_WITH.with(|c| {
+            *c.borrow_mut() = Some((new_conninfo, new_slotname, new_temp_slot));
+        });
         StartupRequestWalReceiverRestart();
     }
 }

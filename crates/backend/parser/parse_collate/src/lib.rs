@@ -1168,7 +1168,7 @@ fn collation_mismatch_error(
             .ok()
             .flatten()
             .map(|s| s.as_str().to_owned())
-            .unwrap_or_else(|| format!("{c}"))
+            .unwrap_or_else(|| "(null)".to_owned())
     };
     let encoding = mbutils::GetDatabaseEncoding();
     let mut report = elog::ereport(ERROR).errcode(ERRCODE_COLLATION_MISMATCH).errmsg(format!(

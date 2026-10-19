@@ -53,6 +53,7 @@ pub fn init_seams() {
     analyze_seams::parse_analyze_plpgsql::set(parse_analyze_plpgsql);
     analyze_seams::analyze_requires_snapshot::set(analyze_requires_snapshot);
     analyze_seams::parse_sub_analyze::set(parse_sub_analyze);
+    analyze_seams::transform_stmt_child::set(transform_stmt_child);
 }
 
 pub fn parse_analyze_fixedparams<'a, 'mcx>(
@@ -100,6 +101,7 @@ pub fn parse_analyze_sql_fn<'a, 'mcx>(
     argnames: &'a [&'a str],
     input_collation: Oid,
     query_env: QueryEnvHandle,
+    analyze_hooks: bool,
 ) -> PgResult<Query<'mcx>> {
     let mut pstate = make_parsestate(mcx, None);
     pstate.p_sourcetext = Some(source_text.as_bytes());
@@ -115,6 +117,11 @@ pub fn parse_analyze_sql_fn<'a, 'mcx>(
     }
 
     let mut query = transformTopLevelStmt(mcx, &mut pstate, parse_tree)?;
+
+    if !analyze_hooks {
+        free_parsestate(pstate)?;
+        return Ok(query);
+    }
 
     if tap_post_parse_analyze::is_installed() && queryjumble::IsQueryIdEnabled() {
         let js = queryjumble::JumbleQuery(mcx, &mut query)?;
@@ -155,7 +162,9 @@ pub fn transform_stmt_sql_fn<'a, 'mcx>(
 
     let query = transformStmt(mcx, &mut pstate, stmt)?;
 
-    free_parsestate(pstate)?;
+    if query.commandType != CmdType::CMD_UTILITY {
+        free_parsestate(pstate)?;
+    }
 
     Ok(query)
 }
@@ -265,6 +274,16 @@ pub fn parse_sub_analyze<'mcx>(
 
     free_parsestate(pstate)?;
     Ok(query)
+}
+
+pub fn transform_stmt_child<'a, 'mcx>(
+    mcx: Mcx<'mcx>,
+    parse_tree: Node<'mcx>,
+    parent_parse_state: &'a ParseState<'a, 'mcx>,
+) -> PgResult<(Query<'mcx>, ParseState<'a, 'mcx>)> {
+    let mut pstate = make_parsestate(mcx, Some(parent_parse_state));
+    let query = transformStmt(mcx, &mut pstate, parse_tree)?;
+    Ok((query, pstate))
 }
 
 pub fn transformTopLevelStmt<'mcx>(
@@ -454,7 +473,7 @@ fn transformCallStmt<'mcx>(
                         // (exprType, Param dno reads), so the node is shared.
                         outargs.lappend(mcx, n)?;
                     }
-                    m => panic!("invalid argmode {m} for procedure"),
+                    m => panic!("invalid argmode {} for procedure", m as u8 as char),
                 }
             }
             inargs

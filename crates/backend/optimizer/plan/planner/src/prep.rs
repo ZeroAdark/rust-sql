@@ -514,7 +514,7 @@ pub fn preprocess_rowmarks<'mcx>(
         }
         rels.del_member(rc.rti as i32);
         run.glob.last_row_mark_id += 1;
-        let mark_type = select_rowmark_type(rte, rc.strength);
+        let mark_type = select_rowmark_type(run.mcx, rte, rc.strength)?;
         let id = run.add_rowmark(PlanRowMark {
             rti: rc.rti,
             prti: rc.rti,
@@ -536,7 +536,7 @@ pub fn preprocess_rowmarks<'mcx>(
         let rte = rte_node.as_range_tbl_entry().expect("rtable cell");
         run.glob.last_row_mark_id += 1;
         let mark_type =
-            select_rowmark_type(rte, types_nodes::LockClauseStrength::LCS_NONE);
+            select_rowmark_type(run.mcx, rte, types_nodes::LockClauseStrength::LCS_NONE)?;
         let id = run.add_rowmark(PlanRowMark {
             rti: i,
             prti: i,
@@ -696,26 +696,29 @@ fn collect_jointree_relids<'mcx>(
 
 // select_rowmark_type (planner.c).
 pub fn select_rowmark_type(
+    mcx: mcx::Mcx<'_>,
     rte: &RangeTblEntry<'_>,
     strength: types_nodes::LockClauseStrength,
-) -> types_nodes::plannodes::RowMarkType {
+) -> PgResult<types_nodes::plannodes::RowMarkType> {
     use types_nodes::plannodes::RowMarkType::*;
     use types_nodes::LockClauseStrength::*;
     if rte.rtekind != RTEKind::RTE_RELATION {
-        return ROW_MARK_COPY;
+        return Ok(ROW_MARK_COPY);
     }
-    // C lets the FDW's GetForeignRowMarkType override; no in-tree FDW
-    // installs one, so this is always C's ROW_MARK_COPY default.
+    // GetFdwRoutineByRelId first (a handler-less wrapper errors here, before
+    // the target list is preprocessed); no in-tree FDW installs
+    // GetForeignRowMarkType, so the result is always C's ROW_MARK_COPY default.
     if rte.relkind == types_rel::RELKIND_FOREIGN_TABLE {
-        return ROW_MARK_COPY;
+        foreigncmds_seams::get_fdw_routine_by_rel_id::call(mcx, rte.relid)?;
+        return Ok(ROW_MARK_COPY);
     }
-    match strength {
+    Ok(match strength {
         LCS_NONE => ROW_MARK_REFERENCE,
         LCS_FORKEYSHARE => ROW_MARK_KEYSHARE,
         LCS_FORSHARE => ROW_MARK_SHARE,
         LCS_FORNOKEYUPDATE => ROW_MARK_NOKEYEXCLUSIVE,
         LCS_FORUPDATE => ROW_MARK_EXCLUSIVE,
-    }
+    })
 }
 
 // SELECT arm shares the parse targetList (as C); the INSERT arm NULL-fills

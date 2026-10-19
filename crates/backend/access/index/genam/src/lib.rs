@@ -391,10 +391,10 @@ pub fn systable_inplace_update_begin<'mcx>(
     let mut retries = 0;
     loop {
         postgres_seams::check_for_interrupts::call()?;
-        retries += 1;
         if retries > 10000 {
             return Err(too_many_overwrite_tries());
         }
+        retries += 1;
 
         let mut scan = systable_beginscan(mcx, relation, indexId, indexOK, None, key)?;
         if systable_getnext(mcx, &mut scan)?.is_none() {

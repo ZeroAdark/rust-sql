@@ -1257,6 +1257,61 @@ fn enr_invalid_atttypid_is_catchable_xx000() {
     );
 }
 
+// parse_relation.c:2553-2554 addRangeTableEntryForENR: the alias only shapes
+// eref; rte->alias stays NULL, which is what errorMissingRTE's detail-vs-hint
+// branch (parse_relation.c:3754) observes.
+#[test]
+fn enr_rte_carries_no_alias() {
+    install();
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+
+    let mut a = FormData_pg_attribute {
+        atttypid: INT4OID,
+        attlen: 4,
+        attnum: 1,
+        atttypmod: -1,
+        attbyval: true,
+        attalign: b'i' as i8,
+        attstorage: b'p' as i8,
+        ..Default::default()
+    };
+    a.attname.namestrcpy("col1");
+    let desc = Rc::new(tupdesc::CreateTupleDesc(mcx, &[a]).unwrap());
+    let mut env = queryenvironment::create_queryEnv(mcx);
+    queryenvironment::register_ENR(
+        &mut env,
+        queryenvironment::EphemeralNamedRelationData {
+            md: queryenvironment::EphemeralNamedRelationMetadataData {
+                name: mcx::PgString::from_str_in("oldrows", mcx).unwrap(),
+                reliddesc: InvalidOid,
+                tupdesc: Some(desc),
+                enrtype: queryenvironment::ENR_NAMED_TUPLESTORE,
+                enrtuples: 0.0,
+            },
+            reldata: types_portal::TuplestoreHandle::NULL,
+        },
+    )
+    .unwrap();
+    let mut pstate = make_parsestate(mcx, None);
+    pstate.p_queryEnv = Some(&env);
+
+    let colnames = NodeList::make1(mcx, Node::mk_string(mcx, "a").unwrap()).unwrap();
+    let alias = Node::mk_mut(mcx, Alias { aliasname: Some("o"), colnames })
+        .unwrap()
+        .seal_ref();
+    let nsitem =
+        addRangeTableEntryForENR(mcx, &mut pstate, rv(mcx, "oldrows", Some(alias)), true)
+            .unwrap();
+    let rte = nsitem.p_rte.as_range_tbl_entry().expect("nsitem carries its RTE");
+    assert_eq!(rte.rtekind, RTEKind::RTE_NAMEDTUPLESTORE);
+    assert!(rte.alias.is_none(), "ENR RTE must not carry rte->alias");
+    let eref = rte.eref.expect("eref");
+    assert_eq!(eref.aliasname, Some("o"));
+    let names: Vec<&str> = eref.colnames.iter().map(|n| n.as_string().unwrap().sval).collect();
+    assert_eq!(names, ["a"]);
+}
+
 // parse_relation.c:2958 expandRTE: a FROM function whose result class is
 // neither composite nor scalar (here: bare RECORD with no column definition
 // list, which addRangeTableEntryForFunction would have refused) is

@@ -70,7 +70,7 @@ binary input without dedup — the result violates the ts_type.h sortedness
 /uniqueness contract in both engines alike (upstream-parity, no action).
 
 Harness handling: the recv semantic plane is a SORTED-MULTISET gate over
-(lexeme, positions) pairs (GL-PARMERGE-1 within-tie precedent); position
+(lexeme, positions) pairs (regression within-tie precedent); position
 LISTS stay order-strict.
 
 ---
@@ -99,7 +99,7 @@ LISTS stay order-strict.
   image compare.
 - **DIVERGENCE-1b: RATIFIED NON-SURFACE (carve stands, narrowed).** Within-tie
   entry order for DUPLICATE lexemes on the needSort path: C qsort_arg vs
-  Rust sort_unstable are different unstable algorithms; GL-PARMERGE-1
+  Rust sort_unstable are different unstable algorithms; regression
   within-tie precedent. Harness now requires byte-equality UNLESS the
   decoded content has duplicate lexemes AND the sorted-multiset gate passes.
   (Duplicate lexemes from binary input violate the sortedness/uniqueness

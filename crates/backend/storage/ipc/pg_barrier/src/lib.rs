@@ -313,7 +313,7 @@ impl Barrier {
     /// therefore a constraint this port invented, not one C imposes; measured
     /// on a shipped profile it fired on stale bookkeeping only — a leftover
     /// count at the terminal build phase with **no** parked waiter
-    /// (GL-ASSERTMASK-1 §4). They are gone rather than re-graded.
+    /// (regression §4). They are gone rather than re-graded.
     pub fn reset(&self) {
         let mut b = self.lock();
         b.phase = 0;

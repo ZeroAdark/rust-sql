@@ -15,7 +15,7 @@ use core::fmt::Write;
 use datum::Datum;
 use mcx::{Mcx, PgString};
 use types_core::ParseLoc;
-use types_error::{PgError, PgResult, ERRCODE_FEATURE_NOT_SUPPORTED};
+use types_error::{PgError, PgResult, ERRCODE_DATA_EXCEPTION, ERRCODE_FEATURE_NOT_SUPPORTED};
 use types_nodes::bitmapset::Bitmapset;
 use types_nodes::list::{IntList, NodeList, OidList, OptNodeList, XidList};
 use types_nodes::parsenodes::{
@@ -1368,7 +1368,7 @@ fn invalid_typlen(typlen: i32) -> Box<PgError> {
 // anything: by-value lengths are exactly sizeof(char/int16/int32/Datum);
 // by-reference is the fixed length, VARSIZE_ANY (-1; every header form,
 // external TOAST pointers included) or strlen+1 (-2); a NULL pointer for
-// the two variable forms is elog(ERROR, "invalid Datum pointer").
+// the two variable forms is ereport(ERROR, ERRCODE_DATA_EXCEPTION) (datum.c:88).
 fn datum_get_size(value: Datum, typbyval: bool, typlen: i32) -> PgResult<usize> {
     if typbyval {
         return match typlen {
@@ -1381,7 +1381,9 @@ fn datum_get_size(value: Datum, typbyval: bool, typlen: i32) -> PgResult<usize> 
     }
     let p = value.as_usize() as *const u8;
     match typlen {
-        -1 | -2 if p.is_null() => Err(Box::new(PgError::error("invalid Datum pointer"))),
+        -1 | -2 if p.is_null() => Err(Box::new(
+            PgError::error("invalid Datum pointer").with_sqlstate(ERRCODE_DATA_EXCEPTION),
+        )),
         // SAFETY: a non-NULL byref varlena Const points at a live varlena image
         // of some header form.
         -1 => Ok(unsafe { varsize_any(p) }),

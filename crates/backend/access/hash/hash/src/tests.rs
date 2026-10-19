@@ -812,3 +812,26 @@ fn hashinsert_does_not_retain_its_tuple_image_in_the_caller_context() {
         "hash.c:280: the per-insert tuple image must not accumulate in the caller's context"
     );
 }
+
+// regression: the per-page delay point in hashbucketcleanup reaches
+// vacuum_delay_point even while VacuumCostActive is false, so a pending
+// autovacuum config reload is processed mid-scan (hash.c:722).
+static DELAY_POINT_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn counting_delay_point(_is_analyze: bool) -> PgResult<()> {
+    DELAY_POINT_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
+#[test]
+fn vacuum_delay_point_reaches_the_seam_without_cost_active() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| vacuum_seams::vacuum_delay_point::set(counting_delay_point));
+    assert!(!init_small::globals::VacuumCostActive());
+    let before = DELAY_POINT_CALLS.load(std::sync::atomic::Ordering::SeqCst);
+    crate::vacuum_delay_point().unwrap();
+    assert_eq!(
+        DELAY_POINT_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+        before + 1
+    );
+}

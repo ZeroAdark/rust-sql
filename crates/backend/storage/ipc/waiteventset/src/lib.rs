@@ -413,6 +413,7 @@ fn wait_loop(
 
     while returned_events == 0 {
         let mut fd_parked = false;
+        let mut poll_once = false;
         if let Some(l) = latch {
             if !l.is_set() {
                 // Dekker arm: publish the wake route first, then
@@ -446,13 +447,11 @@ fn wait_loop(
                 // pipe registered in this set. A notification that already
                 // landed (wake-before-park) degrades the block to a poll.
                 fd_parked = waiter::begin_fd_park();
-                if !fd_parked {
-                    cur_timeout = 0;
-                }
+                poll_once = !fd_parked;
             }
         }
 
-        // GL-RECWAKE-1: while fd-parked the ONLY route for a latch wake is a
+        // regression: while fd-parked the ONLY route for a latch wake is a
         // waiter unpark writing the wake pipe — a lost one leaves the kernel
         // block deaf to an already-set latch for the caller's whole timeout
         // (forever at -1). Bound each kernel lap by the waiter recheck
@@ -460,7 +459,9 @@ fn wait_loop(
         // wake costs at most one cadence period — the untimed-park law,
         // extended to the fd-park mode. Latch-free waits are exempt (their
         // events are kernel-delivered; no wake can be lost).
-        let mut block_timeout = cur_timeout;
+        // waiteventset.c:1139: cur_timeout stays the caller's (-1 = forever)
+        // across laps; only THIS lap degrades to a poll.
+        let mut block_timeout = if poll_once { 0 } else { cur_timeout };
         if fd_parked {
             let cadence = waiter::recheck_cadence_ms();
             if cadence > 0 && (block_timeout < 0 || block_timeout > cadence) {
@@ -468,6 +469,8 @@ fn wait_loop(
             }
         }
 
+        #[cfg(test)]
+        tests::note_kernel_block();
         let rc = backend::wait_block(
             set,
             latch,

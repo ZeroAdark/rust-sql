@@ -121,6 +121,9 @@ fn boundary_blocks_and_offsets() {
     let maxoff = MAX_OFFSET_IN_BITMAP;
     let ctx = MemoryContext::new("tidstore test");
     let mut ts = TidStore::create_local(ctx.mcx(), 2 * 1024 * 1024, false).unwrap();
+    // C's tidstore_empty_size: the store's own footprint at creation (a
+    // recycled keeper block may or may not already be counted).
+    let empty_size = ts.memory_usage();
     let blocks = [0, 1, MAXBLKNO / 2, MAXBLKNO - 1, MAXBLKNO];
     let offsets = [1, 2, maxoff / 2, maxoff - 1, maxoff];
     let mut oracle = BTreeMap::new();
@@ -128,10 +131,17 @@ fn boundary_blocks_and_offsets() {
         ts.set_block_offsets(blk, &offsets).unwrap();
         oracle.insert(blk, offsets.to_vec());
     }
-    // "full" per test_is_full: usage grew past the empty-store baseline.
-    let empty = TidStore::create_local(ctx.mcx(), 2 * 1024 * 1024, false).unwrap();
-    assert!(ts.memory_usage() > empty.memory_usage());
-    check_oracle(&ts, &oracle, &blocks);
+    // "Add enough TIDs to cause the store to appear full, compared to the
+    // allocated memory it started out with" (blocks 1000..=2000).
+    let filler: [OffsetNumber; 6] = [1, 31, 32, 63, 64, 200];
+    for blk in 1000..=2000 {
+        ts.set_block_offsets(blk, &filler).unwrap();
+        oracle.insert(blk, filler.to_vec());
+    }
+    // test_is_full: usage grew past the empty-store baseline.
+    assert!(ts.memory_usage() > empty_size);
+    let probes: Vec<BlockNumber> = blocks.iter().copied().chain(1000..=2000).collect();
+    check_oracle(&ts, &oracle, &probes);
 }
 
 // test_tidstore.sql: replacements crossing RT_CHILDPTR_IS_VALUE (embedded <->
@@ -369,4 +379,31 @@ fn handle_outlives_detach() {
     // dropping it releases the last reference.
     drop(handle);
     drop(handle2);
+}
+
+// tidstore.c:172: maxBlockSize is capped at max_bytes/16, so a 1 MiB store
+// grows its leaf context in steps of at most 64 KiB (plus node slab blocks)
+// instead of doubling towards the 8 MiB default.
+#[test]
+fn local_max_block_size_follows_max_bytes() {
+    assert_eq!(local_max_block_size(1024 * 1024), 64 * 1024);
+    assert_eq!(local_max_block_size(3 * 1024 * 1024), 128 * 1024);
+    assert_eq!(local_max_block_size(64 * 1024 * 1024), 4 * 1024 * 1024);
+    assert_eq!(local_max_block_size(1024 * 1024 * 1024), 8 * 1024 * 1024);
+    assert_eq!(local_max_block_size(1024), 8 * 1024);
+
+    let ctx = MemoryContext::new("tidstore test");
+    let mut ts = TidStore::create_local(ctx.mcx(), 1024 * 1024, true).unwrap();
+    let offsets: Vec<OffsetNumber> = (1..=MAX_OFFSET_IN_BITMAP).step_by(3).collect();
+    let mut prev = ts.memory_usage();
+    let mut max_step = 0;
+    let mut blk: BlockNumber = 0;
+    while ts.memory_usage() < 2 * 1024 * 1024 {
+        ts.set_block_offsets(blk, &offsets).unwrap();
+        blk += 1;
+        let now = ts.memory_usage();
+        max_step = max_step.max(now - prev);
+        prev = now;
+    }
+    assert!(max_step <= 64 * 1024 + 3 * 128 * 1024, "leaf block step {max_step}");
 }

@@ -132,7 +132,7 @@ fn take_log_lines() -> Vec<(types_error::ErrorLevel, String)> {
 // wait_event_types.h WaitEventIO codes (PG_WAIT_IO | index in name order).
 const PG_WAIT_IO: u32 = 0x0A00_0000;
 const WE_BUFFILE_READ: u32 = PG_WAIT_IO + 6;
-const WE_BUFFILE_WRITE: u32 = PG_WAIT_IO + 7;
+const WE_BUFFILE_WRITE: u32 = PG_WAIT_IO + 8;
 const WE_COPY_FILE_READ: u32 = PG_WAIT_IO + 15;
 const WE_COPY_FILE_WRITE: u32 = PG_WAIT_IO + 16;
 
@@ -1297,7 +1297,7 @@ fn dst_p1_spill_crates_have_zero_raw_fs_sites() {
 }
 
 // ---------------------------------------------------------------------------
-// GL-FDLIMIT-1: the one-process descriptor budget.
+// regression: the one-process descriptor budget.
 //
 // C sizes max_safe_fds for ONE backend process. pgrust runs every session as a
 // thread in a single process with a single descriptor table, so the same
@@ -2056,4 +2056,75 @@ fn rmtree_warns_on_unopenable_directory() {
 
     assert!(crate::copydir::rmtree(&dir, true).unwrap());
     assert!(!std::path::Path::new(&dir).exists());
+}
+
+// fd.c:1922 PathNameOpenTemporaryFile: a reopened file (any mode) never
+// counts against temp_file_limit; only sqe_spill's writer reopen
+// (FileSet::open_seg) keeps charging itself.
+#[test]
+fn reopened_temporary_file_is_not_charged_against_temp_file_limit() {
+    let (_dir, _cwd) = fileset_scaffold("fsreopen");
+    let fs = crate::fileset::FileSet::init().unwrap();
+    let f = fs.create("x").unwrap();
+    crate::io::FileWrite(f, &[7u8; 16], 0, 0).unwrap();
+    crate::io::FileClose(f).unwrap();
+    let seg = format!("{}.0", fs.name_path("s"));
+    let f = fs.create_seg("s", &seg).unwrap();
+    crate::io::FileClose(f).unwrap();
+
+    let saved = guc_tables::vars::temp_file_limit.read();
+    guc_tables::vars::temp_file_limit.write(1);
+    let f = fs.open("x", libc::O_RDWR).unwrap();
+    assert!(f.0 > 0);
+    assert_eq!(crate::io::FileWrite(f, &[0u8; 2048], 16, 0).unwrap(), 2048);
+    crate::io::FileClose(f).unwrap();
+    let f = fs.open_seg(&seg, libc::O_RDWR).unwrap();
+    assert!(f.0 > 0);
+    let err = crate::io::FileWrite(f, &[0u8; 2048], 0, 0).unwrap_err();
+    assert_eq!(err.sqlstate(), ::types_error::ERRCODE_CONFIGURATION_LIMIT_EXCEEDED);
+    crate::io::FileClose(f).unwrap();
+    guc_tables::vars::temp_file_limit.write(saved);
+    crate::sync::AtEOXact_Files(true).unwrap();
+}
+
+// buffile.c:117,162: a fileset BufFile remembers its creating resource
+// owner and extends under it, so releasing a child owner active at the
+// rollover does not close the new segment.
+#[test]
+fn fileset_buffile_segment_rollover_keeps_creation_owner() {
+    let (_dir, _cwd) = fileset_scaffold("fsrollowner");
+    let owner = resowner::CurrentResourceOwner();
+    let fs = crate::fileset::FileSet::init().unwrap();
+    let ctx = mcx::MemoryContext::new("fsrollowner");
+    let mut bf = crate::buffile::BufFileCreateFileSet(ctx.mcx(), &fs, "r").unwrap();
+    let child = resowner::ResourceOwnerCreate(owner, "fsrollowner-child").unwrap();
+    resowner::SetCurrentResourceOwner(child);
+    let boundary = 0x4000_0000;
+    assert_eq!(bf.seek(0, boundary - 4, crate::buffile::SEEK_SET).unwrap(), 0);
+    // More than one block straddling the boundary: the dump inside write()
+    // creates segment 1 while the child owner is current.
+    let mut payload = vec![0u8; 8192 + 8];
+    payload[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    bf.write(&payload).unwrap();
+    assert_eq!(bf.seek(0, boundary - 4, crate::buffile::SEEK_SET).unwrap(), 0);
+    assert_eq!(resowner::CurrentResourceOwner(), child);
+    for phase in [
+        types_resowner::RESOURCE_RELEASE_BEFORE_LOCKS,
+        types_resowner::RESOURCE_RELEASE_LOCKS,
+        types_resowner::RESOURCE_RELEASE_AFTER_LOCKS,
+    ] {
+        resowner::ResourceOwnerRelease(child, phase, false, false).unwrap();
+    }
+    resowner::SetCurrentResourceOwner(owner);
+    resowner::ResourceOwnerDelete(child);
+    // A segment closed by the child's release would hand its VFD slot to
+    // the next open, and the BufFile would read that file instead.
+    let other = crate::temp::OpenTemporaryFile(false).unwrap();
+    crate::io::FileWrite(other, &[9u8; 8], 0, 0).unwrap();
+    let mut bytes = [0; 8];
+    bf.read_exact(&mut bytes).unwrap();
+    assert_eq!(bytes, [1, 2, 3, 4, 5, 6, 7, 8]);
+    bf.close().unwrap();
+    crate::io::FileClose(other).unwrap();
+    crate::sync::AtEOXact_Files(true).unwrap();
 }

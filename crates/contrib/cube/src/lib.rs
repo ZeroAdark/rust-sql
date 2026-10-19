@@ -22,6 +22,7 @@ use types_fmgr::{
 };
 
 use repr::{build_image, build_image_auto, CubeView, CUBE_MAX_DIM};
+use types_tuple::varatt;
 
 const LIBRARY: &str = "cube";
 
@@ -418,7 +419,10 @@ fn fc_cube_overlap(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<D
 fn fc_cube_union(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // C's cube_union_v0 trivial case: identical pointers return the input
     // unchanged (matters for unnormalized cubes, which stay unnormalized).
-    if fcinfo.arg(0).as_usize() == fcinfo.arg(1).as_usize() {
+    // PG_GETARG_NDBOX_P detoasts first, so a toasted datum never hits it.
+    let a0 = fcinfo.arg(0).as_usize();
+    // SAFETY: strict fn, non-null varlena arg.
+    if a0 == fcinfo.arg(1).as_usize() && unsafe { varatt::varatt_is_4b_u(a0 as *const u8) } {
         return Ok(fcinfo.arg(0));
     }
     // SAFETY: strict fns, non-null cube args.

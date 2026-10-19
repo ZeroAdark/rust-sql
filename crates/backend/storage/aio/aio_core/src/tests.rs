@@ -126,10 +126,12 @@ fn io_handles_per_backend_ignores_clobbered_guc() {
 #[test]
 fn pgaio_io_snapshot_renders_a_non_idle_handle_of_another_backend() {
     test_ctl();
+    // No PGPROC table in this harness: inject the owner-pid read.
+    let snap = |index: u32| pgaio_io_snapshot_with(index, |_| 0);
     let index: u32 = (1 * TEST_IMC + 5) as u32; // procno 1, its 6th handle
     let h = ioh(index);
     assert_eq!(h.owner_procno, 1);
-    assert!(pgaio_io_snapshot(index).is_none(), "IDLE handles are not displayed");
+    assert!(snap(index).is_none(), "IDLE handles are not displayed");
 
     // SAFETY: test-owned handle, no concurrent access.
     unsafe {
@@ -149,7 +151,7 @@ fn pgaio_io_snapshot_renders_a_non_idle_handle_of_another_backend() {
     h.flags.store(PGAIO_HF_BUFFERED, Ordering::Relaxed);
     h.set_state(PGAIO_HS_SUBMITTED);
 
-    let s = pgaio_io_snapshot(index).expect("SUBMITTED handle is displayed");
+    let s = snap(index).expect("SUBMITTED handle is displayed");
     assert_eq!(s.id, index as i32);
     assert_eq!(s.generation, 1);
     assert_eq!(s.state, PGAIO_HS_SUBMITTED);
@@ -165,13 +167,33 @@ fn pgaio_io_snapshot_renders_a_non_idle_handle_of_another_backend() {
     assert_eq!(s.target_data.smgr.nblocks, 3);
     assert_eq!(s.flags & PGAIO_HF_BUFFERED, PGAIO_HF_BUFFERED);
 
+    // aio_funcs.c:113-117: the owner pid is read BEFORE the generation
+    // re-check, so an owner that exited (its IO waited for, the handle
+    // recycled) is dropped by that check instead of reported with a stale
+    // or reused pid.
+    let s = pgaio_io_snapshot_with(index, |procno| {
+        assert_eq!(procno, 1);
+        4242
+    })
+    .expect("SUBMITTED handle is displayed");
+    assert_eq!(s.owner_pid, 4242);
+    assert!(
+        pgaio_io_snapshot_with(index, |_| {
+            h.generation.fetch_add(1, Ordering::Relaxed);
+            0
+        })
+        .is_none(),
+        "a generation change after the pid read drops the handle"
+    );
+    assert_eq!(snap(index).expect("still SUBMITTED").generation, 2);
+
     // A later generation is just a later IO: still displayed while non-IDLE
     // (C only drops a handle whose generation moved DURING its copy).
     h.generation.fetch_add(1, Ordering::Relaxed);
-    assert_eq!(pgaio_io_snapshot(index).expect("still SUBMITTED").generation, 2);
+    assert_eq!(snap(index).expect("still SUBMITTED").generation, 3);
 
     h.set_state(PGAIO_HS_IDLE);
-    assert!(pgaio_io_snapshot(index).is_none());
+    assert!(snap(index).is_none());
 }
 
 // aio_callback.c:289/330: local completion callbacks run inside a critical
@@ -239,6 +261,18 @@ fn result_report_without_report_callback_names_the_callback_like_c() {
 #[test]
 fn worker_method_reserves_shmem_for_queue_and_control() {
     assert!(method_worker::pgaio_worker_shmem_size() > 0);
+}
+
+// aio_init.c:142/213 + method_sync.c:28-31: only the selected method's
+// shmem callbacks run, and the sync method has none, so io_method=sync
+// reserves no AioWorkerSubmissionQueue/AioWorkerControl.
+#[test]
+fn only_the_selected_method_reserves_shmem() {
+    assert_eq!(init::pgaio_method_shmem_size(IOMETHOD_SYNC), 0);
+    assert_eq!(
+        init::pgaio_method_shmem_size(IOMETHOD_WORKER),
+        method_worker::pgaio_worker_shmem_size()
+    );
 }
 
 // aio.c pgaio_io_state_get_name / aio_io.c pgaio_io_get_op_name /

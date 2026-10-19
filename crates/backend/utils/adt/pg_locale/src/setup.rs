@@ -22,6 +22,18 @@ thread_local! {
     // global locale: C backends are processes, ours are threads, so the
     // per-backend state must be per-thread.
     static THREAD_LOCALES: RefCell<Vec<(c_int, String)>> = const { RefCell::new(Vec::new()) };
+    // C's CurrentLocaleConvValid: derived from lc_monetary/lc_numeric, cleared
+    // by their assign hooks and GUC variable writes.
+    static CURRENT_LOCALE_CONV: Cell<Option<&'static crate::lconv::PgLconv>> =
+        const { Cell::new(None) };
+}
+
+pub(crate) fn current_localeconv() -> Option<&'static crate::lconv::PgLconv> {
+    CURRENT_LOCALE_CONV.with(Cell::get)
+}
+
+pub(crate) fn set_current_localeconv(conv: Option<&'static crate::lconv::PgLconv>) {
+    CURRENT_LOCALE_CONV.with(|c| c.set(conv));
 }
 
 // Once true, the process-global libc locale is final and must never be
@@ -319,6 +331,7 @@ pub fn check_locale_monetary(newval: &str) -> PgResult<bool> {
 // land with their consumers (PGLC_localeconv / cache_locale_time, deferred).
 pub fn assign_locale_monetary(newval: &str) {
     LOCALE_MONETARY.with(|s| *s.borrow_mut() = newval.to_owned());
+    set_current_localeconv(None);
 }
 
 pub fn check_locale_numeric(newval: &str) -> PgResult<bool> {
@@ -327,6 +340,7 @@ pub fn check_locale_numeric(newval: &str) -> PgResult<bool> {
 
 pub fn assign_locale_numeric(newval: &str) {
     LOCALE_NUMERIC.with(|s| *s.borrow_mut() = newval.to_owned());
+    set_current_localeconv(None);
 }
 
 pub fn check_locale_time(newval: &str) -> PgResult<bool> {
@@ -392,11 +406,17 @@ pub(crate) fn install_guc_hooks() {
 
     vars::locale_monetary.install(GucVarAccessors {
         get: || Some(LOCALE_MONETARY.with(|s| s.borrow().clone())),
-        set: |v| LOCALE_MONETARY.with(|s| *s.borrow_mut() = v.unwrap_or_default()),
+        set: |v| {
+            LOCALE_MONETARY.with(|s| *s.borrow_mut() = v.unwrap_or_default());
+            set_current_localeconv(None);
+        },
     });
     vars::locale_numeric.install(GucVarAccessors {
         get: || Some(LOCALE_NUMERIC.with(|s| s.borrow().clone())),
-        set: |v| LOCALE_NUMERIC.with(|s| *s.borrow_mut() = v.unwrap_or_default()),
+        set: |v| {
+            LOCALE_NUMERIC.with(|s| *s.borrow_mut() = v.unwrap_or_default());
+            set_current_localeconv(None);
+        },
     });
     vars::locale_time.install(GucVarAccessors {
         get: || Some(LOCALE_TIME.with(|s| s.borrow().clone())),

@@ -741,6 +741,7 @@ impl<'mcx> TupleHashTable<'mcx> {
         self.hashtab.buckets = Vec::new();
         self.tab_hash_expr.release_frames();
         self.tab_eq_func.release_frames();
+        self.key_cols = Vec::new();
         self.tableslot.base_mut().tts_tupleDescriptor = None;
     }
 

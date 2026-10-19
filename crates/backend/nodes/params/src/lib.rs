@@ -137,13 +137,18 @@ pub fn params_error_context(
     portal_name: &str,
     params: ParamListHandle,
 ) -> Box<PgError> {
+    params_error_callback(&mut err, portal_name, params);
+    err
+}
+
+// ParamsErrorCallback (params.c:407), run over any report while installed.
+pub fn params_error_callback(err: &mut PgError, portal_name: &str, params: ParamListHandle) {
     let Some(values) = types_portal::params::param_values_str(params) else {
-        return err;
+        return;
     };
     err.add_context_line(if !portal_name.is_empty() {
         format!("portal \"{portal_name}\" with parameters: {values}")
     } else {
         format!("unnamed portal with parameters: {values}")
     });
-    err
 }

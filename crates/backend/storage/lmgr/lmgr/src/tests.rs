@@ -42,6 +42,7 @@ thread_local! {
     static IN_PROGRESS: RefCell<VecDeque<bool>> = const { RefCell::new(VecDeque::new()) };
     static TOPMOST: RefCell<VecDeque<TransactionId>> = const { RefCell::new(VecDeque::new()) };
     static CFI_RESULTS: RefCell<VecDeque<PgResult<()>>> = const { RefCell::new(VecDeque::new()) };
+    static LOG_ON_ACQUIRE: Cell<bool> = const { Cell::new(false) };
 }
 
 fn log(ev: Ev) {
@@ -61,6 +62,11 @@ fn install() {
     INIT.call_once(|| {
         lock_seams::lock_acquire_extended::set(|tag, mode, sess, dw, rme, llf| {
             log(Ev::Acquire(tag, mode, sess, dw, rme, llf));
+            if LOG_ON_ACQUIRE.get() {
+                elog::ereport(types_error::LOG)
+                    .errmsg("process 1 still waiting for ShareLock on transaction 724")
+                    .finish(types_error::ErrorLocation::new("proc.c", 1647, "ProcSleep"))?;
+            }
             ACQUIRE_RESULTS
                 .with_borrow_mut(|q| q.pop_front())
                 .unwrap_or(Ok(LOCKACQUIRE_OK))
@@ -366,6 +372,57 @@ fn xact_lock_table_wait_attaches_c_context_on_error() {
         err.context.as_deref(),
         Some("while updating tuple (3,7) in relation \"reltest\"")
     );
+}
+
+static WAIT_LOGS: std::sync::Mutex<Vec<(std::thread::ThreadId, PgError)>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn record_wait_log(error: &PgError, _output_to_server: &mut bool) {
+    WAIT_LOGS.lock().unwrap().push((std::thread::current().id(), error.clone()));
+}
+
+// lmgr.c:684 XactLockTableWaitErrorCb sits on error_context_stack for the
+// whole wait, so the log_lock_waits LOG lines ProcSleep raises mid-wait carry
+// 'while updating tuple (3,7) in relation "reltest"' (batch-232 regression).
+#[test]
+fn xact_lock_table_wait_decorates_log_reports_raised_while_waiting() {
+    install();
+    guc_tables::init_seams();
+    elog::init_seams();
+    let ctid = ItemPointerData::new(3, 7);
+    let ctx = mcx::MemoryContext::new("t");
+    let rel = make_rel(ctx.mcx(), PLAIN_REL);
+    let me = std::thread::current().id();
+    WAIT_LOGS.lock().unwrap().retain(|r| r.0 != me);
+    let prev = elog::set_emit_log_hook(Some(record_wait_log));
+    LOG_ON_ACQUIRE.set(true);
+    let res = XactLockTableWait(724, Some(&rel), Some(&ctid), XLTW_Oper::Update);
+    LOG_ON_ACQUIRE.set(false);
+    elog::set_emit_log_hook(prev);
+    res.unwrap();
+    let logged: Vec<PgError> = WAIT_LOGS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| r.0 == me)
+        .map(|r| r.1.clone())
+        .collect();
+    assert_eq!(logged.len(), 1, "{logged:?}");
+    assert_eq!(logged[0].message(), "process 1 still waiting for ShareLock on transaction 724");
+    assert_eq!(
+        logged[0].context.as_deref(),
+        Some("while updating tuple (3,7) in relation \"reltest\"")
+    );
+
+    // The callback is gone once the wait returns.
+    LOG_ON_ACQUIRE.set(true);
+    let prev = elog::set_emit_log_hook(Some(record_wait_log));
+    XactLockTableWait(724, None, None, XLTW_Oper::None).unwrap();
+    LOG_ON_ACQUIRE.set(false);
+    elog::set_emit_log_hook(prev);
+    let after = WAIT_LOGS.lock().unwrap();
+    let last = after.iter().filter(|r| r.0 == me).last().unwrap();
+    assert_eq!(last.1.context, None);
 }
 
 // Born-RED for the retry-arm CFI (lmgr.c XactLockTableWait: the !first arm

@@ -369,6 +369,18 @@ pub fn MarkLockClear(locktag: &LOCKTAG, lockmode: LOCKMODE) {
     });
 }
 
+/// This backend holds a session-level lock (an owner-less LOCALLOCK entry:
+/// session advisory locks, or the session locks of a multi-transaction
+/// utility command).
+pub fn HoldsSessionLock() -> bool {
+    with_local(|state| {
+        state
+            .table
+            .values()
+            .any(|ll| ll.lockOwners.iter().any(|o| o.owner.is_null() && o.nLocks > 0))
+    })
+}
+
 pub fn LockHeldByMe(locktag: &LOCKTAG, lockmode: LOCKMODE, orstronger: bool) -> bool {
     let held = with_local(|state| {
         let tag = LOCALLOCKTAG {

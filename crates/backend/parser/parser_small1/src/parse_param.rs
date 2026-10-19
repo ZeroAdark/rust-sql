@@ -83,6 +83,11 @@ pub enum PlpgsqlResolveOption {
     Column,
 }
 
+/// Trailing key component of a whole-row (`rec.*`) reference: C's
+/// resolve_column_ref sets name2 = "*" so ns_lookup skips scalar bindings
+/// (pl_funcs.c:146); the NUL keeps it apart from a field literally named "*".
+pub const WHOLE_ROW_FIELD: &str = "*\0";
+
 /// plpgsql_parser_setup's hooks, data-driven: the plpgsql executor
 /// pre-resolves the expr's namespace chain into a flat name table (C walks
 /// the live ns via plpgsql_ns_lookup inside the hooks; the tables are a
@@ -101,7 +106,10 @@ pub struct PlpgsqlHookState<'p> {
     pub recs: &'p [&'p str],
     /// Valueless RECORD-typed recs: any field reference is 55000 at parse
     /// (C make_datum_param -> exec_get_datum_type_info -> instantiate).
-    pub valueless_recs: &'p [&'p str],
+    /// Paired with the `names` length when the binding was met: a
+    /// label-qualified match pushed before it belongs to a nearer namespace
+    /// level and wins (pl_funcs.c:156 plpgsql_ns_lookup walks level by level).
+    pub valueless_recs: &'p [(usize, &'p str)],
     pub resolve_option: PlpgsqlResolveOption,
     /// Out-param: dnos the analysis referenced (C expr->paramnos).
     pub used: &'p RefCell<Vec<i32>>,
@@ -380,12 +388,17 @@ pub fn plpgsql_resolve_column_ref<'mcx>(
         return Ok(None);
     }
     let key = fields.join("\0");
+    let found = parstate.names.iter().position(|e| e.key == key);
     // A whole-row reference reports the record's declared type instead
     // (pl_exec.c exec_get_datum_type_info, REC arm); the 55000 waits for the
     // execution-time fetch.
-    if fields.len() >= 2 && fields[fields.len() - 1] != "*" {
+    if fields.len() >= 2 && fields[fields.len() - 1] != WHOLE_ROW_FIELD {
         let prefix = fields[..fields.len() - 1].join("\0");
-        if parstate.valueless_recs.iter().any(|r| *r == prefix) {
+        if parstate
+            .valueless_recs
+            .iter()
+            .any(|(rank, r)| *r == prefix && found.is_none_or(|pos| *rank <= pos))
+        {
             let recname = fields[fields.len() - 2];
             // C's error comes from exec_get_datum_type_info (no cursor);
             // the SPI callback then supplies the statement context line.
@@ -399,7 +412,7 @@ pub fn plpgsql_resolve_column_ref<'mcx>(
             ));
         }
     }
-    if let Some(e) = parstate.names.iter().find(|e| e.key == key) {
+    if let Some(e) = found.map(|i| &parstate.names[i]) {
         parstate.mark_used(e.dno);
         return Ok(Some(Node::mk(
             mcx,
@@ -413,7 +426,7 @@ pub fn plpgsql_resolve_column_ref<'mcx>(
             },
         )?));
     }
-    if fields.len() >= 2 && fields[fields.len() - 1] != "*" {
+    if fields.len() >= 2 && fields[fields.len() - 1] != WHOLE_ROW_FIELD {
         // C reports against the last-1 prefix that named a rec/row.
         let prefix = fields[..fields.len() - 1].join("\0");
         if parstate.recs.iter().any(|r| *r == prefix) {

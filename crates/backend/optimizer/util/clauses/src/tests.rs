@@ -995,7 +995,7 @@ fn text_const(mcx: Mcx<'_>) -> Node<'_> {
 // (stable, e.g. timetz_in/interval_in/time_in), the rebuilt CoerceViaIO's arg
 // is linitial(args) — the folded cstring Const. Deparse then prints
 // ('...'::cstring)::<type>, which is what real PG shows in EXPLAIN
-// (antithesis RB-4).
+// (regression test).
 #[test]
 fn eval_const_coerce_via_io_stable_input_fn_keeps_cast_over_cstring_const() {
     let ctx = cx();

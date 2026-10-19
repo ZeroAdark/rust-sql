@@ -55,6 +55,14 @@ fn shared_universe_boot_cwd_and_ingest() {
     // idempotent same-path re-set is allowed
     SimVfs::set_boot_cwd(std::path::Path::new("/snap/dd"));
 
+    // --- VfsFd guard drop releases into the SHARED universe --------------
+    let fd = v.open(&c("/snap/dd/global/pg_control"), libc::O_RDONLY, 0);
+    assert!(fd >= 0);
+    // SAFETY: fd was just minted by the active vfs and is owned only here.
+    drop(unsafe { vfs::VfsFd::from_raw(fd) });
+    assert_eq!(v.close(fd), -1, "guard drop must close the shared-universe fd");
+    assert_eq!(vfs::get_errno(), libc::EBADF);
+
     // --- cross-thread visibility: the whole point of shared homing -------
     // (under thread-local homing this thread would see an EMPTY namespace)
     let seen = std::thread::spawn(|| {

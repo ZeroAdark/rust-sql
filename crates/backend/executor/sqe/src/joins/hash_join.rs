@@ -3285,7 +3285,14 @@ pub fn run_hash_join_agg_flt(
             use crate::joins::ir::JoinAggOp;
             match a.op {
                 JoinAggOp::CountStar => AnswerCol::i64s(a.out, vec![rows as i64]),
-                JoinAggOp::CountCol => AnswerCol::i64s(a.out, vec![c.b]),
+                JoinAggOp::CountCol => {
+                    let mut col = AnswerCol::i64s(a.out, vec![c.b]);
+                    // A lane-less case leg is SUM(CASE .. THEN 1 ELSE 0): NULL over no rows.
+                    if rows == 0 && a.case.is_some() && a.input.is_none() {
+                        col.validity = Validity::Mask(vec![false]);
+                    }
+                    col
+                }
                 JoinAggOp::CountDistinct => {
                     unreachable!("distinct is grouped-only by admission")
                 }

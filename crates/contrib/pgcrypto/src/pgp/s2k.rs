@@ -1,5 +1,7 @@
 
 use super::consts::*;
+use super::context::PgpContext;
+use super::packet::read_fixed;
 
 #[derive(Clone)]
 pub struct S2k {
@@ -43,12 +45,10 @@ impl S2k {
         Ok(s)
     }
 
-    pub fn read(src: &[u8]) -> Result<(S2k, usize), &'static str> {
-        if src.len() < 2 {
-            return Err(CORRUPT_DATA);
-        }
-        let mode = src[0] as i32;
-        let digest_algo = src[1] as i32;
+    /// pgp-s2k.c:253 pgp_s2k_read.
+    pub fn read(src: &[u8], ctx: &mut PgpContext) -> Result<(S2k, usize), &'static str> {
+        let mode = read_fixed(src, 0, 1, ctx)?[0] as i32;
+        let digest_algo = read_fixed(src, 1, 1, ctx)?[0] as i32;
         let mut s = S2k {
             mode,
             digest_algo,
@@ -60,18 +60,12 @@ impl S2k {
         let consumed = match mode {
             PGP_S2K_SIMPLE => 2,
             PGP_S2K_SALTED => {
-                if src.len() < 10 {
-                    return Err(CORRUPT_DATA);
-                }
-                s.salt.copy_from_slice(&src[2..10]);
+                s.salt.copy_from_slice(read_fixed(src, 2, PGP_S2K_SALT, ctx)?);
                 10
             }
             PGP_S2K_ISALTED => {
-                if src.len() < 11 {
-                    return Err(CORRUPT_DATA);
-                }
-                s.salt.copy_from_slice(&src[2..10]);
-                s.iter = src[10];
+                s.salt.copy_from_slice(read_fixed(src, 2, PGP_S2K_SALT, ctx)?);
+                s.iter = read_fixed(src, 10, 1, ctx)?[0];
                 11
             }
             _ => return Err(BAD_S2K_MODE),
@@ -85,7 +79,7 @@ impl S2k {
             return Err(UNSUPPORTED_CIPHER);
         }
         self.key_len = target;
-        let mut md = super::consts::Digest::new(self.digest_algo).ok_or(UNSUPPORTED_HASH)?;
+        let mut md = super::consts::Digest::load(self.digest_algo)?;
         let md_rlen = md.result_size();
         let mut out = vec![0u8; target];
         let mut filled = 0usize;

@@ -378,3 +378,19 @@ fn share_tag(root: &str) -> &'static str {
         _ => "share/other",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_manifest;
+
+    #[test]
+    fn manifest_roots_opener_line_rejects_inline_entries() {
+        let ok = parse_manifest("version = 1\n[share]\nroots = [\n  \"timezone\",\n  \"tzdata\",\n]\n")
+            .unwrap();
+        assert_eq!(ok.share_roots, ["timezone", "tzdata"]);
+        let err = parse_manifest("version = 1\n[share]\nroots = [\"timezone\",\n  \"tzdata\",\n]\n")
+            .map(|m| m.share_roots)
+            .unwrap_err();
+        assert!(err.contains("line 3"), "{err}");
+    }
+}

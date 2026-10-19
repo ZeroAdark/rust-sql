@@ -235,7 +235,18 @@ pub fn ExplainPropertyFloat(
     ndigits: usize,
     es: &mut ExplainState<'_>,
 ) {
-    ExplainProperty(qlabel, unit, &format!("{value:.ndigits$}"), true, es);
+    ExplainProperty(qlabel, unit, &fmt_float(value, ndigits), true, es);
+}
+
+// snprintf.c fmtfloat: %.Nf spells infinities "Infinity" (libc spells NaN).
+pub(crate) fn fmt_float(value: f64, ndigits: usize) -> String {
+    if value.is_infinite() {
+        if value < 0.0 { "-Infinity" } else { "Infinity" }.to_string()
+    } else if value.is_nan() {
+        "nan".to_string()
+    } else {
+        format!("{value:.ndigits$}")
+    }
 }
 
 pub fn ExplainPropertyBool(qlabel: &str, value: bool, es: &mut ExplainState<'_>) {

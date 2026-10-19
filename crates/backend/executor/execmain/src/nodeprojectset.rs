@@ -52,6 +52,7 @@ pub struct ProjectSetState<'mcx> {
     elems: PgVec<'mcx, Elem<'mcx>>,
     elemdone: PgVec<'mcx, ExprDoneCond>,
     pending_srf_tuples: bool,
+    arg_ecxt: EcxtId,
 }
 
 /// `ExecInitProjectSet` (nodeProjectSet.c) + `ExecInitFunctionResultSet`
@@ -66,6 +67,7 @@ pub fn exec_init_project_set<'mcx>(
     debug_assert!(node.plan.qual.is_nil());
     let mcx = estate.es_query_cxt;
     let ecxt = estate.exec_assign_expr_context();
+    let arg_ecxt = estate.exec_assign_expr_context();
     let outer =
         exec_init_node(node.plan.lefttree, estate, eflags)?.expect("ProjectSet has an outer plan");
 
@@ -73,7 +75,7 @@ pub fn exec_init_project_set<'mcx>(
     let slot = estate.exec_init_extra_tuple_slot(Some(desc.clone()), TupleSlotKind::Virtual);
 
     let params = estate.param_bind();
-    let (elems, elemdone) = ::executils::with_subplan_compile_env(estate, |env| -> PgResult<_> {
+    let (mut elems, elemdone) = ::executils::with_subplan_compile_env(estate, |env| -> PgResult<_> {
         let mut elems: PgVec<'mcx, Elem<'mcx>> = PgVec::new_in(mcx);
         let mut elemdone: PgVec<'mcx, ExprDoneCond> = PgVec::new_in(mcx);
         for tle_node in &node.plan.targetlist {
@@ -92,20 +94,19 @@ pub fn exec_init_project_set<'mcx>(
             };
             let elem = match srf_parts {
                 Some((srf_funcid, srf_args, srf_inputcollid)) => {
-                    if srf_args.len() > types_core::FUNC_MAX_ARGS {
-                        return Err(too_many_args());
+                    // execSRF.c:461 ExecInitExprList(args) runs before
+                    // init_sexpr's permission check.
+                    let mut args: PgVec<'mcx, PgBox<'mcx, ExprState<'mcx>>> = PgVec::new_in(mcx);
+                    for arg in srf_args {
+                        let state = exec_init_expr_subplans(mcx, Some(arg), params, env)?
+                            .expect("non-NULL arg expression");
+                        args.push(state);
                     }
                     init_sexpr_acl(mcx, srf_funcid)?;
                     // execSRF.c:707 init_sexpr: InvokeFunctionExecuteHook(foid).
                     ::objectaccess::InvokeFunctionExecuteHook(srf_funcid)?;
-                    let mut args: PgVec<'mcx, PgBox<'mcx, ExprState<'mcx>>> = PgVec::new_in(mcx);
-                    for arg in srf_args {
-                        // Query-context args replace C's argContext: by-ref arg
-                        // datums must outlive per-tuple resets between rows.
-                        let mut state = exec_init_expr_subplans(mcx, Some(arg), params, env)?
-                            .expect("non-NULL arg expression");
-                        state.arm_result_mcx(mcx);
-                        args.push(state);
+                    if srf_args.len() > types_core::FUNC_MAX_ARGS {
+                        return Err(too_many_args());
                     }
                     let mut flinfo = fmgr_core::fmgr_info(srf_funcid)?;
                     // C init_sexpr: fmgr_info_set_expr — get_fn_expr_argtype
@@ -174,6 +175,17 @@ pub fn exec_init_project_set<'mcx>(
         }
         Ok((elems, elemdone))
     })?;
+    // C argcontext (nodeProjectSet.c:88): SRF arguments live until the next
+    // input row, across the per-tuple resets of one row's expansion.
+    let arg_mcx = estate.ecxt(arg_ecxt).per_tuple_mcx();
+    for elem in elems.iter_mut() {
+        if let Elem::Srf(srf) = elem {
+            for arg in srf.args.iter_mut() {
+                // SAFETY: the arg context object outlives the plan (reset-only).
+                unsafe { arg.arm_result_mcx_raw(arg_mcx) };
+            }
+        }
+    }
 
     Ok(ProjectSetState {
         ps: PlanStateBase {
@@ -188,6 +200,7 @@ pub fn exec_init_project_set<'mcx>(
         elems,
         elemdone,
         pending_srf_tuples: false,
+        arg_ecxt,
     })
 }
 
@@ -252,6 +265,7 @@ pub(crate) fn lane_project_set_split<'a, 'mcx>(
         elems,
         elemdone,
         pending_srf_tuples,
+        arg_ecxt,
     } = node;
     (
         LaneProjectSet {
@@ -259,6 +273,7 @@ pub(crate) fn lane_project_set_split<'a, 'mcx>(
             elems,
             elemdone,
             pending: pending_srf_tuples,
+            arg_ecxt: *arg_ecxt,
         },
         outer,
     )
@@ -271,6 +286,7 @@ pub(crate) struct LaneProjectSet<'a, 'mcx> {
     elems: &'a mut PgVec<'mcx, Elem<'mcx>>,
     elemdone: &'a mut PgVec<'mcx, ExprDoneCond>,
     pending: &'a mut bool,
+    arg_ecxt: EcxtId,
 }
 
 impl<'mcx> LaneProjectSet<'_, 'mcx> {
@@ -293,6 +309,7 @@ impl<'mcx> LaneProjectSet<'_, 'mcx> {
             .ps_ExprContext
             .expect("ProjectSetState without ExprContext");
         estate.ecxt_mut(ecxt).ecxt_outertuple = Some(outer);
+        estate.reset_expr_context(self.arg_ecxt);
         if exec_project_srf(self, estate, false)? {
             return Ok(self.base.ps_ResultTupleSlot);
         }
@@ -443,8 +460,6 @@ fn exec_make_function_result_set<'mcx>(
 
     if !srf.args_valid {
         for i in 0..srf.args.len() {
-            // Query-context args (armed at init): by-ref arg datums must
-            // outlive per-tuple resets between rows. Do not re-arm.
             let nd = eval_in_ecxt(&mut srf.args[i], estate, ecxt, None)?;
             if nd.isnull {
                 srf.fcinfo.set_arg_null(i);
@@ -669,7 +684,7 @@ pub fn exec_end_project_set<'mcx>(
 // rsinfo.srf_shutdown; must run before resowner release checks. Abort paths
 // skip it (C isCommit=false; resowner reclaims).
 fn shutdown_srf_elems(node: &mut ProjectSetState<'_>) -> PgResult<()> {
-    for elem in node.elems.iter_mut() {
+    for elem in node.elems.iter_mut().rev() {
         if let Elem::Srf(srf) = elem {
             if let Some(f) = srf.rsinfo.srf_shutdown.take() {
                 f(&mut srf.flinfo)?;
@@ -706,5 +721,5 @@ pub(crate) fn release_project_set(node: &mut ProjectSetState<'_>) {
 // Exempt: elems (compiled ExprStates + FmgrInfo fn_extra Boxes) released in
 // release_owned; elemdone is drop-free (foreign Copy enum, uncensusable here).
 ::mcx::forget_safe_struct!(
-    ProjectSetState<'_> { ps, outer, pending_srf_tuples; elems, elemdone },
+    ProjectSetState<'_> { ps, outer, pending_srf_tuples, arg_ecxt; elems, elemdone },
 );

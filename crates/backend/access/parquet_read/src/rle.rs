@@ -146,6 +146,7 @@ impl HybridState {
                     while groups > 0 {
                         let src = buf
                             .get(self.pos..self.pos + w)
+                            .filter(|_| self.pos + w <= self.end)
                             .ok_or_else(|| corrupt_page("bit-packed run overruns page"))?;
                         let dst: &mut [u32] = &mut out[n..n + 8];
                         let mut tmp = [0u32; 8];
@@ -159,6 +160,7 @@ impl HybridState {
                         // Tail: unpack one group into the staging buffer.
                         let src = buf
                             .get(self.pos..self.pos + w)
+                            .filter(|_| self.pos + w <= self.end)
                             .ok_or_else(|| corrupt_page("bit-packed run overruns page"))?;
                         let mut tmp = [0u32; 8];
                         unpack8(w, src, &mut tmp);
@@ -231,7 +233,7 @@ impl HybridState {
                 return Ok(());
             }
             // Structural bound: the groups must physically fit in the region.
-            if groups > (self.end - self.pos) / self.width + 1 {
+            if groups > (self.end - self.pos) / self.width {
                 return Err(corrupt_page("bit-packed run larger than page"));
             }
             self.run =
@@ -363,6 +365,27 @@ mod tests {
             let mut out = vec![0u32; 64];
             assert!(st.fill(&buf[..cut], &mut out).is_err(), "cut {cut}");
         }
+    }
+
+    /// A bit-packed run header claiming one group more than the page region
+    /// holds must be rejected even when the chunk buffer continues past
+    /// `end` (uncompressed non-final pages share the whole chunk buffer).
+    #[test]
+    fn packed_run_past_region_end_is_rejected() {
+        let values: Vec<u32> = (0..16u32).collect();
+        let mut buf = packed_stream(4, &values);
+        let region_end = buf.len();
+        buf.extend_from_slice(&[0xff; 32]);
+        buf[0] = (3 << 1) | 1;
+        let mut st = HybridState::new(0, region_end, 4).unwrap();
+        let mut out = vec![0u32; 24];
+        let err = st.fill(&buf, &mut out).unwrap_err();
+        assert!(err.to_string().contains("bit-packed run larger than page"), "{err}");
+        buf[0] = (2 << 1) | 1;
+        let mut st = HybridState::new(0, region_end, 4).unwrap();
+        let mut out = vec![0u32; 16];
+        st.fill(&buf, &mut out).unwrap();
+        assert_eq!(out, values);
     }
 
     #[test]

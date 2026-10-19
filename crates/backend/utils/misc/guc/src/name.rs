@@ -85,3 +85,28 @@ impl std::hash::BuildHasher for GucNameHasherBuilder {
         GucNameHasher(0)
     }
 }
+
+// hash_seq_search order over guc_hashtab (guc.c:974, dynahash): buckets
+// ascending, chains in insertion order. C's 18.6 core tables size it at
+// 512 buckets and never split it; pinned rather than derived from len(),
+// which also counts the pgrust-only variables.
+pub const C_GUC_HASH_NBUCKETS: u32 = 512;
+
+pub fn hash_seq_order(reg: &crate::registry::GucRegistry) -> Vec<usize> {
+    let mut keyed: Vec<(u32, usize)> = Vec::new();
+    let _ = keyed.try_reserve(reg.len());
+    for idx in 0..reg.len() {
+        let gen = reg[idx].gen();
+        if gen.status & crate::model::GUC_REMOVED != 0 {
+            continue;
+        }
+        keyed.push((guc_name_hash(gen.name.as_ref()) & (C_GUC_HASH_NBUCKETS - 1), idx));
+    }
+    keyed.sort_unstable();
+    let mut out = Vec::new();
+    let _ = out.try_reserve(keyed.len());
+    for (_, idx) in keyed {
+        out.push(idx);
+    }
+    out
+}

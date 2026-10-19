@@ -111,6 +111,16 @@ fn timezone_numeric_hours_use_offset_zone() {
 }
 
 #[test]
+fn timezone_nan_hours_is_out_of_range() {
+    setup();
+    for v in ["nan", "NaN", "-nan", "inf", "-inf"] {
+        let mut val = Some(v.to_string());
+        let mut extra = None;
+        assert!(!check_timezone(&mut val, &mut extra, PGC_S_SESSION).unwrap(), "{v}");
+    }
+}
+
+#[test]
 fn timezone_iana_zone_through_real_engine() {
     setup();
     let mut val = Some("America/New_York".to_string());

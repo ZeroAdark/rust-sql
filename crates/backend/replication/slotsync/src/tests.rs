@@ -504,3 +504,42 @@ fn dbname_from_conninfo_takes_the_last_occurrence() {
     );
     guc_tables::vars::PrimaryConnInfo.write(Some(String::new()));
 }
+
+// slotsync.c:1519 pqsignal(SIGINT, StatementCancelHandler): a pending SIGINT
+// (pg_cancel_backend on the slot sync worker) raises QueryCancelPending at
+// the next drain instead of sitting unhandled (audit regression).
+#[test]
+fn worker_sigint_disposition_is_statement_cancel() {
+    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    install_seams();
+    slot_harness();
+    init_small::globals::SetMaxBackends(17);
+    procsignal::ProcSignalShmemInit();
+    if init_small::globals::MyLatch().is_none() {
+        init_small::globals::SetMyLatch(Some(latch::allocate_local_latch()));
+    }
+    let pid = 4285;
+    init_small::globals::SetMyProcPid(pid);
+    procsignal::PreIdentitySignalAdopt(pid);
+    init_small::globals::SetQueryCancelPending(false);
+
+    install_signal_handlers();
+    assert_eq!(procsignal::SendThreadSignal(pid, procsignal::signums::SIGINT), 0);
+    procsignal::DrainThreadSignals().unwrap();
+    assert!(init_small::globals::QueryCancelPending());
+
+    init_small::globals::SetQueryCancelPending(false);
+    init_small::globals::interrupt_pending_flag().store(false, std::sync::atomic::Ordering::SeqCst);
+    procsignal::PreIdentitySignalRelease();
+}
+
+// libpqwalreceiver.c:1133: the field-count DETAIL names both counts as
+// "fields".
+#[test]
+fn nfields_mismatch_detail_matches_libpqrcv_process_tuples() {
+    assert_eq!(nfields_text(9), "9 fields");
+    assert_eq!(
+        format!("Expected {SLOT_QUERY_NFIELDS} fields, got {}.", nfields_text(9)),
+        "Expected 10 fields, got 9 fields."
+    );
+}

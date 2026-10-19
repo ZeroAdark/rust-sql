@@ -33,7 +33,7 @@ fn arg_weights(mcx: Mcx<'_>, fcinfo: &Fcinfo, i: usize) -> PgResult<[f32; NUM_WE
             .with_sqlstate(ERRCODE_ARRAY_SUBSCRIPT_ERROR)
             .into());
     }
-    if ::arrayfuncs::array_contains_nulls(img) {
+    if ::arrayfuncs::array_contains_nulls(img)? {
         return Err(PgError::error("array of weight must not contain nulls")
             .with_sqlstate(ERRCODE_NULL_VALUE_NOT_ALLOWED)
             .into());

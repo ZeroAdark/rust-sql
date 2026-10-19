@@ -150,7 +150,10 @@ fn init_local_buffers(slot: &mut Option<LocalBufs>) -> PgResult<()> {
     }
     blocks.resize_with(nbufs, || Cell::new(core::ptr::null_mut()));
     ref_counts.resize_with(nbufs, || Cell::new(0));
-    let cx: &'static MemoryContext = ::mcx::session_root("LocalBufferLookup");
+    // localbuf.c:784 hash_create: a "dynahash" context labelled with the
+    // table name (pg_backend_memory_contexts shows the label as the name).
+    let cx: &'static MemoryContext = ::mcx::session_root("dynahash");
+    cx.set_ident(Some("Local Buffer Lookup Table"));
     slot.replace(LocalBufs {
         descs: Box::leak(descs.into_boxed_slice()),
         blocks: Box::leak(blocks.into_boxed_slice()),

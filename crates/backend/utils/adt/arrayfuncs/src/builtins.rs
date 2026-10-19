@@ -920,17 +920,7 @@ pub fn fc_oidvectorrecv(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> P
 }
 
 pub fn fc_oidvectorsend(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let mcx = fcinfo.result_mcx();
-    let array = arg_array_bytes(fcinfo, 0, mcx)?;
-    let flinfo = flinfo.expect("oidvectorsend: NULL flinfo");
-    let ams = cached_meta(
-        flinfo,
-        ::types_core::catalog::OIDOID,
-        IOFuncSelector::IOFunc_send,
-        true,
-    )?;
-    let out = array_send(mcx, &array, &ams.meta, &mut ams.proc)?;
-    Ok(varlena_result(out))
+    fc_array_send(flinfo, fcinfo)
 }
 
 // int2vectorrecv/int2vectorsend (int.c): same array_recv/array_send delegation
@@ -964,17 +954,7 @@ pub fn fc_int2vectorrecv(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
 }
 
 pub fn fc_int2vectorsend(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    let mcx = fcinfo.result_mcx();
-    let array = arg_array_bytes(fcinfo, 0, mcx)?;
-    let flinfo = flinfo.expect("int2vectorsend: NULL flinfo");
-    let ams = cached_meta(
-        flinfo,
-        ::types_core::catalog::INT2OID,
-        IOFuncSelector::IOFunc_send,
-        true,
-    )?;
-    let out = array_send(mcx, &array, &ams.meta, &mut ams.proc)?;
-    Ok(varlena_result(out))
+    fc_array_send(flinfo, fcinfo)
 }
 
 const fn nb(foid: Oid, name: &'static str, nargs: i16, func: PGFunction) -> FmgrBuiltin {

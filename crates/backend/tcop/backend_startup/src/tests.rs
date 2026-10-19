@@ -45,6 +45,7 @@ fn install() {
             _ => None,
         });
         guc_seams::guc_check_errdetail::set(|_| {});
+        mbutils_seams::pg_server_to_client::set(|_, _| Ok(None));
         init_small::init_seams();
         pqcomm::init_seams();
         crate::init_seams();
@@ -76,6 +77,20 @@ fn packet(proto: u32, kvs: &[(&str, &str)]) -> Vec<u8> {
         body.extend_from_slice(k.as_bytes());
         body.push(0);
         body.extend_from_slice(v.as_bytes());
+        body.push(0);
+    }
+    body.push(0);
+    let mut pkt = ((body.len() + 4) as u32).to_be_bytes().to_vec();
+    pkt.extend_from_slice(&body);
+    pkt
+}
+
+fn packet_bytes(proto: u32, kvs: &[(&[u8], &[u8])]) -> Vec<u8> {
+    let mut body = proto.to_be_bytes().to_vec();
+    for (k, v) in kvs {
+        body.extend_from_slice(k);
+        body.push(0);
+        body.extend_from_slice(v);
         body.push(0);
     }
     body.push(0);
@@ -121,6 +136,35 @@ fn startup_packet_fills_port() {
     });
     assert_eq!(miscinit::GetMyBackendType(), types_core::BackendType::Backend);
     assert_eq!(init_small::globals::FrontendProtocol(), pg_protocol(3, 0));
+}
+
+// backend_startup.c:854 (the FATAL report is emitted before the harness's
+// proc_exit stub unwinds).
+#[test]
+fn missing_user_fatal_carries_c_location() {
+    use std::sync::Mutex;
+    setup();
+    static SEEN: Mutex<Option<(Option<String>, i32, String)>> = Mutex::new(None);
+    fn capture(e: &types_error::PgError, _output_to_server: &mut bool) {
+        if e.level() == types_error::FATAL {
+            let loc = e.location().expect("location");
+            *SEEN.lock().unwrap() = Some((loc.filename.clone(), loc.lineno, e.message.clone()));
+        }
+    }
+    feed(packet(pg_protocol(3, 0), &[("database", "db1")]));
+    let prev_hook = elog::sink::set_emit_log_hook(Some(capture));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run_startup_packet));
+    elog::sink::set_emit_log_hook(prev_hook);
+    assert!(!matches!(outcome, Ok(Ok(_))), "no FATAL");
+    let seen = SEEN.lock().unwrap().take().expect("FATAL emitted");
+    assert_eq!(
+        seen,
+        (
+            Some("backend_startup.c".to_string()),
+            854,
+            "no PostgreSQL user name specified in startup packet".to_string()
+        )
+    );
 }
 
 #[test]
@@ -344,4 +388,62 @@ fn conn_timing_init_matches_c() {
     );
     conn_timing::set_auth_start(5);
     assert_eq!(conn_timing::get().auth_start, 5);
+}
+
+// common/string.c:111 escapes each original byte: 0xff stays "\\xff", never
+// the three bytes of a replacement character.
+#[test]
+fn application_name_escapes_raw_non_ascii_bytes() {
+    setup();
+    feed(packet_bytes(
+        pg_protocol(3, 0),
+        &[(b"user", b"alice"), (b"application_name", b"ab\xff")],
+    ));
+    assert_eq!(run_startup_packet().unwrap(), STATUS_OK);
+    init_small::globals::WithMyProcPort(|p| {
+        assert_eq!(p.application_name.as_deref(), Some("ab\\xff"));
+        assert_eq!(
+            p.guc_options,
+            vec!["application_name".to_string(), "ab\\xff".to_string()]
+        );
+    });
+}
+
+// backend_startup.c:814 keeps the raw application_name in guc_options: the
+// GUC_IS_NAME truncation (guc.c:3252) runs on the raw bytes before
+// check_application_name expands controls to \xNN, so a 63-byte value ending
+// in a control byte is neither truncated nor NOTICEd.
+#[test]
+fn application_name_control_bytes_stay_raw_in_guc_options() {
+    setup();
+    let mut raw = vec![b'a'; 62];
+    raw.push(0x01);
+    feed(packet_bytes(pg_protocol(3, 0), &[(b"user", b"alice"), (b"application_name", &raw)]));
+    assert_eq!(run_startup_packet().unwrap(), STATUS_OK);
+    let raw_str = String::from_utf8(raw).unwrap();
+    let mut cleaned = "a".repeat(62);
+    cleaned.push_str("\\x01");
+    init_small::globals::WithMyProcPort(|p| {
+        assert_eq!(p.application_name.as_deref(), Some(cleaned.as_str()));
+        assert_eq!(p.guc_options, vec!["application_name".to_string(), raw_str.clone()]);
+    });
+}
+
+// backend_startup.c:805 echoes the unrecognized _pq_. option name bytes
+// verbatim in NegotiateProtocolVersion.
+#[test]
+fn unrecognized_protocol_option_name_bytes_are_echoed_verbatim() {
+    setup();
+    feed(packet_bytes(
+        pg_protocol(3, 0),
+        &[(b"user", b"dave"), (b"_pq_.\xff", b"")],
+    ));
+    assert_eq!(run_startup_packet().unwrap(), STATUS_OK);
+    pqcomm::pq_flush().unwrap();
+    let wire = WIRE.with(|w| w.borrow().clone());
+    assert_eq!(wire[0], b'v');
+    let mut body = pg_protocol(3, 0).to_be_bytes().to_vec();
+    body.extend_from_slice(&1u32.to_be_bytes());
+    body.extend_from_slice(b"_pq_.\xff\0");
+    assert_eq!(&wire[5..], &body[..]);
 }

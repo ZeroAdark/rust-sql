@@ -82,9 +82,9 @@ seam_core::seam!(
     pub fn choose_relation_name<'mcx>(
         mcx: mcx::Mcx<'mcx>,
         name1: &str,
-        name2: Option<&str>,
+        name2: Option<&[u8]>,
         label: &str,
         namespaceid: Oid,
         isconstraint: bool,
-    ) -> PgResult<mcx::PgString<'mcx>>
+    ) -> PgResult<mcx::PgVec<'mcx, u8>>
 );

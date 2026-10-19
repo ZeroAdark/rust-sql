@@ -288,15 +288,23 @@ fn total_procs(cfg: &ProcGlobalConfig) -> PgResult<usize> {
     )
 }
 
-fn PGProcShmemSize(cfg: &ProcGlobalConfig) -> PgResult<usize> {
-    let per_proc = core::mem::size_of::<PGPROC>()
-        + core::mem::size_of::<pg_atomic_uint32>()
-        + core::mem::size_of::<SyncCell<XidCacheStatus>>()
-        + 1;
+// C 18.6 LP64 sizeof(PROC_HDR), sizeof(PGPROC) and sizeof(slock_t) (int on
+// ARM, char elsewhere): the ShmemIndex rows proc.c:221-380 carves are sized
+// as C sizes them; the live structures are this crate's statics.
+pub const C_SIZEOF_PROC_HDR: usize = 128;
+const C_SIZEOF_PGPROC: usize = 832;
+pub const C_SIZEOF_SLOCK_T: usize = if cfg!(any(target_arch = "aarch64", target_arch = "arm")) {
+    4
+} else {
+    1
+};
+
+pub fn PGProcShmemSize(cfg: &ProcGlobalConfig) -> PgResult<usize> {
+    let per_proc = C_SIZEOF_PGPROC + 4 + 2 + 1;
     shmem_seams::mul_size::call(total_procs(cfg)?, per_proc)
 }
 
-fn FastPathLockShmemSize(cfg: &ProcGlobalConfig) -> PgResult<usize> {
+pub fn FastPathLockShmemSize(cfg: &ProcGlobalConfig) -> PgResult<usize> {
     let groups = cfg.fastpath_lock_groups_per_backend as usize;
     let bits = maxalign(groups * core::mem::size_of::<u64>());
     let relids = maxalign(groups * FP_LOCK_SLOTS_PER_GROUP as usize * core::mem::size_of::<u32>());
@@ -304,7 +312,7 @@ fn FastPathLockShmemSize(cfg: &ProcGlobalConfig) -> PgResult<usize> {
 }
 
 pub fn ProcGlobalShmemSize(cfg: &ProcGlobalConfig) -> PgResult<usize> {
-    let size = core::mem::size_of::<PROC_HDR>() + core::mem::size_of::<Spinlock>();
+    let size = C_SIZEOF_PROC_HDR + C_SIZEOF_SLOCK_T;
     let size = shmem_seams::add_size::call(size, PGProcShmemSize(cfg)?)?;
     shmem_seams::add_size::call(size, FastPathLockShmemSize(cfg)?)
 }
@@ -1014,7 +1022,7 @@ pub fn ProcReleaseLocks(isCommit: bool) -> PgResult<()> {
 /// Ownership is structural (same thread, MY_PROC TLS retained); MyProcPid may
 /// already be the NEXT task's pid when a claim dies before reattach.
 ///
-/// GL-GANGWEDGE-1 §6.3: that "the park arm already ran it" precondition holds
+/// regression §6.3: that "the park arm already ran it" precondition holds
 /// for the path this was written for — a worker retiring while PARKED, having
 /// completed its engagement and left its group on the serve tail. It does NOT
 /// hold when the thread is KILLED mid-engagement: every serve tail in the
@@ -1043,7 +1051,7 @@ pub fn KillRetainedProc() {
     if proc.pid.load(Relaxed) == 0 {
         panic!("KillRetainedProc: PGPROC already released");
     }
-    // Kill-path lock-state release (finding idx 295, same GL-GANGWEDGE-1 class
+    // Kill-path lock-state release (finding idx 295, same regression class
     // as the lock-group detach below). A thread KILLED mid-engagement skips the
     // transaction-abort and ProcKill exit callbacks that normally release its
     // lock state; this callback owns that cleanup, so it must run their release
@@ -1061,7 +1069,7 @@ pub fn KillRetainedProc() {
     // LWLock the killed thread was still holding; ProcKill likewise runs
     // LWLockReleaseAll before touching any partition lock. No-op on the healthy
     // parked path: the park arm already released all of this, so nothing is held.
-    // GL-CONNSLOT-1: every pre-release step CONTAINED (see run_release_step)
+    // regression: every pre-release step CONTAINED (see run_release_step)
     // — this runs from a dying pool thread's exit drain, whose panics are
     // swallowed upstream; an unwind past the freelist push permanently
     // leaked BOTH this worker's slot AND (via the deferred-return
@@ -1173,7 +1181,7 @@ pub fn KillRetainedProc() {
     }
 }
 
-/// GL-CONNSLOT-1 (round-10 Antithesis DL-connslot-exhaustion): the PGPROC
+/// regression (round-10 Antithesis DL-connslot-exhaustion): the PGPROC
 /// freelist return must be UNCONDITIONAL. ProcKill/KillRetainedProc run as
 /// exit callbacks whose panics are swallowed by the guarded callback drain
 /// (`ipc::run_callback_guarded` degrades them to a WARNING, deliberately —
@@ -1235,7 +1243,7 @@ fn run_release_step(what: &str, f: impl FnOnce()) -> Option<ReleaseStepPanic> {
     })
 }
 
-/// The loud half of GL-CONNSLOT-1: when the lock-group detach could not
+/// The loud half of regression: when the lock-group detach could not
 /// complete, the freelist push gate may legitimately block the self-push
 /// (the proc may still be linked into a lock group — pushing a linked slot
 /// would corrupt the group list). That converts the silent leak into an
@@ -1272,7 +1280,7 @@ pub fn ProcKill(_code: i32, _arg: usize) {
         panic!("ProcKill() called in child process");
     }
 
-    // GL-CONNSLOT-1: every pre-release step below runs CONTAINED so that no
+    // regression: every pre-release step below runs CONTAINED so that no
     // cleanup failure can unwind past the freelist push at the tail (see
     // run_release_step). The first exit-committed payload is re-raised after
     // the push.
@@ -1314,7 +1322,7 @@ pub fn ProcKill(_code: i32, _arg: usize) {
 
     let leader_no = proc.lockGroupLeader.load(Relaxed);
     if leader_no != INVALID_PROC_NUMBER {
-        // GL-CONNSLOT-1: contained as one step. A panic mid-detach leaves
+        // regression: contained as one step. A panic mid-detach leaves
         // the group state (and possibly a partition LWLock) inconsistent;
         // the recovery below drops any LWLock the panic left held and lets
         // the push gate decide (a still-set lockGroupLeader legally blocks
@@ -1369,7 +1377,7 @@ pub fn ProcKill(_code: i32, _arg: usize) {
                 leader.lockGroupLeader.store(INVALID_PROC_NUMBER, Relaxed);
             }
         }
-        // GL-ASSERTMASK-1 row A2, folded into GL-GANGWEDGE-1 (letter §6.5).
+        // regression row A2, folded into regression (letter §6.5).
         // A MEMBER clears its own pointer in BOTH arms, not just the
         // non-empty one. Previously the empty-transition arm above cleared
         // only the LEADER's pointer, leaving ours set. That is harmless for a
@@ -1490,7 +1498,7 @@ pub fn ProcKill(_code: i32, _arg: usize) {
         autovacuum_seams::wake_autovacuum_launcher::call();
     }
 
-    // GL-CONNSLOT-1: an incomplete detach that (legally) blocked the
+    // regression: an incomplete detach that (legally) blocked the
     // self-push is a real slot loss — make it attributable.
     if detach_failed && !pushed {
         report_unreturned_proc("ProcKill", procno);
@@ -1729,7 +1737,7 @@ pub fn init_seams() {
     use lmgr_proc_seams as s;
 
     s::proc_latch::set(|procno| &GetPGProcByNumber(procno).procLatch);
-    // Acquire/Release on lwWaiting (GL-TESTFIX-1 F-R1-5): the wake handshake
+    // Acquire/Release on lwWaiting (regression F-R1-5): the wake handshake
     // can complete WITHOUT a semaphore edge — a wakee may consume a STALE
     // count (the extraWaits repost machinery seeds them), observe
     // LW_WS_NOT_WAITING, and immediately re-queue, touching its non-atomic

@@ -534,7 +534,7 @@ fn out_functions_do_not_alias_across_fmgrinfos() {
     assert_eq!(cs(d2), b"5.6.7.8");
 }
 
-// audit-18.6 fp-adt-network#1: network.c:337 clones VARSIZE_ANY(src) bytes and
+// audit-18.6 regression: network.c:337 clones VARSIZE_ANY(src) bytes and
 // patches ip_bits, so set_masklen on a packed (heap-stored) inet keeps the
 // 1-byte header (pg_column_size 7) while a 4-byte-header source stays 10.
 #[test]
@@ -562,4 +562,19 @@ fn set_masklen_keeps_the_source_header() {
     let out = set(&full);
     assert_eq!(out.len(), 10);
     assert_eq!(&out[4..], &[PGSQL_AF_INET, 16, 192, 168, 1, 1]);
+}
+
+#[test]
+fn in_error_quotes_raw_input_bytes() {
+    let err = network_in(b"1.2.3.\xff".as_slice(), false, None).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"invalid input syntax for type inet: \"1.2.3.\xff\"".as_slice())
+    );
+    let err = network_in(b"1.2.3.\xff".as_slice(), true, None).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"invalid input syntax for type cidr: \"1.2.3.\xff\"".as_slice())
+    );
+    assert!(network_in("junk", false, None).unwrap_err().message_raw.is_none());
 }

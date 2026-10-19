@@ -20,10 +20,10 @@
 //! heap contents are byte-comparable (page LSNs aside). The WAL record class
 //! moves from per-row HEAP INSERT to HEAP2 MULTI_INSERT.
 //!
-//! FLIPPED ON (GL-W0-2 + GL-W1-1): `PGRUST_CTAS_MULTIINSERT=0|off` kills,
+//! FLIPPED ON (regression + regression): `PGRUST_CTAS_MULTIINSERT=0|off` kills,
 //! restoring per-tuple inserts. The composition ladder measured the buffer
-//! eliminating the write stack's entire serial-loss class (GL-W0-2 letter)
-//! on top of GL-W1-1's own 17-32% serial CTAS wins.
+//! eliminating the write stack's entire serial-loss class (regression letter)
+//! on top of regression's own 17-32% serial CTAS wins.
 
 use core::sync::atomic::{AtomicU8, Ordering::Relaxed};
 
@@ -40,7 +40,7 @@ use crate::{BulkInsertStateData, TableAm, WriteMultiInsertBuffer};
 const MAX_BUFFERED_TUPLES: usize = 1000;
 const MAX_BUFFERED_BYTES: usize = 65535;
 
-/// `PGRUST_CTAS_MULTIINSERT` (DEFAULT ON since the GL-W0-2 flip; =0|off
+/// `PGRUST_CTAS_MULTIINSERT` (DEFAULT ON since the regression flip; =0|off
 /// kills): the W1 write-buffer gate.
 /// 0 = unresolved (read env on first use), 1 = OFF, 2 = ON. AtomicU8 +
 /// `_set_for_tests` per the contract R-KNOBS idiom so a unit corpus can A/B

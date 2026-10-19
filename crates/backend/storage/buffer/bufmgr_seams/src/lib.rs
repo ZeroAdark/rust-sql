@@ -127,6 +127,12 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
+    // read_stream_end/read_stream_reset for the batched sequential reads: the
+    // scan's unconsumed batch tail stops being credited to it.
+    pub fn forget_batch_credit(locator: RelFileLocator, forknum: ForkNumber)
+);
+
+seam_core::seam!(
     // ReadBufferExtended(reln, forkNum, blockNum, mode, strategy).
     pub fn read_buffer_extended<'a, 'mcx>(
         rel: &'a types_rel::RelationData<'mcx>,

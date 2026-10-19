@@ -134,3 +134,16 @@ fn passphrase_bad_placeholder_errors() {
     let err = crate::run_ssl_passphrase_command("p", true, &mut buf).unwrap_err();
     assert_eq!(err.sqlstate, types_error::ERRCODE_INVALID_PARAMETER_VALUE);
 }
+
+// pg_strip_crlf (common/string.c:156) measures with strlen: the passphrase
+// stops at the command's first NUL byte.
+#[test]
+fn strip_crlf_stops_at_the_first_nul() {
+    let mut buf = *b"secret\0junk\n";
+    assert_eq!(crate::pg_strip_crlf(&mut buf), 6);
+    let mut buf = *b"pass\r\n\0x";
+    assert_eq!(crate::pg_strip_crlf(&mut buf), 4);
+    assert_eq!(&buf[..7], b"pass\0\0\0");
+    let mut buf = *b"nonul\n";
+    assert_eq!(crate::pg_strip_crlf(&mut buf), 5);
+}

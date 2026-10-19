@@ -54,6 +54,18 @@ impl BackendLogContext for LiveBackendLogContext {
         with_port(|p| p.remote_port.clone())
     }
 
+    fn local_host(&self) -> Option<String> {
+        let laddr = with_port(|p| p.laddr)?;
+        let mut host = String::new();
+        ip::pg_getnameinfo_all(
+            &laddr,
+            Some(&mut host),
+            None,
+            ip::sys::NI_NUMERICHOST | ip::sys::NI_NUMERICSERV,
+        );
+        Some(host)
+    }
+
     fn backend_type(&self) -> Option<String> {
         // elog.c get_backend_type_for_log.
         if g::MyProcPid() == g::PostmasterPid() {

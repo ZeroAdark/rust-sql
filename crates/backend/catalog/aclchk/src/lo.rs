@@ -114,10 +114,14 @@ pub fn object_ownercheck_lo<'mcx>(mcx: Mcx<'mcx>, objectid: Oid, roleid: Oid) ->
         return Ok(true);
     }
     let Some((ownerId, _)) = pg_largeobject::largeobject_owner_acl(mcx, objectid, None)? else {
-        return Err(Box::new(PgError::new(
-            ERROR,
-            format!("could not find tuple for large object {objectid}"),
-        )));
+        return Err(lo_metadata_missing(objectid));
     };
     has_privs_of_role(roleid, ownerId)
+}
+
+pub(crate) fn lo_metadata_missing(objectid: Oid) -> Box<PgError> {
+    Box::new(PgError::new(
+        ERROR,
+        format!("could not find tuple for large object metadata {objectid}"),
+    ))
 }

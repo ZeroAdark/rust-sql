@@ -85,6 +85,18 @@ fn wait_event_decodes_known_constants() {
     assert_eq!(pgstat_get_wait_event(PG_WAIT_EXTENSION).unwrap(), Some("Extension"));
 }
 
+#[test]
+fn fd_wait_event_codes_decode_to_their_names() {
+    use super::pgstat_get_wait_event;
+    use fd::wait_event as w;
+    assert_eq!(pgstat_get_wait_event(w::WAIT_EVENT_BUFFILE_READ).unwrap(), Some("BuffileRead"));
+    assert_eq!(pgstat_get_wait_event(w::WAIT_EVENT_BUFFILE_TRUNCATE).unwrap(), Some("BuffileTruncate"));
+    assert_eq!(pgstat_get_wait_event(w::WAIT_EVENT_BUFFILE_WRITE).unwrap(), Some("BuffileWrite"));
+    assert_eq!(pgstat_get_wait_event(w::WAIT_EVENT_COPY_FILE_COPY).unwrap(), Some("CopyFileCopy"));
+    assert_eq!(pgstat_get_wait_event(w::WAIT_EVENT_COPY_FILE_READ).unwrap(), Some("CopyFileRead"));
+    assert_eq!(pgstat_get_wait_event(w::WAIT_EVENT_COPY_FILE_WRITE).unwrap(), Some("CopyFileWrite"));
+}
+
 // C-parity fallbacks (wait_event.c + generated pgstat_wait_event.c): C never
 // errors on unknown inputs — out-of-range ids and unknown classes take the
 // switch defaults. The previous panics here were ported-in constraints.
@@ -141,6 +153,9 @@ fn custom_wait_events_register_resolve_and_collide() {
         assert!(found, "the by-info table is not registered in the ShmemIndex");
         let (_, found) = shmem::ShmemInitStruct("WaitEventCustom hash by name", size).unwrap();
         assert!(found, "the by-name table is not registered in the ShmemIndex");
+        // wait_event.c:125-127: the allocation counter is a named struct too.
+        let (_, found) = shmem::ShmemInitStruct("WaitEventCustomCounterData", 8).unwrap();
+        assert!(found, "WaitEventCustomCounterData is not registered in the ShmemIndex");
     }
 
     let ext = super::custom::WaitEventExtensionNew("my_ext_wait").unwrap();
@@ -179,6 +194,18 @@ fn custom_wait_events_register_resolve_and_collide() {
     // Same name, different class -> ERRCODE_DUPLICATE_OBJECT.
     super::custom::WaitEventExtensionNew("shared_name_for_collision_test").unwrap();
     assert!(super::custom::WaitEventInjectionPointNew("shared_name_for_collision_test").is_err());
+
+    // wait_event.c:139-153 starts both tables at 16 entries, so
+    // pg_get_wait_events lists custom events in C's 16-bucket traversal
+    // order (dblink's three, as PostgreSQL 18.6 lists them).
+    for name in ["DblinkConnect", "DblinkGetResult", "DblinkGetConnect"] {
+        super::custom::WaitEventExtensionNew(name).unwrap();
+    }
+    let dblink_order: Vec<String> = super::custom::GetWaitEventCustomNames(super::PG_WAIT_EXTENSION)
+        .into_iter()
+        .filter(|n| n.starts_with("Dblink"))
+        .collect();
+    assert_eq!(dblink_order, ["DblinkConnect", "DblinkGetResult", "DblinkGetConnect"]);
 
     // Registration must work past C's init size of 16 (grows to 128 in C).
     for i in 0..30 {

@@ -660,6 +660,11 @@ pub fn CheckpointWriteDelay(flags: i32, progress: f64) -> PgResult<()> {
         return Ok(());
     }
 
+    // checkpointer.c:829: the SIGHUP/SIGUSR1 handlers ran asynchronously;
+    // the thread model dispatches them here so a barrier or reload pended
+    // mid-checkpoint is served between writes, not after the last one.
+    procsignal::DrainThreadSignals()?;
+
     if flags & CHECKPOINT_IMMEDIATE == 0
         && !SHUTDOWN_XLOG_PENDING.load(Relaxed)
         && !interrupt::ShutdownRequestPending()

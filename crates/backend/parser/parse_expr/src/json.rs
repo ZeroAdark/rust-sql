@@ -640,9 +640,6 @@ pub(crate) fn transformJsonArrayConstructor<'mcx>(
 
 // transformJsonArrayQueryConstructor: JSON_ARRAY(query ...) ->
 // (SELECT JSON_ARRAYAGG(a ...) FROM (query) q(a)).
-// Divergence: C pre-transforms a copyObject of the query only to report
-// "subquery must return only one column" at ctor->location; here the EXPR
-// sublink transform raises the same error at the sublink location.
 pub(crate) fn transformJsonArrayQueryConstructor<'mcx>(
     mcx: Mcx<'mcx>,
     pstate: &mut ParseState<'_, 'mcx>,
@@ -653,7 +650,7 @@ pub(crate) fn transformJsonArrayQueryConstructor<'mcx>(
     // Transform a copy of the query only to count tlist entries
     // (parse_expr.c:3958-3967).
     let query_copy = copyfuncs::copy_object(mcx, ctor.query.expect("query"))?;
-    let qtree = analyze_seams::parse_sub_analyze::call(mcx, query_copy, pstate, None, false, true)?;
+    let (qtree, qpstate) = analyze_seams::transform_stmt_child::call(mcx, query_copy, pstate)?;
     let nonjunk = qtree
         .targetList
         .iter()
@@ -667,6 +664,7 @@ pub(crate) fn transformJsonArrayQueryConstructor<'mcx>(
             ctor.location,
         ));
     }
+    parser_small1::free_parsestate(qpstate)?;
 
     let mut fields = NodeList::make1(mcx, Node::mk_string(mcx, "q")?)?;
     fields.lappend(mcx, Node::mk_string(mcx, "a")?)?;

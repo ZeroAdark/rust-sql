@@ -22,7 +22,8 @@ use types_core::{
 };
 use types_error::{
     PgError, PgResult, ERRCODE_INSUFFICIENT_PRIVILEGE, ERRCODE_INVALID_FUNCTION_DEFINITION,
-    ERRCODE_INVALID_PARAMETER_VALUE, ERRCODE_SYNTAX_ERROR, ERRCODE_TOO_MANY_ARGUMENTS,
+    ERRCODE_INVALID_PARAMETER_VALUE, ERRCODE_QUERY_CANCELED, ERRCODE_SYNTAX_ERROR,
+    ERRCODE_TOO_MANY_ARGUMENTS,
     ERRCODE_UNDEFINED_OBJECT, ERROR,
 };
 use types_nodes::parsenodes::{
@@ -174,24 +175,8 @@ fn defel_str<'mcx>(defel: &DefElem<'mcx>) -> &'mcx str {
         .sval
 }
 
-// defGetNumeric (define.c) over the NumericOnly shapes (Integer | Float).
 fn defel_numeric(defel: &DefElem<'_>) -> PgResult<f32> {
-    let arg = defel.arg.expect("DefElem numeric arg");
-    if let Some(i) = arg.as_integer() {
-        return Ok(i.ival as f32);
-    }
-    if let Some(f) = arg.as_float() {
-        return f.fval.parse::<f32>().map_err(|_| {
-            err(
-                format!("{} requires a numeric value", defel.defname.unwrap_or("")),
-                ERRCODE_SYNTAX_ERROR,
-            )
-        });
-    }
-    Err(err(
-        format!("{} requires a numeric value", defel.defname.unwrap_or("")),
-        ERRCODE_SYNTAX_ERROR,
-    ))
+    commands_define::defGetNumeric(defel).map(|v| v as f32)
 }
 
 fn interpret_func_volatility(defel: &DefElem<'_>) -> i8 {
@@ -226,18 +211,19 @@ fn interpret_func_support(mcx: Mcx<'_>, defel: &DefElem<'_>) -> PgResult<Oid> {
     // "function k_int.xmlforest(internal) does not exist" — NOT the
     // lookup's 3F000 "schema does not exist" (missing_ok swallows the
     // schema check in FuncnameGetCandidates). pgrust used to pass false
-    // and leaked the 3F000 (Antithesis r11 run b7c2944201...-59-13, seed
+    // and leaked the 3F000 (regression test run b7c2944201...-59-13, seed
     // 2265144536387274920: `alter routine right support k_int .
     // xmlforest`).
     let proc_oid = parse_func::LookupFuncName(proc_name, 1, &arg_types, true)?;
     if !types_core::OidIsValid(proc_oid) {
         // C: errmsg("function %s does not exist", func_signature_string(
-        // procName, 1, NIL, argList)); argList is exactly [INTERNALOID],
-        // so the signature always renders as "<name>(internal)".
+        // procName, 1, NIL, argList)); the one INTERNALOID argument renders
+        // through format_type_be (quote_all_identifiers applies).
         return Err(err(
             format!(
-                "function {}(internal) does not exist",
-                catalog_objectaddress::NameListToString(proc_name)
+                "function {}({}) does not exist",
+                catalog_objectaddress::NameListToString(proc_name),
+                format_type::format_type_be(types_core::INTERNALOID)?
             ),
             types_error::ERRCODE_UNDEFINED_FUNCTION,
         ));
@@ -404,6 +390,17 @@ fn compute_function_attributes<'mcx>(
     })
 }
 
+fn language_handler_is_ported(mcx: Mcx<'_>, languageOid: Oid) -> PgResult<bool> {
+    let Some(langrow) = syscache_seams::lookup_pg_language_fmgr::call(languageOid)? else {
+        return Ok(false);
+    };
+    if langrow.lanplcallfoid == InvalidOid {
+        return Ok(false);
+    }
+    Ok(syscache_seams::lookup_pg_proc_prosrc::call(mcx, langrow.lanplcallfoid)?
+        .is_some_and(|prosrc| fmgr_core::is_registered_c_lang_fn(&prosrc)))
+}
+
 // LookupTypeName/typenameTypeId (parse_type.c) for function signatures:
 // setof rides on the TypeName; shell types and decorated names are loud.
 fn resolve_type_name<'mcx>(
@@ -441,7 +438,7 @@ fn resolve_type_oid<'mcx>(
     tn: &TypeName<'_>,
 ) -> PgResult<Oid> {
     if tn.pct_type {
-        return resolve_pct_type(mcx, tn);
+        return resolve_pct_type(mcx, pstate, tn);
     }
 
     let typoid = if tn.names.is_nil() {
@@ -458,19 +455,21 @@ fn resolve_type_oid<'mcx>(
 
         let typoid = match schemaname {
             Some(schemaname) => {
+                // pcb_error_callback (parse_node.c:170) spans both lookups.
+                let at_tn = |e: Box<PgError>| match pstate {
+                    Some(ps) if e.sqlstate() != ERRCODE_QUERY_CANCELED => {
+                        Box::new((*e).with_cursor_position(parser_small1::parser_errposition(
+                            ps,
+                            tn.location,
+                            mbutils::GetDatabaseEncoding(),
+                        )))
+                    }
+                    _ => e,
+                };
                 let namespace_id = catalog_namespace::LookupExplicitNamespace(schemaname, false)
-                    .map_err(|e| match pstate {
-                        // pcb_error_callback (parse_node.c:170).
-                        Some(ps) => Box::new((*e).with_cursor_position(
-                            parser_small1::parser_errposition(
-                                ps,
-                                tn.location,
-                                mbutils::GetDatabaseEncoding(),
-                            ),
-                        )),
-                        None => e,
-                    })?;
-                syscache_seams::lookup_pg_type_oid_by_name::call(typname, namespace_id)?
+                    .map_err(at_tn)?;
+                syscache_seams::lookup_pg_type_oid_by_name::call(typname, namespace_id)
+                    .map_err(at_tn)?
             }
             None => {
                 let mut found = InvalidOid;
@@ -496,14 +495,22 @@ fn resolve_type_oid<'mcx>(
     // C typenameTypeId: the typmod is validated by typenameTypeMod, then
     // discarded — function signatures store bare type OIDs.
     if typoid != InvalidOid && !tn.typmods.is_nil() {
-        parse_utilcmd::typenameTypeMod(mcx, None, tn, typoid)?;
+        parse_utilcmd::typenameTypeMod(mcx, pstate, tn, typoid)?;
     }
     Ok(typoid)
 }
 
 // LookupTypeNameExtended's %TYPE arm (parse_type.c): the type of an existing
 // relation column, plus the intentionally unpositioned conversion NOTICE.
-fn resolve_pct_type<'mcx>(mcx: Mcx<'mcx>, tn: &TypeName<'_>) -> PgResult<Oid> {
+fn resolve_pct_type<'mcx>(
+    mcx: Mcx<'mcx>,
+    pstate: Option<&parser_small1::ParseState<'_, 'mcx>>,
+    tn: &TypeName<'_>,
+) -> PgResult<Oid> {
+    let at = |msg: String, sqlstate: types_error::SqlState| match pstate {
+        Some(ps) => err_at(ps, tn.location, msg, sqlstate),
+        None => err(msg, sqlstate),
+    };
     let nnames = tn.names.len();
     let mut names: [&str; 4] = [""; 4];
     if (1..=4).contains(&nnames) {
@@ -523,7 +530,7 @@ fn resolve_pct_type<'mcx>(mcx: Mcx<'mcx>, tn: &TypeName<'_>) -> PgResult<Oid> {
                 .map(|x| x.as_string().expect("TypeName names").sval)
                 .collect::<Vec<_>>()
                 .join(".");
-            return Err(err(
+            return Err(at(
                 format!("improper %TYPE reference ({which} dotted names): {joined}"),
                 ERRCODE_SYNTAX_ERROR,
             ));
@@ -540,12 +547,9 @@ fn resolve_pct_type<'mcx>(mcx: Mcx<'mcx>, tn: &TypeName<'_>) -> PgResult<Oid> {
     let relid = namespace_seams::range_var_get_relid::call(mcx, &rv, types_rel::NoLock, false)?;
     let attnum = lsyscache::get_attnum(relid, field)?;
     if attnum == 0 {
-        return Err(Box::new(
-            PgError::new(
-                ERROR,
-                format!("column \"{field}\" of relation \"{relname}\" does not exist"),
-            )
-            .with_sqlstate(types_error::ERRCODE_UNDEFINED_COLUMN),
+        return Err(at(
+            format!("column \"{field}\" of relation \"{relname}\" does not exist"),
+            types_error::ERRCODE_UNDEFINED_COLUMN,
         ));
     }
     let typoid = lsyscache::get_atttype(relid, attnum)?;
@@ -1181,10 +1185,12 @@ pub fn CreateFunction<'mcx>(
     cache_syscache::ReleaseSysCache(lang_tuple);
 
     if languageOid != SQLlanguageId && languageOid != INTERNALlanguageId
-        && languageOid != ClanguageId && language != "plpgsql"
+        && languageOid != ClanguageId && !language_handler_is_ported(mcx, languageOid)?
     {
-        // Languages beyond sql, internal, c and plpgsql: further PLs arrive
-        // as in-tree Rust ports, never via dlopen (no-dlopen carve,
+        // Languages beyond sql, internal, c and the registered PL handlers
+        // (any language whose call handler is one — CREATE LANGUAGE alias
+        // HANDLER plpgsql_call_handler): further PLs arrive as in-tree Rust
+        // ports, never via dlopen (no-dlopen carve,
         // docs/design/carve-ratifications.md §2).
         return Err(err(
             format!("language \"{language}\" is not supported yet"),
@@ -1663,8 +1669,8 @@ pub fn AlterFunction<'mcx>(
     let mut newtup = heaptuple::heap_modify_tuple(mcx, t, desc, &values, &repl_null, &repl_repl)?;
     catalog_indexing::CatalogTupleUpdate(mcx, &rel, &t.t_self, &mut newtup)?;
 
-    // C: InvokeObjectPostAlterHook — object_access_hook surface is absent by
-    // design in this port.
+    objectaccess::InvokeObjectPostAlterHook(PROCEDURE_RELATION_ID, funcOid, 0)?;
+
     rel.close(types_rel::NoLock)?;
 
     Ok(address)
@@ -1937,6 +1943,7 @@ pub fn ExecuteCallStmt<'mcx>(
         exec_vals: None,
         n_exec: 0,
         param_callback: None,
+        param_expanded: None,
     };
 
     if !atomic {
@@ -1946,6 +1953,9 @@ pub fn ExecuteCallStmt<'mcx>(
 
     let mut slots = execexpr::EvalSlots::default();
     for (i, arg) in fexpr.args.iter().enumerate() {
+        // ExecPrepareExpr: expression_planner before ExecInitExpr.
+        let arg = clauses::eval_const_expressions(mcx, arg)?;
+        nodes_core::fix_opfuncids(arg)?;
         let mut state = execexpr::exec_init_expr(mcx, Some(arg), bind)?.expect("arg is Some");
         state.arm_result_mcx(mcx);
         fcinfo.args[i] = execexpr::exec_eval_expr(&mut state, &mut slots)?;

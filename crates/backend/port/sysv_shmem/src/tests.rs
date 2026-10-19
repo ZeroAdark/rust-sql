@@ -1,6 +1,6 @@
 //! The probe's decision tree, driven with real System V segments.
 //!
-//! GL-SHMSEAM-1: before this crate existed the seam had no implementation at
+//! regression: before this crate existed the seam had no implementation at
 //! all, so every one of these cases panicked ("seam not installed") on the
 //! migrate-from-C boot path. Release-effective: no debug_assert anywhere here.
 

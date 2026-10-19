@@ -72,6 +72,11 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
+    // RelationIsVisible (namespace.c): same surface as type_is_visible.
+    pub fn relation_is_visible(relid: Oid) -> PgResult<bool>
+);
+
+seam_core::seam!(
     // GetTempNamespaceProcNumber(namespaceId) (namespace.c): reads the
     // pg_namespace syscache (get_namespace_name), so it carries that lookup's
     // elog(ERROR) surface.
@@ -92,6 +97,12 @@ seam_core::seam!(
         mcx: mcx::Mcx<'mcx>,
         include_implicit: bool,
     ) -> PgResult<mcx::PgVec<'mcx, Oid>>
+);
+
+seam_core::seam!(
+    // recomputeNamespacePath + activeSearchPath (namespace.c): the path a
+    // name lookup walks; never creates a pending temp namespace.
+    pub fn active_search_path<'mcx>(mcx: mcx::Mcx<'mcx>) -> PgResult<mcx::PgVec<'mcx, Oid>>
 );
 
 seam_core::seam!(

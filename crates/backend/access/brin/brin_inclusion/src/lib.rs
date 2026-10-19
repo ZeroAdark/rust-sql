@@ -74,57 +74,38 @@ pub fn brin_inclusion_add_value(
         return Ok(false);
     }
 
-    if let Some(mut finfo) = inclusion_get_procinfo(bdesc, attno, PROCNUM_EMPTY, true)? {
-        if fmgr_core::function_call1_coll_in(&mut finfo, colloid, mcx, newval)?.as_bool() {
-            if !column.bv_values[INCLUSION_CONTAINS_EMPTY].as_bool() {
-                column.bv_values[INCLUSION_CONTAINS_EMPTY] = Datum::from_bool(true);
-                return Ok(true);
-            }
-            return Ok(false);
+    let is_empty = with_extra_proc(bdesc, attno, PROCNUM_EMPTY, true, |fi| {
+        fmgr_core::function_call1_coll_in(fi, colloid, mcx, newval)
+    })?;
+    if is_empty.is_some_and(|d| d.as_bool()) {
+        if !column.bv_values[INCLUSION_CONTAINS_EMPTY].as_bool() {
+            column.bv_values[INCLUSION_CONTAINS_EMPTY] = Datum::from_bool(true);
+            return Ok(true);
         }
+        return Ok(false);
     }
 
     if new {
         return Ok(true);
     }
 
-    if let Some(mut finfo) = inclusion_get_procinfo(bdesc, attno, PROCNUM_CONTAINS, true)? {
-        if fmgr_core::function_call2_coll_in(
-            &mut finfo,
-            colloid,
-            mcx,
-            column.bv_values[INCLUSION_UNION],
-            newval,
-        )?
-        .as_bool()
-        {
-            return Ok(false);
-        }
+    let unionval = column.bv_values[INCLUSION_UNION];
+    let call2 = |procnum: u16, missing_ok: bool| {
+        with_extra_proc(bdesc, attno, procnum, missing_ok, |fi| {
+            fmgr_core::function_call2_coll_in(fi, colloid, mcx, unionval, newval)
+        })
+    };
+
+    if call2(PROCNUM_CONTAINS, true)?.is_some_and(|d| d.as_bool()) {
+        return Ok(false);
     }
 
-    if let Some(mut finfo) = inclusion_get_procinfo(bdesc, attno, PROCNUM_MERGEABLE, true)? {
-        if !fmgr_core::function_call2_coll_in(
-            &mut finfo,
-            colloid,
-            mcx,
-            column.bv_values[INCLUSION_UNION],
-            newval,
-        )?
-        .as_bool()
-        {
-            column.bv_values[INCLUSION_UNMERGEABLE] = Datum::from_bool(true);
-            return Ok(true);
-        }
+    if call2(PROCNUM_MERGEABLE, true)?.is_some_and(|d| !d.as_bool()) {
+        column.bv_values[INCLUSION_UNMERGEABLE] = Datum::from_bool(true);
+        return Ok(true);
     }
 
-    let mut finfo = inclusion_get_procinfo(bdesc, attno, PROCNUM_MERGE, false)?.unwrap();
-    let mut result = fmgr_core::function_call2_coll_in(
-        &mut finfo,
-        colloid,
-        mcx,
-        column.bv_values[INCLUSION_UNION],
-        newval,
-    )?;
+    let mut result = call2(PROCNUM_MERGE, false)?.expect("merge proc is mandatory");
     // C pfrees the replaced union (bump reset reclaims it) and datumCopies a
     // returned-newval alias out of the heap tuple's lifetime.
     if !attbyval && result == newval {
@@ -153,9 +134,9 @@ pub fn brin_inclusion_consistent(
     let colloid = key.sk_collation;
 
     let call = |strategynum: u16| -> PgResult<bool> {
-        let mut finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype, strategynum)?;
-        Ok(fmgr_core::function_call2_coll_in(&mut finfo, colloid, mcx, unionval, query)?
-            .as_bool())
+        with_strategy_proc(bdesc, attno, subtype, strategynum, |fi| {
+            Ok(fmgr_core::function_call2_coll_in(fi, colloid, mcx, unionval, query)?.as_bool())
+        })
     };
 
     match key.sk_strategy {
@@ -272,29 +253,19 @@ pub fn brin_inclusion_union(
         return Ok(());
     }
 
-    if let Some(mut finfo) = inclusion_get_procinfo(bdesc, attno, PROCNUM_MERGEABLE, true)? {
-        if !fmgr_core::function_call2_coll_in(
-            &mut finfo,
-            colloid,
-            mcx,
-            col_a.bv_values[INCLUSION_UNION],
-            col_b.bv_values[INCLUSION_UNION],
-        )?
-        .as_bool()
-        {
-            col_a.bv_values[INCLUSION_UNMERGEABLE] = Datum::from_bool(true);
-            return Ok(());
-        }
+    let (union_a, union_b) = (col_a.bv_values[INCLUSION_UNION], col_b.bv_values[INCLUSION_UNION]);
+    let call2 = |procnum: u16, missing_ok: bool| {
+        with_extra_proc(bdesc, attno, procnum, missing_ok, |fi| {
+            fmgr_core::function_call2_coll_in(fi, colloid, mcx, union_a, union_b)
+        })
+    };
+
+    if call2(PROCNUM_MERGEABLE, true)?.is_some_and(|d| !d.as_bool()) {
+        col_a.bv_values[INCLUSION_UNMERGEABLE] = Datum::from_bool(true);
+        return Ok(());
     }
 
-    let mut finfo = inclusion_get_procinfo(bdesc, attno, PROCNUM_MERGE, false)?.unwrap();
-    let mut result = fmgr_core::function_call2_coll_in(
-        &mut finfo,
-        colloid,
-        mcx,
-        col_a.bv_values[INCLUSION_UNION],
-        col_b.bv_values[INCLUSION_UNION],
-    )?;
+    let mut result = call2(PROCNUM_MERGE, false)?.expect("merge proc is mandatory");
     if !attbyval && result == col_b.bv_values[INCLUSION_UNION] {
         result = datum_copy(mcx, result, attbyval, attlen)?;
     }
@@ -302,82 +273,89 @@ pub fn brin_inclusion_union(
     Ok(())
 }
 
-/// Missing optional procs return None and are remembered (extra_proc_missing).
-fn inclusion_get_procinfo(
+/// inclusion_get_procinfo + call: the FmgrInfo is cached on the column and
+/// invoked in place (fn_extra persists as in C); a missing optional proc is
+/// None and remembered (extra_proc_missing).
+fn with_extra_proc<R>(
     bdesc: &BrinDesc<'_>,
     attno: u16,
     procnum: u16,
     missing_ok: bool,
-) -> PgResult<Option<FmgrInfo>> {
+    f: impl FnOnce(&mut FmgrInfo) -> PgResult<R>,
+) -> PgResult<Option<R>> {
     let basenum = (procnum - PROCNUM_BASE) as usize;
     debug_assert!(basenum < INCLUSION_MAX_PROCNUMS);
-    let opaque = bdesc.bd_info[attno as usize - 1]
-        .inclusion
-        .as_ref()
-        .expect("inclusion column");
+    let col = &bdesc.bd_info[attno as usize - 1];
+    let opaque = col.inclusion.as_ref().expect("inclusion column");
 
     if opaque.extra_proc_missing.get()[basenum] {
         return Ok(None);
     }
 
-    if let Some(fi) = opaque.extra_procinfos.borrow()[basenum].as_ref() {
-        return Ok(Some(fi.clone()));
-    }
-
-    let opfamily = bdesc.bd_opfamily[attno as usize - 1];
-    let opcintype = bdesc.bd_opcintype[attno as usize - 1];
-    let proc = lsyscache::get_opfamily_proc(opfamily, opcintype, opcintype, procnum as i16)?;
-    if proc == 0 {
-        if !missing_ok {
-            return Err(invalid_opclass(procnum, attno));
+    let mut procs = opaque.extra_procinfos.try_borrow_mut().map_err(|_| reentrant_call())?;
+    if procs[basenum].is_none() {
+        let opfamily = bdesc.bd_opfamily[attno as usize - 1];
+        let opcintype = bdesc.bd_opcintype[attno as usize - 1];
+        let proc = lsyscache::get_opfamily_proc(opfamily, opcintype, opcintype, procnum as i16)?;
+        if proc == 0 {
+            if !missing_ok {
+                return Err(invalid_opclass(procnum, attno));
+            }
+            let mut missing = opaque.extra_proc_missing.get();
+            missing[basenum] = true;
+            opaque.extra_proc_missing.set(missing);
+            return Ok(None);
         }
-        let mut missing = opaque.extra_proc_missing.get();
-        missing[basenum] = true;
-        opaque.extra_proc_missing.set(missing);
-        return Ok(None);
+        let mut finfo = fmgr_core::fmgr_info(proc)?;
+        if let Some(opts) = opaque.options.as_deref() {
+            // SAFETY: the options box and this cache both live in the BrinDesc.
+            unsafe { finfo.set_opclass_options(opts) };
+        }
+        procs[basenum] = Some(finfo);
     }
-    let finfo = fmgr_core::fmgr_info(proc)?;
-    opaque.extra_procinfos.borrow_mut()[basenum] = Some(finfo.clone());
-    Ok(Some(finfo))
+    f(procs[basenum].as_mut().expect("resolved above")).map(Some)
 }
 
 // inclusion_get_strategy_procinfo: per-subtype cache of the strategy operator
 // procs, resolved through pg_amop + pg_operator (rule-5 cache).
-fn inclusion_get_strategy_procinfo(
+fn with_strategy_proc<R>(
     bdesc: &BrinDesc<'_>,
     attno: u16,
     subtype: Oid,
     strategynum: u16,
-) -> PgResult<FmgrInfo> {
+    f: impl FnOnce(&mut FmgrInfo) -> PgResult<R>,
+) -> PgResult<R> {
     debug_assert!(strategynum >= 1 && strategynum as usize <= RT_MAX_STRATEGY);
     let opaque = bdesc.bd_info[attno as usize - 1]
         .inclusion
         .as_ref()
         .expect("inclusion column");
 
+    let mut cache = opaque.strategy_procinfos.try_borrow_mut().map_err(|_| reentrant_call())?;
     if opaque.cached_subtype.get() != subtype {
-        *opaque.strategy_procinfos.borrow_mut() = [const { None }; RT_MAX_STRATEGY];
+        *cache = [const { None }; RT_MAX_STRATEGY];
         opaque.cached_subtype.set(subtype);
     }
 
-    {
-        let cache = opaque.strategy_procinfos.borrow();
-        if let Some(fi) = &cache[strategynum as usize - 1] {
-            return Ok(fi.clone());
+    let slot = &mut cache[strategynum as usize - 1];
+    if slot.is_none() {
+        let opfamily = bdesc.bd_opfamily[attno as usize - 1];
+        let atttypid = bdesc.bd_tupdesc.attr(attno as usize - 1).atttypid;
+        let oprid = lsyscache::get_opfamily_member(opfamily, atttypid, subtype, strategynum as i16)?;
+        if oprid == 0 {
+            return Err(missing_operator(strategynum, atttypid, subtype, opfamily));
         }
+        let proc = lsyscache::get_opcode(oprid)?;
+        debug_assert!(proc != 0);
+        *slot = Some(fmgr_core::fmgr_info(proc)?);
     }
+    f(slot.as_mut().expect("resolved above"))
+}
 
-    let opfamily = bdesc.bd_opfamily[attno as usize - 1];
-    let atttypid = bdesc.bd_tupdesc.attr(attno as usize - 1).atttypid;
-    let oprid = lsyscache::get_opfamily_member(opfamily, atttypid, subtype, strategynum as i16)?;
-    if oprid == 0 {
-        return Err(missing_operator(strategynum, atttypid, subtype, opfamily));
-    }
-    let proc = lsyscache::get_opcode(oprid)?;
-    debug_assert!(proc != 0);
-    let finfo = fmgr_core::fmgr_info(proc)?;
-    opaque.strategy_procinfos.borrow_mut()[strategynum as usize - 1] = Some(finfo.clone());
-    Ok(finfo)
+#[cold]
+#[inline(never)]
+fn reentrant_call() -> Box<PgError> {
+    Box::new(PgError::error("recursive call of a BRIN inclusion support procedure"))
 }
 
 #[track_caller]

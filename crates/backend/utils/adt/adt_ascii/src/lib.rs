@@ -121,10 +121,8 @@ fn conversion_not_supported(enc: pg_enc) -> Box<PgError> {
 #[cold]
 #[inline(never)]
 fn invalid_encoding_name(name: &[u8]) -> Box<PgError> {
-    // C echoes the raw name bytes; a non-UTF-8 byte (SQL_ASCII database)
-    // is the lossy replacement here.
     Box::new(
-        PgError::error(format!("{} is not a valid encoding name", String::from_utf8_lossy(name)))
+        PgError::error_bytes("", name, " is not a valid encoding name")
             .with_sqlstate(ERRCODE_UNDEFINED_OBJECT),
     )
 }

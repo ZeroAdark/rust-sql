@@ -55,11 +55,28 @@ fn invalid_bytea_input() -> PgError {
         .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
 }
 
-// C: encode.c error path renders the offending mbchar (pg_mblen_range).
+// C: encode.c error path renders the offending mbchar (pg_mblen_range);
+// ereturn skips the message arguments when the soft-error context wants no
+// details (elog.c:647), so pg_mblen_range's 22021 only fires when they are.
 #[cold]
 #[inline(never)]
+fn invalid_hex_digit_return(
+    escontext: Option<&mut SoftErrorContext>,
+    s: &[u8],
+) -> PgResult<Option<()>> {
+    match escontext {
+        Some(context) if !context.details_wanted() => {
+            context.mark_error_occurred();
+            Ok(None)
+        }
+        escontext => ereturn(escontext, None, invalid_hex_digit(s)?),
+    }
+}
+
 fn invalid_hex_digit(s: &[u8]) -> PgResult<PgError> {
     let n = (mbutils_seams::pg_mblen_range::call(s)? as usize).min(s.len());
+    // C's %.*s stops at a NUL inside the mbchar (encode.c:238).
+    let n = s[..n].iter().position(|&b| b == 0).unwrap_or(n);
     Ok(
         PgError::error(format!(
             "invalid hexadecimal digit: \"{}\"",
@@ -111,7 +128,7 @@ pub fn hex_decode_into(
         }
         let v1 = get_hex(c);
         if v1 < 0 {
-            return ereturn(escontext.as_deref_mut(), None, invalid_hex_digit(&src[i..])?);
+            return invalid_hex_digit_return(escontext.as_deref_mut(), &src[i..]);
         }
         i += 1;
         if i >= src.len() {
@@ -119,7 +136,7 @@ pub fn hex_decode_into(
         }
         let v2 = get_hex(src[i]);
         if v2 < 0 {
-            return ereturn(escontext.as_deref_mut(), None, invalid_hex_digit(&src[i..])?);
+            return invalid_hex_digit_return(escontext.as_deref_mut(), &src[i..]);
         }
         i += 1;
         // SAFETY: one output byte per digit pair; pairs <= src.len()/2, within

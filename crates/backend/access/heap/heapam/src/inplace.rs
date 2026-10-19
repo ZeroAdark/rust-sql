@@ -1,4 +1,5 @@
 // heapam.c inplace lane.
+use ::elog::CritSection;
 use ::mcx::Mcx;
 use ::tableam_vocab::TM_Result;
 use ::types_core::{Buffer, CommandId};
@@ -163,42 +164,39 @@ pub fn heap_inplace_update_and_unlock(
     // XLogInsert in the reverse order can let datfrozenxid overtake
     // relfrozenxid (heapam.c's D/R scenario).
     let my_proc = lmgr_proc::MyProc().map(lmgr_proc::GetPGProcByNumber);
-    if let Some(proc) = my_proc {
-        use core::sync::atomic::Ordering::Relaxed;
-        use ::types_storage::storage::DELAY_CHKPT_START;
-        debug_assert_eq!(proc.delayChkptFlags.load(Relaxed) & DELAY_CHKPT_START, 0);
-        init_small::globals::StartCriticalSection();
-        proc.delayChkptFlags.fetch_or(DELAY_CHKPT_START, Relaxed);
-    } else {
-        // MyProc is unset only in single-threaded unit harnesses.
-        init_small::globals::StartCriticalSection();
-    }
+    // heapam.c:6825 START_CRIT_SECTION() .. :6886 END (MyProc is unset only
+    // in single-threaded unit harnesses).
+    CritSection::run(|| {
+        if let Some(proc) = my_proc {
+            use core::sync::atomic::Ordering::Relaxed;
+            use ::types_storage::storage::DELAY_CHKPT_START;
+            debug_assert_eq!(proc.delayChkptFlags.load(Relaxed) & DELAY_CHKPT_START, 0);
+            proc.delayChkptFlags.fetch_or(DELAY_CHKPT_START, Relaxed);
+        }
 
-    // An Err below leaves the critical section open so the escape check
-    // escalates it to PANIC, mirroring C's in-crit-section ereport promotion.
-    inplace_write_wal_and_page(
-        mcx,
-        relation,
-        tuple,
-        buffer,
-        src,
-        old_hoff,
-        newlen,
-        relcache_init_file_inval,
-        nmsgs,
-        &inval_messages,
-    )?;
+        inplace_write_wal_and_page(
+            mcx,
+            relation,
+            tuple,
+            buffer,
+            src,
+            old_hoff,
+            newlen,
+            relcache_init_file_inval,
+            nmsgs,
+            &inval_messages,
+        )?;
 
-    // Shared-queue invals before UnlockTuple (SearchSysCacheLocked1 assumes
-    // it), still inside the critical section, as in C.
-    inval::eoxact::AtInplace_Inval()?;
+        // Shared-queue invals before UnlockTuple, inside the section as in C.
+        inval::eoxact::AtInplace_Inval()?;
 
-    if let Some(proc) = my_proc {
-        use core::sync::atomic::Ordering::Relaxed;
-        use ::types_storage::storage::DELAY_CHKPT_START;
-        proc.delayChkptFlags.fetch_and(!DELAY_CHKPT_START, Relaxed);
-    }
-    init_small::globals::EndCriticalSection();
+        if let Some(proc) = my_proc {
+            use core::sync::atomic::Ordering::Relaxed;
+            use ::types_storage::storage::DELAY_CHKPT_START;
+            proc.delayChkptFlags.fetch_and(!DELAY_CHKPT_START, Relaxed);
+        }
+        Ok(())
+    })?;
 
     lmgr::UnlockTuple(relation, &tuple.t_self, InplaceUpdateTupleLock)?;
     inval::local::AcceptInvalidationMessages()?;

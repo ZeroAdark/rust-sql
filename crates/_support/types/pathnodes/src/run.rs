@@ -296,8 +296,21 @@ impl<'mcx> PlannerRun<'mcx> {
     /// Restore the parent level, parking the finished minmax subroot; returns
     /// its index (MinMaxAggInfo.subroot_idx).
     pub fn pop_root_to_minmax_subroot(&mut self) -> usize {
+        let outer = {
+            let mut outer: crate::Relids<'mcx> = crate::relids::relids_empty();
+            if !self.glob.param_exec_types.is_nil() {
+                for i in 0..self.suspended_roots.len() {
+                    let root = &self.suspended_roots[i].root;
+                    Self::scan_outer_params(self.mcx, &mut outer, root);
+                }
+            }
+            outer
+        };
         let parent = self.suspended_roots.pop().expect("pop_root_to_minmax_subroot without push");
-        let sub = core::mem::replace(&mut self.root, parent.root);
+        let mut sub = core::mem::replace(&mut self.root, parent.root);
+        if !self.glob.param_exec_types.is_nil() {
+            sub.outer_params = outer;
+        }
         let sub_tlist = core::mem::replace(&mut self.processed_tlist, parent.processed_tlist);
         self.gset_data = parent.gset_data;
         self.active_windows =

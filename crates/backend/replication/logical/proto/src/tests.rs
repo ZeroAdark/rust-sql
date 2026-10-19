@@ -559,3 +559,37 @@ fn wire_strings_are_verified_against_utf8_database_encoding() {
     let mut r = Reader::new("caf\u{e9}\0".as_bytes());
     assert_eq!(r.get_string().unwrap(), "caf\u{e9}");
 }
+
+// proto.c:898: palloc(len + 1) precedes pq_copymsgbytes, so a column length
+// at or above MaxAllocSize fails the allocation check ("invalid memory alloc
+// request size %zu", the int len + 1 widened to Size) before the short-data
+// check; a negative int length that survives palloc is then pq_copymsgbytes'
+// "insufficient data left in message".
+#[test]
+fn tuple_column_length_is_checked_as_palloc_size_first() {
+    let mut body = vec![0, 1, LOGICALREP_COLUMN_TEXT];
+    body.extend_from_slice(&0x3fff_ffffu32.to_be_bytes());
+    let mut r = Reader::new(&body);
+    let e = logicalrep_read_tuple(&mut r).err().unwrap();
+    assert_eq!(e.message(), "invalid memory alloc request size 1073741824");
+    assert_eq!(e.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+
+    let mut body = vec![0, 1, LOGICALREP_COLUMN_BINARY];
+    body.extend_from_slice(&0x8000_0000u32.to_be_bytes());
+    let mut r = Reader::new(&body);
+    let e = logicalrep_read_tuple(&mut r).err().unwrap();
+    assert_eq!(e.message(), "invalid memory alloc request size 18446744071562067969");
+
+    let mut body = vec![0, 1, LOGICALREP_COLUMN_TEXT];
+    body.extend_from_slice(&0xffff_ffffu32.to_be_bytes());
+    let mut r = Reader::new(&body);
+    let e = logicalrep_read_tuple(&mut r).err().unwrap();
+    assert_eq!(e.message(), "insufficient data left in message");
+    assert_eq!(e.sqlstate(), types_error::ERRCODE_PROTOCOL_VIOLATION);
+
+    let mut body = vec![0, 1, LOGICALREP_COLUMN_TEXT];
+    body.extend_from_slice(&0x3fff_fffeu32.to_be_bytes());
+    let mut r = Reader::new(&body);
+    let e = logicalrep_read_tuple(&mut r).err().unwrap();
+    assert_eq!(e.message(), "insufficient data left in message");
+}

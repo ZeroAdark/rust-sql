@@ -18,7 +18,7 @@ use crate::{cache_mcx, store};
 // reltype is a build-time parameter (C's AddNewRelationTuple pokes it into
 // rd_rel/rd_att after the fact; rd_rel is not interior-mutable here).
 pub fn RelationBuildLocalRelation(
-    relname: &str,
+    relname: &[u8],
     relnamespace: Oid,
     tupDesc: &TupleDescData<'_>,
     relid: Oid,
@@ -60,6 +60,7 @@ pub fn RelationBuildLocalRelation(
                 defval: PgVec::new_in(mcx),
                 check: PgVec::new_in(mcx),
                 missing: PgVec::new_in(mcx),
+                missing_store: PgVec::new_in(mcx),
                 num_defval: 0,
                 num_check: 0,
                 relchecks: 0,
@@ -81,7 +82,7 @@ pub fn RelationBuildLocalRelation(
     };
 
     let mut name = NameData::default();
-    name.namestrcpy(relname);
+    name.namestrcpy_bytes(relname);
     let rd_rel = FormData_pg_class {
         relname: name,
         relnamespace,

@@ -1,5 +1,6 @@
 use lwlock::{main_lock, LWLock, BUFFER_MAPPING_LWLOCK_OFFSET, NUM_BUFFER_PARTITIONS};
 use types_error::{ErrorLocation, PgResult, ERROR};
+use types_hash::hsearch::{HASHCTL, HASH_DIRSIZE};
 use types_storage::buf::buftag;
 
 // Dense open-addressed replacement for C's dynahash buffer table (van de Meent
@@ -130,6 +131,15 @@ pub fn BufTableShmemSize(size: i32) -> usize {
 
 /// InitBufTable (buf_table.c): size = NBuffers + NUM_BUFFER_PARTITIONS.
 pub fn InitBufTable(size: i32) -> PgResult<()> {
+    // buf_table.c:62 ShmemInitHash: the table's ShmemIndex row at dynahash's
+    // header + directory size (shmem.c:332-380).
+    let mut info = HASHCTL::new();
+    info.dsize = dynahash::hash_select_dirsize(size as i64);
+    info.max_dsize = info.dsize;
+    shmem::ShmemInitStruct(
+        "Shared Buffer Lookup Table",
+        dynahash::hash_get_shared_size(&info, HASH_DIRSIZE),
+    )?;
     let base = main_lock(BUFFER_MAPPING_LWLOCK_OFFSET as usize) as *const LWLock
         as *mut lwlock::LWLockPadded;
     PARTITION_BASE.store(base, core::sync::atomic::Ordering::Release);

@@ -14,6 +14,7 @@ mcx = { path = "../../_support/mcx" }
 types_core = { path = "../../_support/types/types_core" }
 types_storage = { path = "../../_support/types/types_storage" }
 waiteventset = { path = "../../backend/storage/ipc/waiteventset" }
+ipc = { path = "../../backend/storage/ipc/ipc" }
 types_error = { path = "../../_support/types/types_error" }
 types_fmgr = { path = "../../_support/types/fmgr" }
 types_nodes = { path = "../../_support/types/nodes" }
@@ -53,6 +54,7 @@ types_guc = { path = "../../_support/types/types_guc" }
 rustc-hash = "2"
 libc = "0.2"
 pgclient = { path = "../../interfaces/pgclient" }
+pg_b64 = { path = "../../common/base64" }
 xact = { path = "../../backend/access/transam/xact" }
 waitevent = { path = "../../backend/utils/activity/waitevent" }
 miscinit = { path = "../../backend/utils/init/miscinit" }

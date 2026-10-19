@@ -13,36 +13,51 @@ fn lossy(b: Option<&[u8]>) -> String {
     String::from_utf8_lossy(b.unwrap_or_default()).into_owned()
 }
 
+// C's "%s" of the raw input cstring: non-UTF-8 bytes (SQL_ASCII, byteain
+// aliases) go on the wire verbatim.
+fn quoted(prefix: &str, input: &[u8], suffix: &str) -> PgError {
+    match core::str::from_utf8(input) {
+        Ok(s) => PgError::error(format!("{prefix}{s}{suffix}")),
+        Err(_) => {
+            let mut msg = prefix.as_bytes().to_vec();
+            msg.extend_from_slice(input);
+            msg.extend_from_slice(suffix.as_bytes());
+            PgError::error_raw_message(msg)
+        }
+    }
+}
+
 #[cold]
 pub fn DateTimeParseError(
     dterr: i32,
     extra: Option<&DateTimeErrorExtra<'_>>,
-    str_: &str,
+    str_: impl AsRef<[u8]>,
     datatype: &str,
     escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<()> {
+    let str_ = str_.as_ref();
     // Each arm's location is that errsave's closing line in datetime.c
     // (18.6), routine DateTimeParseError — the wire F/L/R fields C sends.
     let at = |e: PgError, line: i32| e.with_location("datetime.c", line, "DateTimeParseError");
     let err = match dterr {
         DTERR_FIELD_OVERFLOW => at(
-            PgError::error(format!("date/time field value out of range: \"{str_}\""))
+            quoted("date/time field value out of range: \"", str_, "\"")
                 .with_sqlstate(ERRCODE_DATETIME_FIELD_OVERFLOW),
             4224,
         ),
         DTERR_MD_FIELD_OVERFLOW => at(
-            PgError::error(format!("date/time field value out of range: \"{str_}\""))
+            quoted("date/time field value out of range: \"", str_, "\"")
                 .with_sqlstate(ERRCODE_DATETIME_FIELD_OVERFLOW)
                 .with_hint("Perhaps you need a different \"DateStyle\" setting."),
             4232,
         ),
         DTERR_INTERVAL_OVERFLOW => at(
-            PgError::error(format!("interval field value out of range: \"{str_}\""))
+            quoted("interval field value out of range: \"", str_, "\"")
                 .with_sqlstate(ERRCODE_INTERVAL_FIELD_OVERFLOW),
             4238,
         ),
         DTERR_TZDISP_OVERFLOW => at(
-            PgError::error(format!("time zone displacement out of range: \"{str_}\""))
+            quoted("time zone displacement out of range: \"", str_, "\"")
                 .with_sqlstate(ERRCODE_INVALID_TIME_ZONE_DISPLACEMENT_VALUE),
             4244,
         ),
@@ -67,7 +82,7 @@ pub fn DateTimeParseError(
             )
         }
         _ => at(
-            PgError::error(format!("invalid input syntax for type {datatype}: \"{str_}\""))
+            quoted(&format!("invalid input syntax for type {datatype}: \""), str_, "\"")
                 .with_sqlstate(ERRCODE_INVALID_DATETIME_FORMAT),
             4265,
         ),

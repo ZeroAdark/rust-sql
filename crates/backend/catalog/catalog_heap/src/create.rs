@@ -310,7 +310,7 @@ pub fn CheckAttributeType<'mcx>(
 // upgrade mode (heap.c:1330 before :1368).
 fn check_system_namespace_create(
     mcx: Mcx<'_>,
-    relname: &str,
+    relname: &[u8],
     relnamespace: Oid,
     relkind: u8,
     allow_system_table_mods: bool,
@@ -326,7 +326,10 @@ fn check_system_namespace_create(
         return Err(Box::new(
             PgError::new(
                 ERROR,
-                format!("permission denied to create \"{nspname}.{relname}\""),
+                format!(
+                    "permission denied to create \"{nspname}.{}\"",
+                    String::from_utf8_lossy(relname)
+                ),
             )
             .with_sqlstate(types_error::ERRCODE_INSUFFICIENT_PRIVILEGE)
             .with_detail("System catalog modifications are currently disallowed."),
@@ -335,9 +338,12 @@ fn check_system_namespace_create(
     Ok(())
 }
 
+// relname is bytes, as C's char*: index_create hands in a
+// makeObjectName-generated name that may end inside a multibyte character
+// (SQL_ASCII database); it is stored verbatim (relcache.c namestrcpy).
 pub fn heap_create<'mcx>(
     mcx: Mcx<'mcx>,
-    relname: &str,
+    relname: &[u8],
     relnamespace: Oid,
     reltablespace: Oid,
     relid: Oid,
@@ -376,14 +382,15 @@ pub fn heap_create<'mcx>(
     // preset OIDs, allow_system_table_mods) fails here in C too.
     if shared_relation != catalog::IsSharedRelation(relid) {
         return Err(Box::new(PgError::error(format!(
-            "shared_relation flag for \"{relname}\" does not match IsSharedRelation({relid})"
+            "shared_relation flag for \"{}\" does not match IsSharedRelation({relid})",
+            String::from_utf8_lossy(relname)
         ))));
     }
     // A shared relation whose OID is on that list is only built in
     // bootstrap; pgrust's relcache has no post-initdb shared build.
     if shared_relation {
         return Err(err(
-            format!("cannot create shared relation \"{relname}\""),
+            format!("cannot create shared relation \"{}\"", String::from_utf8_lossy(relname)),
             types_error::ERRCODE_FEATURE_NOT_SUPPORTED,
         )
         .with_detail("Creating shared relations after initdb is not supported.")
@@ -833,7 +840,7 @@ pub fn heap_create_with_catalog<'mcx>(
     lmgr::LockRelationOid(relid, AccessExclusiveLock)?;
     check_system_namespace_create(
         mcx,
-        p.relname,
+        p.relname.as_bytes(),
         p.relnamespace,
         p.relkind,
         p.allow_system_table_mods,
@@ -894,7 +901,7 @@ pub fn heap_create_with_catalog<'mcx>(
 
     let (new_rel_desc, relfrozenxid, relminmxid) = heap_create(
         mcx,
-        p.relname,
+        p.relname.as_bytes(),
         p.relnamespace,
         p.reltablespace,
         relid,

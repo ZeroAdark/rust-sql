@@ -72,6 +72,11 @@ pub(crate) fn pg_rewrite_query<'mcx>(
     mcx: Mcx<'mcx>,
     query: Query<'mcx>,
 ) -> PgResult<PgVec<'mcx, Query<'mcx>>> {
+    // postgres.c:803/:870: the debug_print_* dumps bracket the rewrite here
+    // for every path that reaches pg_rewrite_query, nested bodies included.
+    if guc_tables::backing::Debug_print_parse() {
+        debug_print_tree(mcx, "parse tree", outfuncs::queryToStringWithLocations(mcx, &query))?;
+    }
     usage_reset();
     let querytree_list = if query.commandType == CmdType::CMD_UTILITY {
         let mut v = PgVec::new_in(mcx);
@@ -82,13 +87,31 @@ pub(crate) fn pg_rewrite_query<'mcx>(
         rewrite_handler_seams::query_rewrite::call(mcx, query)?
     };
     usage_show("REWRITER STATISTICS")?;
+    if guc_tables::backing::Debug_print_rewritten() {
+        debug_print_tree(
+            mcx,
+            "rewritten parse tree",
+            outfuncs::queryListToStringWithLocations(mcx, &querytree_list),
+        )?;
+    }
     Ok(querytree_list)
+}
+
+fn debug_print_tree<'mcx>(
+    mcx: Mcx<'mcx>,
+    title: &str,
+    dump: PgResult<::mcx::PgString<'mcx>>,
+) -> PgResult<()> {
+    nodes_core::print::debug_print_tree(mcx, title, dump, guc_tables::backing::Debug_pretty_print())
 }
 
 pub(crate) struct SqlFnEntryState<'mcx> {
     pub fname: PgString<'mcx>,
     pub src: PgString<'mcx>,
     pub sqlbody: Option<PgString<'mcx>>,
+    // C func->queryTree_list for a BEGIN ATOMIC body: read once, copied per
+    // plansource (analysis and rewrite scribble on their input).
+    pub sqlbody_queries: PgVec<'mcx, Query<'mcx>>,
     pub argtypes: PgVec<'mcx, Oid>,
     pub argtyplen: PgVec<'mcx, i16>,
     pub argnames: PgVec<'mcx, PgString<'mcx>>,
@@ -200,13 +223,36 @@ impl core::hash::Hash for FnKey {
     }
 }
 
+struct SqlFnCache {
+    map: FxHashMap<FnKey, Rc<SqlFnEntry>>,
+    exit_release_registered: bool,
+}
+
+// Process-death teardown (funccache.c:39: the hash lives exactly as long as
+// the backend). A retained parallel-worker thread parks through the
+// on_proc_exit chain, where plancache drops every CachedPlanSource an entry's
+// plansources point at; the entries must go with it or the next task's
+// cache hit hands GetCachedPlan a dropped handle. Registered after
+// InitPlanCache's ReleaseAllCachedPlansAtExit, so LIFO runs this first.
+fn release_sql_fn_cache_at_exit(_code: i32, _arg: usize) {
+    let entries: Vec<Rc<SqlFnEntry>> = SQL_FN_CACHE.with(|c| {
+        let mut st = c.borrow_mut();
+        st.exit_release_registered = false;
+        st.map.drain().map(|(_, e)| e).collect()
+    });
+    drop(entries);
+}
+
 thread_local! {
     // std map justified: funccache.c is itself an open-ended backend hash.
     // ManuallyDrop: entry Drops reach the plancache/tuplestore TLS
     // registries, whose teardown order at thread exit is unspecified; the
     // map leaks with the backend, exactly like C's CacheMemoryContext.
-    static SQL_FN_CACHE: RefCell<core::mem::ManuallyDrop<FxHashMap<FnKey, Rc<SqlFnEntry>>>> =
-        RefCell::new(core::mem::ManuallyDrop::new(FxHashMap::default()));
+    static SQL_FN_CACHE: RefCell<core::mem::ManuallyDrop<SqlFnCache>> =
+        RefCell::new(core::mem::ManuallyDrop::new(SqlFnCache {
+            map: FxHashMap::default(),
+            exit_release_registered: false,
+        }));
 
     // Owner of each SQL-function CachedPlanSource, keyed by handle. This is
     // our safe spelling of C's `void *parserSetupArg` / `postRewriteArg`: C
@@ -431,12 +477,12 @@ pub(crate) fn cached_sql_function(
         result_rowtype,
     };
 
-    if let Some(hit) = SQL_FN_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+    if let Some(hit) = SQL_FN_CACHE.with(|c| c.borrow().map.get(&key).cloned()) {
         if hit.stamp == stamp {
             return Ok(hit);
         }
         SQL_FN_CACHE.with(|c| {
-            c.borrow_mut().remove(&key);
+            c.borrow_mut().map.remove(&key);
         });
     }
 
@@ -449,7 +495,12 @@ pub(crate) fn cached_sql_function(
         expected_desc,
     )?);
     SQL_FN_CACHE.with(|c| {
-        c.borrow_mut().insert(key, entry.clone());
+        let mut st = c.borrow_mut();
+        if !st.exit_release_registered && ipc_seams::on_proc_exit::is_installed() {
+            ipc_seams::on_proc_exit::call(release_sql_fn_cache_at_exit, 0);
+            st.exit_release_registered = true;
+        }
+        st.map.insert(key, entry.clone());
     });
     Ok(entry)
 }
@@ -466,16 +517,22 @@ fn compile_entry(
         let row = read_proc_row(mcx, fn_oid)?;
         let fname_s = row.proname.as_str().to_string();
         let src_s = row.prosrc.as_str().to_string();
+        let _errctx = {
+            let (fname, src) = (fname_s.clone(), src_s.clone());
+            crate::ContextFrame::push(move |e| crate::startup_error_callback(e, &fname, &src))
+        };
         let r = (|| -> PgResult<SqlFnEntryState<'_>> {
             let resolved = funcapi::get_call_result_type(mcx, flinfo, expected_desc)?;
             let rettype = resolved.result_type_id;
             let rettupdesc = resolved.result_tuple_desc.map(Rc::new);
             let (typlen, typbyval) = lsyscache::typ::get_typlenbyval(rettype)?;
-            let scratch = MemoryContext::new("sqlfn count");
+            let mut sqlbody_trees: PgVec<'_, Query<'_>> = PgVec::new_in(mcx);
             let (num_queries, raw_source) = match row.prosqlbody.as_ref() {
                 Some(body) => {
-                    let qs = sqlbody_queries(scratch.mcx(), body.as_str())?;
-                    (qs.len(), None)
+                    let qs = sqlbody_queries(mcx, body.as_str())?;
+                    sqlbody_trees.try_reserve_exact(qs.len()).map_err(|_| mcx.oom(qs.len()))?;
+                    sqlbody_trees.extend(qs);
+                    (sqlbody_trees.len(), None)
                 }
                 None => {
                     let raws = pg_parse_query(mcx, row.prosrc.as_str())?;
@@ -497,6 +554,7 @@ fn compile_entry(
                 fname: row.proname,
                 src: row.prosrc,
                 sqlbody: row.prosqlbody,
+                sqlbody_queries: sqlbody_trees,
                 argtypes: at,
                 argtyplen: atl,
                 argnames: row.argnames,
@@ -514,8 +572,14 @@ fn compile_entry(
                 plansources: RefCell::new(PgVec::new_in(mcx)),
             })
         })();
-        r.map_err(|e| crate::startup_error_context(e, &fname_s, &src_s))
+        r.map_err(|mut e| {
+            crate::startup_error_callback(&mut e, &fname_s, &src_s);
+            e
+        })
     })?;
+    // functions.c:1094 MemoryContextSetIdentifier(fcontext, func->fname).
+    let fname = owned.with(|s| s.fname.as_str().to_string());
+    owned.context().set_ident(Some(&fname));
     Ok(SqlFnEntry { owned, stamp })
 }
 
@@ -540,8 +604,7 @@ pub(crate) fn check_sql_fn_statement(q: &Query<'_>) -> PgResult<()> {
 }
 
 // prepare_next_query (functions.c:899): one CachedPlanSource per original
-// query, built lazily. The source is re-derived per index (raw re-parse or
-// prosqlbody re-read) so the entry keeps no mutable parse trees.
+// query, built lazily from the entry's retained raw or analyzed trees.
 pub(crate) fn prepare_next_query(entry: &Rc<SqlFnEntry>) -> PgResult<()> {
     let owner = Rc::downgrade(entry);
     entry.owned.with(|s| {
@@ -574,11 +637,9 @@ fn build_query_plansource(
         let islast = qindex + 1 >= s.num_queries;
 
         let psrc;
-        if let Some(body) = s.sqlbody.as_ref() {
-            let scratch = MemoryContext::new("sqlfn tag");
+        if s.sqlbody.is_some() {
+            let tagq = &s.sqlbody_queries[qindex];
             psrc = {
-                let qs = sqlbody_queries(scratch.mcx(), body.as_str())?;
-                let tagq = &qs[qindex];
                 let q0 = match tagq.utilityStmt {
                     Some(u) => utility_seams::create_command_tag::call(u),
                     None => crate::query_command_tag(tagq.commandType),
@@ -587,8 +648,7 @@ fn build_query_plansource(
             };
             let build = (|| -> PgResult<()> {
                 let qmcx = plancache::SourceQueryMcx(psrc);
-                let queries = sqlbody_queries(qmcx, body.as_str())?;
-                let query = queries.into_iter().nth(qindex).expect("counted at compile");
+                let query = copyfuncs::copy_query(qmcx, tagq)?;
                 if query.commandType != CmdType::CMD_UTILITY {
                     rewrite_handler_seams::acquire_rewrite_locks::call(
                         qmcx, &query, true, false,
@@ -656,6 +716,7 @@ fn build_query_plansource(
                     &name_refs,
                     s.input_collation,
                     QueryEnvHandle::NULL,
+                    true,
                 )?;
                 usage_show("PARSE ANALYSIS STATISTICS")?;
                 let mut query_list: PgVec<'static, Query<'static>> =
@@ -768,6 +829,7 @@ fn reanalyze_sql_fn(
             &name_refs,
             s.input_collation,
             query_env,
+            true,
         )?;
         usage_show("PARSE ANALYSIS STATISTICS")?;
         pg_rewrite_query(qmcx, query)

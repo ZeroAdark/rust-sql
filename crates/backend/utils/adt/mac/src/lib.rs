@@ -239,27 +239,40 @@ fn scan_double_groups(bytes: &[u8], sep: Option<u8>) -> Option<[i64; 6]> {
     Some(out)
 }
 
-#[cold]
-#[inline(never)]
-fn invalid_syntax_err(input: &str) -> PgError {
-    PgError::error(format!(
-        "invalid input syntax for type {}: \"{input}\"",
-        "macaddr"
-    ))
-    .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
+// mac.c:94/:118: the input bytes verbatim in the message (a SQL_ASCII
+// database or a byteain alias can hand over non-UTF-8 bytes).
+fn quoted(prefix: &str, input: &[u8], suffix: &str) -> PgError {
+    match core::str::from_utf8(input) {
+        Ok(s) => PgError::error(format!("{prefix}{s}{suffix}")),
+        Err(_) => {
+            let mut msg = prefix.as_bytes().to_vec();
+            msg.extend_from_slice(input);
+            msg.extend_from_slice(suffix.as_bytes());
+            PgError::error_raw_message(msg)
+        }
+    }
 }
 
 #[cold]
 #[inline(never)]
-fn octet_range_err(input: &str) -> PgError {
-    PgError::error(format!(
-        "invalid octet value in \"macaddr\" value: \"{input}\""
-    ))
-    .with_sqlstate(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE)
+fn invalid_syntax_err(input: &[u8]) -> PgError {
+    quoted("invalid input syntax for type macaddr: \"", input, "\"")
+        .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
 }
 
-pub fn macaddr_in(str: &str, escontext: Option<&mut SoftErrorContext>) -> PgResult<MacAddr> {
-    let bytes = str.as_bytes();
+#[cold]
+#[inline(never)]
+fn octet_range_err(input: &[u8]) -> PgError {
+    quoted("invalid octet value in \"macaddr\" value: \"", input, "\"")
+        .with_sqlstate(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE)
+}
+
+pub fn macaddr_in(
+    str: impl AsRef<[u8]>,
+    escontext: Option<&mut SoftErrorContext>,
+) -> PgResult<MacAddr> {
+    let str = str.as_ref();
+    let bytes = str;
     let parsed = scan_six(bytes, b':', false)
         .or_else(|| scan_six(bytes, b'-', false))
         .or_else(|| scan_six(bytes, b':', true))

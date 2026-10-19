@@ -91,6 +91,7 @@ fn empty_bt_meta() -> Box<TestPage> {
     p.0[12..14].copy_from_slice(&(SizeOfPageHeaderData as u16).to_ne_bytes());
     p.0[14..16].copy_from_slice(&(special as u16).to_ne_bytes());
     p.0[16..18].copy_from_slice(&(special as u16).to_ne_bytes());
+    p.0[18..20].copy_from_slice(&(BLCKSZ as u16 | 4).to_ne_bytes());
     let metad = BTMetaPageData {
         btm_magic: BTREE_MAGIC,
         btm_version: BTREE_VERSION,
@@ -132,7 +133,35 @@ fn reset_fixture() {
     });
 }
 
+macro_rules! seam_default {
+    ($seam:path, $imp:expr) => {{
+        use $seam as __s;
+        if !__s::is_installed() {
+            __s::set($imp);
+        }
+    }};
+}
+
 fn install() {
+    // YBGC: the b139 witnesses' cancel-aware CHECK_FOR_INTERRUPTS and progress recorder go in FIRST, for every
+    // test: test_boot::boot_wal below stubs check_for_interrupts with a no-op when none is installed, so when a
+    // plain test took SERIAL first the no-op stuck for the process and the cancel witness saw Ok (36 % under load).
+    // Harmless elsewhere: the seam errors only while CANCEL_PENDING is armed (the cancel witness, under SERIAL).
+    static PRE: Once = Once::new();
+    PRE.call_once(|| {
+        seam_default!(postgres_seams::check_for_interrupts, || {
+            if CANCEL_PENDING.load(Ordering::Relaxed) {
+                return Err(Box::new(
+                    ::types_error::PgError::error("canceling statement due to user request")
+                        .with_sqlstate(::types_error::ERRCODE_QUERY_CANCELED),
+                ));
+            }
+            Ok(())
+        });
+        seam_default!(backend_progress_seams::pgstat_progress_update_param, |index, val| {
+            PROGRESS_LOG.lock().unwrap_or_else(|e| e.into_inner()).push((index, val));
+        });
+    });
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         genam_seams::build_index_value_description::set(|_, _, _| Ok(None));
@@ -718,8 +747,8 @@ fn unique_index_conflict_surfaces_23505() {
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A pending query cancel for the harness's check_for_interrupts seam
-/// (installed in `install_b139_seams` BEFORE test_boot so the boot stub
-/// stays out). Deliberately NOT InterruptPending: the heapam/nbtree wrappers
+/// (installed first in `install()`, BEFORE test_boot, so the boot stub
+/// stays out whatever test runs first: YBGC). Deliberately NOT InterruptPending: the heapam/nbtree wrappers
 /// gate their seam call on that global, so only a direct per-tuple
 /// CHECK_FOR_INTERRUPTS() (index.c:3272) reaches the seam here.
 static CANCEL_PENDING: AtomicBool = AtomicBool::new(false);
@@ -745,14 +774,6 @@ fn take_progress() -> Vec<(usize, i64)> {
     std::mem::take(&mut *PROGRESS_LOG.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
-macro_rules! seam_default {
-    ($seam:path, $imp:expr) => {{
-        use $seam as __s;
-        if !__s::is_installed() {
-            __s::set($imp);
-        }
-    }};
-}
 
 /// Seams the b139 witnesses need on top of `install()`: the cancel-aware
 /// CHECK_FOR_INTERRUPTS, a progress-parameter recorder, and the snapshot
@@ -760,21 +781,6 @@ macro_rules! seam_default {
 /// resowner and xact isolation seams) that IndexCheckExclusion and the
 /// concurrent build-scan lane take.
 fn install_b139_seams() {
-    static PRE: Once = Once::new();
-    PRE.call_once(|| {
-        seam_default!(postgres_seams::check_for_interrupts, || {
-            if CANCEL_PENDING.load(Ordering::Relaxed) {
-                return Err(Box::new(
-                    ::types_error::PgError::error("canceling statement due to user request")
-                        .with_sqlstate(::types_error::ERRCODE_QUERY_CANCELED),
-                ));
-            }
-            Ok(())
-        });
-        seam_default!(backend_progress_seams::pgstat_progress_update_param, |index, val| {
-            PROGRESS_LOG.lock().unwrap_or_else(|e| e.into_inner()).push((index, val));
-        });
-    });
     install();
     static POST: Once = Once::new();
     POST.call_once(|| {

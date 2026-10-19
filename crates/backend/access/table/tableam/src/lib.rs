@@ -618,7 +618,10 @@ mod heap {
         const ATTRIBUTE_GENERATED_VIRTUAL: i8 = b'v' as i8;
 
         let tupdesc = &rel.rd_att;
-        let mut data_length: usize = 0;
+        // C (-fwrapv) accumulates in int32 and compares the int32 total
+        // against a uintptr_t threshold, so 128 x varchar(8388607) wraps to
+        // a 40-byte tuple (no TOAST table) and a negative total means TOAST.
+        let mut data_length: i32 = 0;
         let mut maxlength_unknown = false;
         let mut has_toastable_attrs = false;
         for i in 0..tupdesc.natts as usize {
@@ -626,16 +629,18 @@ mod heap {
             if att.attisdropped || att.attgenerated == ATTRIBUTE_GENERATED_VIRTUAL {
                 continue;
             }
-            data_length =
-                att_nominal_alignby(data_length, tupdesc.compact_attr(i).attalignby);
+            data_length = att_nominal_alignby(
+                data_length as i64 as usize,
+                tupdesc.compact_attr(i).attalignby,
+            ) as i32;
             if att.attlen > 0 {
-                data_length += att.attlen as usize;
+                data_length = data_length.wrapping_add(att.attlen as i32);
             } else {
                 let maxlen = format_type::type_maximum_size(att.atttypid, att.atttypmod);
                 if maxlen < 0 {
                     maxlength_unknown = true;
                 } else {
-                    data_length += maxlen as usize;
+                    data_length = data_length.wrapping_add(maxlen);
                 }
                 if att.attstorage != TYPSTORAGE_PLAIN {
                     has_toastable_attrs = true;
@@ -649,8 +654,8 @@ mod heap {
             return true;
         }
         let tuple_length = MAXALIGN(SizeofHeapTupleHeader + BITMAPLEN(tupdesc.natts) as usize)
-            + MAXALIGN(data_length);
-        tuple_length > ::heapam::dml::TOAST_TUPLE_THRESHOLD
+            .wrapping_add(MAXALIGN(data_length as i64 as usize)) as i32;
+        tuple_length as i64 as usize > ::heapam::dml::TOAST_TUPLE_THRESHOLD
     }
 
     pub(super) fn relation_toast_am(rel: &Relation<'_>) -> ::types_core::Oid {
@@ -1649,7 +1654,7 @@ pub fn table_scan_set_lazy_decode(scan: &mut TableScanDesc<'_>, on: bool) {
 /// pgrcolumnar zone-map pruning conjuncts (advisory-only; executor still
 /// evaluates the full qual on surviving rows).
 /// RG-altitude meta-answerability census over the scan's PUSHED zone quals
-/// (pgrcolumnar::zone_meta_rg_census doc — the GL-SERIALTERM-META qual-zone
+/// (pgrcolumnar::zone_meta_rg_census doc — the regression qual-zone
 /// helper). None = heap or no columnar part.
 pub fn table_scan_cb_zone_meta_census(
     scan: &TableScanDesc<'_>,

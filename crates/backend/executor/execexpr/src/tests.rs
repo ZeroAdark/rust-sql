@@ -1604,6 +1604,7 @@ fn param_exec_step_reads_estate_slot() {
             exec_vals: core::ptr::NonNull::new(base),
             n_exec: 2,
             param_callback: None,
+            param_expanded: None,
         };
         let node = mk_param(mcx, ParamKind::PARAM_EXEC, 1, INT4OID);
         let mut state = exec_init_expr(mcx, Some(node), bind).unwrap().unwrap();
@@ -4275,6 +4276,7 @@ fn multiexpr_subplan_compiles_to_setup_steps_and_dummy_const() {
             exec_vals: core::ptr::NonNull::new(base),
             n_exec: 2,
             param_callback: None,
+            param_expanded: None,
         };
         let env = crate::compile::SubplanCompileEnv {
             estate: NonNull::<u8>::dangling().cast(),
@@ -4282,6 +4284,7 @@ fn multiexpr_subplan_compiles_to_setup_steps_and_dummy_const() {
             agg: None,
             rtable: None,
             parent_subplan_tlist: None,
+            errpos: None,
         };
         // Correlated MULTIEXPR shape: parParam [0] fed by Const 42,
         // setParam [1] written by the (suspended) subplan run.
@@ -5989,6 +5992,68 @@ mod rem_b028 {
         (r.value, td.typmod())
     }
 
+    fn record_datum_of<'mcx>(mcx: Mcx<'mcx>, vals: &[Option<i32>]) -> Datum {
+        let var = Node::mk_var(mcx, 1, 0, RECORDOID, -1, 0, 0).unwrap();
+        let mut state = exec_init_expr(mcx, Some(var), ParamBind::NONE)
+            .unwrap()
+            .unwrap();
+        state.arm_result_mcx(mcx);
+        let mut scan = virtual_slot(mcx, vals);
+        let mut slots = scan_slots(&mut scan);
+        exec_eval_expr(&mut state, &mut slots).unwrap().value
+    }
+
+    // ExecEvalRowNullInt (execExprInterp.c:3365) via get_cached_rowtype: the
+    // descriptor for a RECORD typmod is fetched once per typmod, so a row
+    // stream alternating between two shapes does not allocate per row.
+    #[test]
+    fn row_null_test_caches_descriptor_per_record_typmod() {
+        with_mcx(|mcx| {
+            let rec2 = record_datum_of(mcx, &[Some(7), Some(8)]);
+            let rec1 = record_datum_of(mcx, &[Some(9)]);
+            let arg = mk_scan_var(mcx, 1, RECORDOID);
+            let nt = Node::mk(
+                mcx,
+                ::types_nodes::primnodes::NullTest {
+                    arg: Some(arg),
+                    nulltesttype: ::types_nodes::primnodes::NullTestType::IS_NOT_NULL,
+                    argisrow: true,
+                    location: -1,
+                },
+            )
+            .unwrap();
+            let mut state = exec_init_expr(mcx, Some(nt), ParamBind::NONE)
+                .unwrap()
+                .unwrap();
+            let row = MemoryContext::new("row-null-cache-row");
+            // SAFETY: row outlives every eval below.
+            unsafe { state.arm_result_mcx_raw(row.mcx()) };
+            let mut slot_a = virtual_slot_typed(mcx, &[(RECORDOID, -1, Some(rec2))]);
+            let mut slot_b = virtual_slot_typed(mcx, &[(RECORDOID, -1, Some(rec1))]);
+            fn eval_not_null<'m>(state: &mut ExprState<'m>, slot: &mut SlotData<'m>) {
+                let mut slots = scan_slots(slot);
+                let r = exec_eval_expr(state, &mut slots).unwrap();
+                assert!(!r.isnull);
+                assert!(r.value.as_bool());
+            }
+            eval_not_null(&mut state, &mut slot_a);
+            eval_not_null(&mut state, &mut slot_b);
+            let used = mcx.context().stats().used;
+            for i in 0..64 {
+                if i % 2 == 0 {
+                    eval_not_null(&mut state, &mut slot_a);
+                } else {
+                    eval_not_null(&mut state, &mut slot_b);
+                }
+            }
+            assert_eq!(
+                mcx.context().stats().used,
+                used,
+                "alternating RECORD typmods must reuse cached descriptors"
+            );
+        });
+    }
+
     fn field_select<'mcx>(
         mcx: Mcx<'mcx>,
         rec: Datum,
@@ -6070,6 +6135,25 @@ mod rem_b028 {
                 core::slice::from_raw_parts(q.add(4), varatt::varsize_any(q) - 4)
             };
             assert_eq!(got, payload);
+        });
+    }
+
+    #[test]
+    fn field_select_reuses_its_rowcache_descriptor() {
+        with_mcx(|mcx| {
+            let (rec, typmod) = record_datum(mcx);
+            let mut fs = field_select(mcx, rec, typmod, 2, INT4OID);
+            let row = MemoryContext::new("field-select-rowcache");
+            // SAFETY: row outlives every eval below.
+            unsafe { fs.arm_result_mcx_raw(row.mcx()) };
+            let first = exec_eval_expr(&mut fs, &mut EvalSlots::default()).unwrap();
+            assert_eq!(first.value.as_i32(), 8);
+            let used = row.mcx().context().stats().used;
+            for _ in 0..64 {
+                let r = exec_eval_expr(&mut fs, &mut EvalSlots::default()).unwrap();
+                assert_eq!(r.value.as_i32(), 8);
+            }
+            assert_eq!(row.mcx().context().stats().used, used);
         });
     }
 
@@ -6325,5 +6409,34 @@ fn copy_where_result_context_rearms_after_row_reset() {
             row.reset();
         }
         assert!(!exec_qual(Some(&mut state), &mut EvalSlots::default()).unwrap());
+    });
+}
+
+// evaluate_expr (clauses.c:5065): the ExprState and every intermediate live
+// in a throwaway context; only the Const and its copied value stay behind.
+#[test]
+fn evaluate_expr_leaves_only_the_const_in_the_caller_context() {
+    use ::types_tuple::varatt;
+    with_mcx(|mcx| {
+        let payload = vec![b'x'; 64 * 1024];
+        let value = varlena::cstring_to_text(mcx, &payload).unwrap();
+        let constant = Node::mk_const(mcx, 25, -1, 0, -1,
+            ::types_fmgr::varlena_result(value), false, false).unwrap();
+        let args = NodeList::make2(mcx, constant, constant).unwrap();
+        let expr = mk_opexpr(mcx, 1258, 25, args);
+        let args = NodeList::make2(mcx, constant, constant).unwrap();
+        let expr2 = mk_opexpr(mcx, 1258, 25, args);
+        crate::evaluate_expr(mcx, expr, 25, -1, 0).unwrap();
+        let before = mcx.context().stats().used;
+        let out = crate::evaluate_expr(mcx, expr2, 25, -1, 0).unwrap();
+        let grown = mcx.context().stats().used - before;
+        let k = out.as_const().unwrap();
+        // SAFETY: the Const owns a live 4B varlena image in mcx.
+        let result_len = unsafe { varatt::varsize_any(k.constvalue.as_usize() as *const u8) };
+        assert_eq!(result_len, 4 + 128 * 1024);
+        assert!(
+            grown < result_len + 4096,
+            "caller context grew by {grown} for a {result_len}-byte result"
+        );
     });
 }

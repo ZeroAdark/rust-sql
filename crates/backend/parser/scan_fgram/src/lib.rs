@@ -248,6 +248,21 @@ pub struct Scanner<'mcx> {
     yylloc: i32,
 }
 
+// scan.l:1316 addlit grows literalbuf to pg_nextpower2_32(literallen + yleng
+// + 1) through repalloc, which refuses anything above MaxAllocSize (mcxt.c
+// "invalid memory alloc request size %zu"): a literal of 512 MiB or more
+// fails inside the scanner.
+fn literal_alloc_check(literallen: usize, yleng: usize) -> PgResult<()> {
+    let need = literallen + yleng;
+    if need >= 1 << 29 {
+        let request = (need as u64 + 1).next_power_of_two();
+        return Err(PgError::error(format!("invalid memory alloc request size {request}"))
+            .with_location("mcxt.c", 1180, "MemoryContextSizeFailure")
+            .into());
+    }
+    Ok(())
+}
+
 impl<'mcx> Scanner<'mcx> {
     // scanner_init (scan.l:1248); the literal buffer allocates lazily so a
     // string-free statement costs zero mallocs.
@@ -323,10 +338,12 @@ impl<'mcx> Scanner<'mcx> {
     }
 
     fn addlit(&mut self, bytes: &[u8]) -> PgResult<()> {
+        literal_alloc_check(self.literalbuf.len(), bytes.len())?;
         mcx::vec_append_bytes(&mut self.literalbuf, bytes)
     }
 
     fn addlitchar(&mut self, ch: u8) -> PgResult<()> {
+        literal_alloc_check(self.literalbuf.len(), 1)?;
         mcx::vec_append_bytes(&mut self.literalbuf, &[ch])
     }
 
@@ -342,16 +359,19 @@ impl<'mcx> Scanner<'mcx> {
     fn yyerr(&self, message: &str) -> Box<PgError> {
         let tail = &self.scanbuf[self.yylloc as usize..self.pos.max(self.yylloc as usize)];
         let tail = &tail[..tail.iter().position(|&b| b == 0).unwrap_or(tail.len())];
-        let err = if tail.is_empty() {
-            PgError::error(format!("{message} at end of input"))
+        let (err, line) = if tail.is_empty() {
+            (PgError::error(format!("{message} at end of input")), 1232)
+        } else if let Ok(s) = core::str::from_utf8(tail) {
+            (PgError::error(format!("{message} at or near \"{s}\"")), 1240)
         } else {
-            PgError::error(format!(
-                "{message} at or near \"{}\"",
-                String::from_utf8_lossy(tail)
-            ))
+            let mut raw = format!("{message} at or near \"").into_bytes();
+            raw.extend_from_slice(tail);
+            raw.push(b'"');
+            (PgError::error_raw_message(raw), 1240)
         };
         Box::new(
             err.with_sqlstate(types_error::ERRCODE_SYNTAX_ERROR)
+                .with_location("scan.l", line, "scanner_yyerror")
                 .with_cursor_position(self.scanner_errposition(self.yylloc)),
         )
     }

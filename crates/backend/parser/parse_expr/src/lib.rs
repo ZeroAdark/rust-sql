@@ -338,9 +338,9 @@ fn transformAExprNullIf<'mcx>(
     pstate: &mut ParseState<'_, 'mcx>,
     a: &A_Expr<'mcx>,
 ) -> PgResult<Node<'mcx>> {
-    let last_srf = pstate.p_last_srf;
     let lexpr = transformExprRecurse(mcx, pstate, a.lexpr.expect("AEXPR_NULLIF lexpr"))?;
     let rexpr = transformExprRecurse(mcx, pstate, a.rexpr.expect("AEXPR_NULLIF rexpr"))?;
+    let last_srf = pstate.p_last_srf;
     let result = parse_oper::make_op(
         mcx,
         pstate,
@@ -554,8 +554,10 @@ fn transformAExprIn<'mcx>(
     }
 
     for r in &rexprs {
-        // C copyObject's lexpr per comparison; the sealed lexpr subtree is
-        // shared instead (parse-phase walks only re-write identical values).
+        // parse_expr.c:1275 copyObject(lexpr) per comparison: rewrite-phase
+        // walks (IncrementVarSublevelsUp) mutate in place, so a shared
+        // subtree would be re-written once per comparison.
+        let lexpr = copyfuncs::copy_object(mcx, lexpr)?;
         let cmp = if lexpr.node_tag() == NodeTag::T_RowExpr && r.node_tag() == NodeTag::T_RowExpr {
             let largs = &lexpr.as_row_expr().expect("transformed RowExpr").args;
             let rargs = &r.as_row_expr().expect("transformed RowExpr").args;
@@ -1149,16 +1151,13 @@ fn between_bool_expr<'mcx>(
 }
 
 // transformAExprBetween (parse_expr.c): hard-wired >= <= < > comparisons.
-// C copyObject's the multiply-referenced raw subexprs and transforms each
-// copy.  The arena tree has no deep copy, and re-transforming a shared raw
-// subtree is not safe: analyzeCTE writes the analyzed Query back into the
-// (shared) CommonTableExpr node, so a second transform of a WITH-bearing
-// operand tripped the "unexpected utility statement in WITH" internal
-// error.  Each subexpr is therefore transformed exactly once, in C's
-// left-to-right evaluation order, and the sealed transformed subtree is
-// shared across the comparisons (the transformAExprIn pattern); the
-// per-comparison dispatch mirrors transformAExprOp's row-row and make_op
-// arms, and transformBoolExpr's boolean coercion of each comparison.
+// C copyObject's every repeated raw operand before transforming, so each
+// occurrence is transformed on its own (a WARNING-emitting operand warns
+// once per comparison) in C's left-to-right order; copies are taken up
+// front because transforming can write into the shared raw subtree
+// (analyzeCTE stores the analyzed Query back into the CommonTableExpr).
+// The per-comparison dispatch mirrors transformAExprOp's row-row and
+// make_op arms, and transformBoolExpr's boolean coercion of each comparison.
 fn transformAExprBetween<'mcx>(
     mcx: Mcx<'mcx>,
     pstate: &mut ParseState<'_, 'mcx>,
@@ -1197,44 +1196,66 @@ fn transformAExprBetween<'mcx>(
         }
     };
 
+    let copy = |n: Option<Node<'mcx>>| -> PgResult<Option<Node<'mcx>>> {
+        n.map(|n| copyfuncs::copy_object(mcx, n)).transpose()
+    };
+
     let result = match a.kind {
         A_Expr_Kind::AEXPR_BETWEEN => {
+            let a2 = copy(aexpr)?;
             let ta = tx(pstate, aexpr)?;
             let tb = tx(pstate, bexpr)?;
             let cmp1 = between_comparison(mcx, pstate, ">=", ta, tb, loc, "AND")?;
+            let ta2 = tx(pstate, a2)?;
             let tc = tx(pstate, cexpr)?;
-            let cmp2 = between_comparison(mcx, pstate, "<=", ta, tc, loc, "AND")?;
+            let cmp2 = between_comparison(mcx, pstate, "<=", ta2, tc, loc, "AND")?;
             between_bool_expr(mcx, AND_EXPR, cmp1, cmp2, loc)?
         }
         A_Expr_Kind::AEXPR_NOT_BETWEEN => {
+            let a2 = copy(aexpr)?;
             let ta = tx(pstate, aexpr)?;
             let tb = tx(pstate, bexpr)?;
             let cmp1 = between_comparison(mcx, pstate, "<", ta, tb, loc, "OR")?;
+            let ta2 = tx(pstate, a2)?;
             let tc = tx(pstate, cexpr)?;
-            let cmp2 = between_comparison(mcx, pstate, ">", ta, tc, loc, "OR")?;
+            let cmp2 = between_comparison(mcx, pstate, ">", ta2, tc, loc, "OR")?;
             between_bool_expr(mcx, OR_EXPR, cmp1, cmp2, loc)?
         }
         A_Expr_Kind::AEXPR_BETWEEN_SYM => {
+            let (a2, a3, a4) = (copy(aexpr)?, copy(aexpr)?, copy(aexpr)?);
+            let (b2, c2) = (copy(bexpr)?, copy(cexpr)?);
             let ta = tx(pstate, aexpr)?;
             let tb = tx(pstate, bexpr)?;
             let cmp1 = between_comparison(mcx, pstate, ">=", ta, tb, loc, "AND")?;
+            let ta2 = tx(pstate, a2)?;
             let tc = tx(pstate, cexpr)?;
-            let cmp2 = between_comparison(mcx, pstate, "<=", ta, tc, loc, "AND")?;
+            let cmp2 = between_comparison(mcx, pstate, "<=", ta2, tc, loc, "AND")?;
             let sub1 = between_bool_expr(mcx, AND_EXPR, cmp1, cmp2, loc)?;
-            let cmp3 = between_comparison(mcx, pstate, ">=", ta, tc, loc, "AND")?;
-            let cmp4 = between_comparison(mcx, pstate, "<=", ta, tb, loc, "AND")?;
+            let ta3 = tx(pstate, a3)?;
+            let tc2 = tx(pstate, c2)?;
+            let cmp3 = between_comparison(mcx, pstate, ">=", ta3, tc2, loc, "AND")?;
+            let ta4 = tx(pstate, a4)?;
+            let tb2 = tx(pstate, b2)?;
+            let cmp4 = between_comparison(mcx, pstate, "<=", ta4, tb2, loc, "AND")?;
             let sub2 = between_bool_expr(mcx, AND_EXPR, cmp3, cmp4, loc)?;
             between_bool_expr(mcx, OR_EXPR, sub1, sub2, loc)?
         }
         A_Expr_Kind::AEXPR_NOT_BETWEEN_SYM => {
+            let (a2, a3, a4) = (copy(aexpr)?, copy(aexpr)?, copy(aexpr)?);
+            let (b2, c2) = (copy(bexpr)?, copy(cexpr)?);
             let ta = tx(pstate, aexpr)?;
             let tb = tx(pstate, bexpr)?;
             let cmp1 = between_comparison(mcx, pstate, "<", ta, tb, loc, "OR")?;
+            let ta2 = tx(pstate, a2)?;
             let tc = tx(pstate, cexpr)?;
-            let cmp2 = between_comparison(mcx, pstate, ">", ta, tc, loc, "OR")?;
+            let cmp2 = between_comparison(mcx, pstate, ">", ta2, tc, loc, "OR")?;
             let sub1 = between_bool_expr(mcx, OR_EXPR, cmp1, cmp2, loc)?;
-            let cmp3 = between_comparison(mcx, pstate, "<", ta, tc, loc, "OR")?;
-            let cmp4 = between_comparison(mcx, pstate, ">", ta, tb, loc, "OR")?;
+            let ta3 = tx(pstate, a3)?;
+            let tc2 = tx(pstate, c2)?;
+            let cmp3 = between_comparison(mcx, pstate, "<", ta3, tc2, loc, "OR")?;
+            let ta4 = tx(pstate, a4)?;
+            let tb2 = tx(pstate, b2)?;
+            let cmp4 = between_comparison(mcx, pstate, ">", ta4, tb2, loc, "OR")?;
             let sub2 = between_bool_expr(mcx, OR_EXPR, cmp3, cmp4, loc)?;
             between_bool_expr(mcx, AND_EXPR, sub1, sub2, loc)?
         }
@@ -2792,9 +2813,9 @@ fn plpgsql_column_ref<'mcx>(
     }
     let n = fields.len();
     if fields[n - 1].node_tag() == NodeTag::T_A_Star {
-        // Whole-row arms (pl_comp.c:1131-1163): "*" blocks scalar matches
-        // (keeps the valueless-rec 55000 arm), then a rec-gated prefix
-        // lookup returns the whole-row Param (parse_target precedent).
+        // Use the same whole-row key as parse_target's star expansion.
+        // It selects a record binding without matching a literal "*" field
+        // or a scalar that shadows the record's unqualified name.
         if n < 2 {
             return Ok(None);
         }
@@ -2804,27 +2825,12 @@ fn plpgsql_column_ref<'mcx>(
                 None => return Ok(None),
             }
         }
-        names[n - 1] = "*";
-        if let Some(node) = parser_small1::plpgsql_resolve_column_ref(
-            mcx,
-            pstate,
-            st,
-            &names[..n],
-            location,
-            false,
-            mbutils::GetDatabaseEncoding(),
-        )? {
-            return Ok(Some(node));
-        }
-        let prefix = names[..n - 1].join("\0").to_ascii_lowercase();
-        if !st.recs.iter().any(|r| *r == prefix) {
-            return Ok(None);
-        }
+        names[n - 1] = parser_small1::WHOLE_ROW_FIELD;
         return parser_small1::plpgsql_resolve_column_ref(
             mcx,
             pstate,
             st,
-            &names[..n - 1],
+            &names[..n],
             location,
             false,
             mbutils::GetDatabaseEncoding(),

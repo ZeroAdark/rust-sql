@@ -52,6 +52,9 @@ pub struct DrPrinttup<'mcx> {
     nattrs: i32,
     myinfo: Option<PgVec<'static, PrinttupAttrInfo>>,
     conv_needed: bool,
+    // A user-defined output/send function can change client_encoding
+    // mid-row; only then is the predicate re-read per text column.
+    conv_recheck: bool,
     // C's per-row tmpcontext, but only where a column can allocate per row:
     // binary send byteas, or text-lane varlenas (short-header args detoast-
     // expand into the armed frame; out-fn results stay retained scratch).
@@ -111,6 +114,7 @@ pub fn printtup_create_DR<'mcx>(dest: CommandDest) -> DrPrinttup<'mcx> {
         nattrs: 0,
         myinfo: None,
         conv_needed: false,
+        conv_recheck: false,
         send_ctx: None,
     }
 }
@@ -209,6 +213,7 @@ impl<'mcx> DrPrinttup<'mcx> {
         } else {
             self.send_ctx = None;
         }
+        self.conv_recheck = info.iter().any(|e| e.finfo.fn_oid >= FirstNormalObjectId);
         self.myinfo = Some(info);
         Ok(())
     }
@@ -229,8 +234,10 @@ impl<'mcx> DrPrinttup<'mcx> {
         // C's pq_sendcountedtext (printtup.c:362) consults the client encoding
         // on every call, so a client_encoding change between the rows of one
         // query (set_config in the select list) converts from the next row
-        // on. One predicate read per row keeps that observable; the per-column
-        // output-function resolution stays hoisted in prepare_info.
+        // on. One predicate read per row keeps that observable (re-read per
+        // column only when a user-defined function in the row could change
+        // it); the per-column output-function resolution stays hoisted in
+        // prepare_info.
         self.conv_needed = mbutils_seams::server_to_client_conversion_needed::call();
         exectuples::slot_getallattrs(slot);
 
@@ -266,6 +273,10 @@ impl<'mcx> DrPrinttup<'mcx> {
                 let s =
                     unsafe { CStr::from_ptr(out.as_usize() as *const core::ffi::c_char) }
                         .to_bytes();
+                if self.conv_recheck {
+                    self.conv_needed =
+                        mbutils_seams::server_to_client_conversion_needed::call();
+                }
                 if self.conv_needed {
                     pq_sendcountedtext(buf, s)?;
                 } else {

@@ -718,8 +718,6 @@ pub fn checkSharedDependencies<'mcx>(
     Ok(Some((descs, alldescs)))
 }
 
-// C batches through multi-insert slots; per-row inserts write the same page
-// image.
 pub fn copyTemplateDependencies<'mcx>(
     mcx: Mcx<'mcx>,
     templateDbId: Oid,
@@ -727,6 +725,9 @@ pub fn copyTemplateDependencies<'mcx>(
 ) -> PgResult<()> {
     let rel = table::table_open(mcx, catalog::SharedDependRelationId, RowExclusiveLock)?;
     let mut indstate = None;
+    // C sizeof(FormData_pg_shdepend) == 28.
+    let max_slots = catalog_indexing::MAX_CATALOG_MULTI_INSERT_BYTES / 28;
+    let mut tuples = std::vec::Vec::new();
 
     let keys = [oid_key(Anum_pg_shdepend_dbid, templateDbId)];
     let mut scan = genam::systable_beginscan(
@@ -749,14 +750,27 @@ pub fn copyTemplateDependencies<'mcx>(
             getattr(tup, Anum_pg_shdepend_deptype, td),
         ];
         let nulls = [false; Natts_pg_shdepend];
+        tuples.push(heaptuple::heap_form_tuple(mcx, rel.descr(), &values, &nulls)?);
+        if tuples.len() == max_slots {
+            if indstate.is_none() {
+                indstate = Some(catalog_indexing::CatalogOpenIndexes(mcx, &rel)?);
+            }
+            catalog_indexing::CatalogTuplesMultiInsertWithInfo(
+                mcx,
+                &rel,
+                core::mem::take(&mut tuples),
+                indstate.as_mut().unwrap(),
+            )?;
+        }
+    }
+    if !tuples.is_empty() {
         if indstate.is_none() {
             indstate = Some(catalog_indexing::CatalogOpenIndexes(mcx, &rel)?);
         }
-        let mut copy = heaptuple::heap_form_tuple(mcx, rel.descr(), &values, &nulls)?;
-        catalog_indexing::CatalogTupleInsertWithInfo(
+        catalog_indexing::CatalogTuplesMultiInsertWithInfo(
             mcx,
             &rel,
-            &mut copy,
+            tuples,
             indstate.as_mut().unwrap(),
         )?;
     }

@@ -431,7 +431,10 @@ fn dispatch_switch<'mcx>(
                     &types_nodes::parsenodes::AlterDatabaseStmt<'mcx>,
                 >(stmt)
             };
-            dbcommands::AlterDatabase(mcx, stmt, is_top_level)?;
+            let mut pstate = parser_small1::make_parsestate(mcx, None);
+            pstate.p_sourcetext = Some(source_text.as_bytes());
+            dbcommands::AlterDatabase(mcx, Some(&pstate), stmt, is_top_level)?;
+            parser_small1::free_parsestate(pstate)?;
         }
         T_AlterDatabaseRefreshCollStmt => {
             let stmt = parsetree
@@ -1730,8 +1733,12 @@ fn slow_switch<'mcx>(
             let stmt = stmt_node
                 .as_variant::<types_nodes::rawnodes::CreateExtensionStmt>()
                 .expect("CreateExtensionStmt");
-            // C: address = CreateExtension (extension.c).
-            let address = extension::CreateExtension(mcx, stmt)?;
+            // utility.c:1578 CreateExtension(pstate, stmt): errorConflictingDefElem
+            // positions its cursor through pstate.
+            let mut pstate = parser_small1::make_parsestate(mcx, None);
+            pstate.p_sourcetext = Some(source_text.as_bytes());
+            let address = extension::CreateExtension(mcx, Some(&pstate), stmt)?;
+            parser_small1::free_parsestate(pstate)?;
             Ok(Some(address))
         }
         T_AlterExtensionStmt => {
@@ -1740,8 +1747,11 @@ fn slow_switch<'mcx>(
             let stmt = stmt_node
                 .as_variant::<types_nodes::rawnodes::AlterExtensionStmt>()
                 .expect("AlterExtensionStmt");
-            // C: address = ExecAlterExtensionStmt (extension.c).
-            let address = extension::ExecAlterExtensionStmt(mcx, stmt)?;
+            // utility.c:1583 ExecAlterExtensionStmt(pstate, stmt).
+            let mut pstate = parser_small1::make_parsestate(mcx, None);
+            pstate.p_sourcetext = Some(source_text.as_bytes());
+            let address = extension::ExecAlterExtensionStmt(mcx, Some(&pstate), stmt)?;
+            parser_small1::free_parsestate(pstate)?;
             Ok(Some(address))
         }
         T_AlterExtensionContentsStmt => {
@@ -1915,6 +1925,26 @@ const NAMESPACE_RELATION_ID: types_core::Oid = 2615;
 // C overwrites relation->schemaname with local_schema post-parse so the
 // FDW-returned command text cannot redirect the object elsewhere; we do the
 // same in place through the just-parsed node (see the loop below).
+// foreigncmds.c:1558 pg_parse_query(cmd): the PARSER STATISTICS bracket of
+// postgres.c:610-616 wraps every FDW-generated command.
+pub(crate) fn pg_parse_import_command<'mcx>(
+    mcx: Mcx<'mcx>,
+    cmd: &str,
+) -> PgResult<::mcx::PgVec<'mcx, types_nodes::rawnodes::RawStmt<'mcx>>> {
+    if guc_tables::backing::log_parser_stats() {
+        postgres_seams::reset_usage::call();
+    }
+    let raw_parsetree_list = parser_seams::raw_parser::call(
+        mcx,
+        cmd,
+        parser_seams::RawParseMode::RAW_PARSE_DEFAULT,
+    )?;
+    if guc_tables::backing::log_parser_stats() {
+        postgres_seams::show_usage::call("PARSER STATISTICS")?;
+    }
+    Ok(raw_parsetree_list)
+}
+
 #[cold]
 #[inline(never)]
 fn exec_import_foreign_schema_commands<'mcx>(
@@ -1928,12 +1958,8 @@ fn exec_import_foreign_schema_commands<'mcx>(
         // error_context_stack for everything this command raises (parse
         // included); popped when `errctx` drops (:1603).
         let errctx = foreigncmds::ImportErrorContext::push(cmd);
-        let raw_parsetree_list = parser_seams::raw_parser::call(
-            mcx,
-            cmd,
-            parser_seams::RawParseMode::RAW_PARSE_DEFAULT,
-        )
-        .map_err(|e| errctx.transpose(e))?;
+        let raw_parsetree_list =
+            pg_parse_import_command(mcx, cmd).map_err(|e| errctx.transpose(e))?;
         for rs in raw_parsetree_list.iter() {
             let node = rs.stmt.expect("raw parse tree");
             let Some(cstmt) =

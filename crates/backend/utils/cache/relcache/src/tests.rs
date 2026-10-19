@@ -537,6 +537,10 @@ fn cache_invalidate_phase2_reresolves_multi_entry_and_referenced() {
     assert_eq!(crate::RelationUserRefcount(16472), 1);
     drop(held_ref);
     drop((pc, ci));
+    assert!(with_state(|st| st.stale_refs.contains_key(&16472)));
+    invalidate::AtEOXact_RelationCache(true).unwrap();
+    // A dead Weak still pins its RcBox (one per rebuild of a held relation).
+    assert!(with_state(|st| st.stale_refs.is_empty()));
 }
 
 #[test]
@@ -1280,7 +1284,7 @@ fn local_relation_fields_match_relcache_c() {
     a.attname.namestrcpy("c0");
     let td = tupdesc::CreateTupleDesc(mcx, &[a]).unwrap();
     let rel = crate::local::RelationBuildLocalRelation(
-        "local_t", 2200, &td, 16440, 0, 2, 16440, 0, false, false,
+        b"local_t", 2200, &td, 16440, 0, 2, 16440, 0, false, false,
         RELPERSISTENCE_PERMANENT, RELKIND_RELATION,
     )
     .unwrap();
@@ -1300,7 +1304,7 @@ fn local_relation_invalid_relpersistence_is_error() {
     let mcx = crate::cache_mcx();
     let td = tupdesc::CreateTupleDesc(mcx, &[]).unwrap();
     let err = crate::local::RelationBuildLocalRelation(
-        "local_x", 2200, &td, 16441, 0, 2, 16441, 0, false, false, b'x', RELKIND_RELATION,
+        b"local_x", 2200, &td, 16441, 0, 2, 16441, 0, false, false, b'x', RELKIND_RELATION,
     )
     .unwrap_err();
     assert_eq!(err.message(), "invalid relpersistence: x");

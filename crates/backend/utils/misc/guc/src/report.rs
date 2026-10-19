@@ -35,14 +35,18 @@ pub fn begin_reporting_guc_options() {
     }
 
     let pending: Vec<(String, String)> = with_store(|reg| {
-        reg.iter()
-            .filter(|var| var.gen().flags & GUC_REPORT != 0)
-            .filter_map(|var| {
-                let val = show_guc_option(var, false);
-                needs_report(var.gen().last_reported.as_deref(), &val)
-                    .then(|| (var.name().to_string(), val))
-            })
-            .collect()
+        let mut out = Vec::new();
+        for idx in crate::name::hash_seq_order(reg) {
+            let var = &reg[idx];
+            if var.gen().flags & GUC_REPORT == 0 {
+                continue;
+            }
+            let val = show_guc_option(var, false);
+            if needs_report(var.gen().last_reported.as_deref(), &val) {
+                out.push((var.name().to_string(), val));
+            }
+        }
+        out
     })
     .unwrap_or_default();
 

@@ -24,6 +24,20 @@ pub fn namein(s: &[u8]) -> NameData {
     result
 }
 
+/// Reads only through the NUL: btree name_ops keys are stored as cstring (#2722).
+pub(crate) unsafe fn name_block_from_ptr(p: *const u8) -> [u8; NAMELEN] {
+    let mut out = [0u8; NAMELEN];
+    for (i, slot) in out.iter_mut().enumerate() {
+        // SAFETY: caller: `p` is readable through its NUL or NAMEDATALEN bytes.
+        let c = unsafe { p.add(i).read() };
+        if c == 0 {
+            break;
+        }
+        *slot = c;
+    }
+    out
+}
+
 pub fn nameout_into(s: &NameData, buf: &mut Vec<u8>) {
     buf.clear();
     buf.extend_from_slice(s.name_str());

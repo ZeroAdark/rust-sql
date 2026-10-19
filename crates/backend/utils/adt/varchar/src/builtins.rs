@@ -141,7 +141,7 @@ pub fn fc_bpchar(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
     let mcx = fcinfo.result_mcx();
     match crate::bpchar(mcx, src.data(), maxlen, is_explicit)? {
         Some(v) => Ok(varlena_result(v)),
-        None => Ok(fcinfo.arg(0)),
+        None => Ok(Datum::from_usize(src.as_ptr() as usize)),
     }
 }
 
@@ -153,7 +153,7 @@ pub fn fc_varchar(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResu
     let mcx = fcinfo.result_mcx();
     match crate::varchar(mcx, src.data(), typmod, is_explicit)? {
         Some(v) => Ok(varlena_result(v)),
-        None => Ok(fcinfo.arg(0)),
+        None => Ok(Datum::from_usize(src.as_ptr() as usize)),
     }
 }
 

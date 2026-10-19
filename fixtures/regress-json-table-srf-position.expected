@@ -1,0 +1,12 @@
+SELECT * FROM JSON_TABLE(jsonb '1', '$' PASSING generate_series(1,2) AS x COLUMNS (a int PATH '$')) jt;
+ERROR:  set-valued function called in context that cannot accept a set
+LINE 1: SELECT * FROM JSON_TABLE(jsonb '1', '$' PASSING generate_ser...
+                                                        ^
+SELECT * FROM JSON_TABLE(generate_series(1,2)::text::jsonb, '$' COLUMNS (a int PATH '$')) jt;
+ERROR:  set-valued function called in context that cannot accept a set
+LINE 1: SELECT * FROM JSON_TABLE(generate_series(1,2)::text::jsonb, ...
+                                 ^
+SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (a int PATH '$' DEFAULT generate_series(1,2) ON ERROR)) jt;
+ERROR:  DEFAULT expression must not return a set
+LINE 1: ...LE(jsonb '1', '$' COLUMNS (a int PATH '$' DEFAULT generate_s...
+                                                             ^

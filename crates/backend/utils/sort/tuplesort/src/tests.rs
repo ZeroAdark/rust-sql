@@ -198,6 +198,40 @@ fn batched_putdatum_small_batches_and_empty() {
 }
 
 #[test]
+fn batched_bounded_boundary_tie_marks_tie_dirty() {
+    // putdatum and putdatum_batch must leave identical top-k tie state: a
+    // datum equal to the bounded heap's root is a boundary-tie discard.
+    fn run(batched: bool) -> Option<TopkTieAmbiguity> {
+        let mut ts = Tuplesort::begin_datum_with_key(
+            int32_key(1, false, false),
+            1024,
+            TUPLESORT_ALLOWBOUNDED,
+        );
+        ts.set_bound(3);
+        ts.arm_topk_tie_track();
+        let feed: Vec<i32> = (1..=10).chain([3]).collect();
+        if batched {
+            ts.putdatum_batch(|p| {
+                for v in &feed {
+                    p.put(Datum::from_i32(*v), false)?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        } else {
+            for v in &feed {
+                ts.putdatum(Datum::from_i32(*v), false).unwrap();
+            }
+        }
+        ts.performsort().unwrap();
+        assert!(ts.used_bound());
+        ts.topk_tie_ambiguity()
+    }
+    assert_eq!(run(false), Some(TopkTieAmbiguity::CutSelection));
+    assert_eq!(run(true), Some(TopkTieAmbiguity::CutSelection));
+}
+
+#[test]
 fn bounded_top_n_heapsort_used_and_correct() {
     let mut seed = 99u64;
     let input: Vec<Option<i32>> = (0..10_000)
@@ -973,6 +1007,49 @@ fn abbrev_abort_low_cardinality_prefix_still_sorts() {
     ts.performsort().unwrap();
     assert_eq!(drain_text_datums(&mut ts), text_oracle(vals, false));
     ts.end();
+}
+
+#[test]
+fn reset_keeps_abbrev_next_threshold() {
+    // C tuplesort_reset -> tuplesort_begin_batch never touches abbrevNext
+    // (only tuplesort_begin_common sets it, tuplesort.c:687).
+    let vals = random_texts(64, 0x11, b"");
+    let mut ts = begin_text_datum_abbrev(TUPLESORT_NONE);
+    let blobs: Vec<Option<Box<[u64]>>> =
+        vals.iter().map(|v| v.as_ref().map(|p| text_blob(p))).collect();
+    for b in &blobs {
+        match b {
+            Some(blob) => ts
+                .putdatum(Datum::from_usize(blob.as_ptr() as usize), false)
+                .unwrap(),
+            None => ts.putdatum(Datum::null(), true).unwrap(),
+        }
+    }
+    let before = ts.0.with(|st| st.abbrev_next);
+    assert!(before > 10, "abbrevNext must have advanced past the first checkpoint");
+    ts.performsort().unwrap();
+    drain_text_datums(&mut ts);
+    ts.reset().unwrap();
+    assert_eq!(ts.0.with(|st| st.abbrev_next), before);
+    ts.end();
+}
+
+#[test]
+fn bpchar_locale_cmp_cuts_at_nul_like_c_strcmp() {
+    let Some(locale) = ["C.UTF-8", "C.utf8", "en_US.UTF-8", "en_US.utf8"]
+        .iter()
+        .find_map(|n| pg_locale::libc_locale_for_tests(n).ok())
+    else {
+        eprintln!("no libc UTF-8 locale on this host; skipping");
+        return;
+    };
+    let locale: &'static pg_locale::PgLocale = Box::leak(Box::new(locale));
+    // char_bpchar's one-byte NUL sorts equal to a blank-only bpchar
+    // (varlena.c:2306,2320 NUL-terminate; :2332 strcmp).
+    assert_eq!(ssup::varstrfastcmp_locale(b"\0", b" ", locale, true), 0);
+    assert_eq!(ssup::varstrfastcmp_locale(b"a\0", b"a  ", locale, true), 0);
+    assert!(ssup::varstrfastcmp_locale(b"a\0", b"b", locale, true) < 0);
+    assert!(ssup::varstrfastcmp_locale(b"ab", b"a", locale, false) > 0);
 }
 
 #[test]
@@ -2016,6 +2093,59 @@ mod spill {
         (ts, oracle)
     }
 
+    // C tuplesort_reset resets the whole sortcontext: merge tuples still held
+    // by the merge heap and the last-returned slot of a partly consumed
+    // spilled sort go with it. Oversize (> slab slot) images live in the main
+    // context here and must be released by reset, or every rescan leaks them.
+    #[test]
+    fn reset_releases_outstanding_merge_tuples() {
+        setup();
+        let (_cwd, _dir) = enter_datadir("resetrelease");
+        let key = SortSupport { comparator: SortComparator::TextC, ..text_key(false, false) };
+        let mut ts = Tuplesort::begin_common(
+            64,
+            TUPLESORT_NONE,
+            &[key],
+            false,
+            None,
+            SortVariant::Datum { byref_typlen: -1 },
+            ::pg_rusage::PgRUsage::default(),
+        );
+        // By-ref datum copies are uncharged (tuplen 0): the spill comes from
+        // memtuples outgrowing 64kB, so ~6000 datums make three runs; each
+        // 1200-byte image exceeds the 1024-byte slab slot.
+        let blobs: Vec<Box<[u64]>> = (0..6000u32)
+            .map(|i| text_blob(format!("{:08}", (i * 7919) % 6000).repeat(150).as_bytes()))
+            .collect();
+        let mut used = Vec::new();
+        for round in 0..10 {
+            for b in &blobs {
+                ts.putdatum(Datum::from_usize(b.as_ptr() as usize), false).unwrap();
+            }
+            ts.performsort().unwrap();
+            if round == 0 {
+                let stats = ts.get_stats();
+                assert!(
+                    matches!(stats.sortMethod, ::types_core::instrument::TuplesortMethod::ExternalMerge),
+                    "expected a spilled final merge: {:?} {:?} {}",
+                    stats.sortMethod,
+                    stats.spaceType,
+                    stats.spaceUsed
+                );
+            }
+            for _ in 0..5 {
+                assert!(ts.getdatum(true).unwrap().is_some());
+            }
+            ts.reset().unwrap();
+            used.push(ts.0.with(|st| st.mcx.context().used()));
+        }
+        assert!(
+            used[9] <= used[1] + 4096,
+            "main context grows across partial-consume resets: {used:?}"
+        );
+        ts.end();
+    }
+
     #[test]
     fn datum_spill_final_merge() {
         setup();
@@ -2219,6 +2349,65 @@ mod spill {
         })
         .collect();
         assert_eq!(vals, vec![1, 3, 5]);
+        ts.end();
+    }
+
+    #[test]
+    fn end_logs_temp_file_before_sort_ended() {
+        // C tuplesort_free closes the tapes (tuplesort.c:915-916) before
+        // the "ended" LOG (918-927), so log_temp_files' line comes first.
+        setup();
+        let (_cwd, _dir) = enter_datadir("traceorder");
+        static LOGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        fn hook(e: &::types_error::PgError, _to_server: &mut bool) {
+            LOGS.lock().unwrap().push(e.message().to_string());
+        }
+        let prev = elog::sink::set_emit_log_hook(Some(hook));
+        guc_tables::vars::log_temp_files.write(0);
+        set_trace_sort_guc(true);
+        let (mut ts, _) = spill_datums(15_000, TUPLESORT_NONE);
+        ts.performsort().unwrap();
+        ts.end();
+        set_trace_sort_guc(false);
+        guc_tables::vars::log_temp_files.write(-1);
+        elog::sink::set_emit_log_hook(prev);
+        let logs = LOGS.lock().unwrap();
+        let tmp = logs
+            .iter()
+            .position(|m| m.starts_with("temporary file: "))
+            .expect("temporary file LOG");
+        let ended = logs
+            .iter()
+            .position(|m| m.contains(" ended, "))
+            .expect("sort ended LOG");
+        assert!(tmp < ended, "{logs:?}");
+    }
+
+    // tuplesort.c:1109-1119: the last-increment arm sizes the array by the
+    // grow ratio and takes the noalloc exit when that is no larger than the
+    // current array; the port used to force a one-slot growth there, holding
+    // one more tuple per run than C.
+    #[test]
+    fn grow_memtuples_last_increment_matches_c() {
+        setup();
+        let mut ts = Tuplesort::begin_datum_with_key(int32_key(1, false, false), 64, TUPLESORT_NONE);
+        ts.0.with_mut(|st| {
+            assert_eq!(st.memtuples.capacity(), INITIAL_MEMTUPSIZE);
+            let array = memtuples_space(INITIAL_MEMTUPSIZE);
+            // 65536 / 65516 * 1024 = 1024.3: no growth, attempts shut off.
+            st.avail_mem = 20;
+            assert!(!st.grow_memtuples());
+            assert_eq!(st.memtuples.capacity(), INITIAL_MEMTUPSIZE);
+            assert!(!st.grow_memtuples);
+            assert_eq!(st.avail_mem, 20);
+            // 65536 / 65336 * 1024 = 1027.1: grows to 1027 slots, once.
+            st.grow_memtuples = true;
+            st.avail_mem = 200;
+            assert!(st.grow_memtuples());
+            assert_eq!(st.memtuples.capacity(), 1027);
+            assert!(!st.grow_memtuples);
+            assert_eq!(st.avail_mem, 200 + array - memtuples_space(1027));
+        });
         ts.end();
     }
 
@@ -2961,4 +3150,123 @@ fn bounded_cluster_frees_complete_blobs() {
         }
         ts.end();
     }
+}
+
+// ---- leading-key abbreviation on index sorts (regression) ----
+
+fn text_index_key() -> SortSupport {
+    SortSupport {
+        ssup_collation: 950,
+        ssup_reverse: false,
+        ssup_nulls_first: false,
+        ssup_attno: 1,
+        comparator: SortComparator::TextC,
+    }
+}
+
+fn put_text_index_tuples(ts: &mut Tuplesort, vals: &[Option<Vec<u8>>]) -> Vec<Option<Box<[u64]>>> {
+    let blobs: Vec<Option<Box<[u64]>>> =
+        vals.iter().map(|v| v.as_ref().map(|p| text_blob(p))).collect();
+    for (i, b) in blobs.iter().enumerate() {
+        let t = tid((i / 200) as u32, (i % 200 + 1) as u16);
+        match b {
+            Some(blob) => ts
+                .putindextuplevalues(t, &[Datum::from_usize(blob.as_ptr() as usize)], &[false])
+                .unwrap(),
+            None => ts.putindextuplevalues(t, &[Datum::null()], &[true]).unwrap(),
+        }
+    }
+    blobs
+}
+
+fn drain_index_texts(ts: &mut Tuplesort, desc: &TupleDescData<'_>) -> Vec<Option<Vec<u8>>> {
+    let mut got = Vec::new();
+    while let Some(itup) = ts.getindextuple(true).unwrap() {
+        let mut isnull = false;
+        // SAFETY: live sorted image under desc.
+        let d = unsafe { nbtree::itup::index_getattr(itup, 1, desc, &mut isnull) };
+        if isnull {
+            got.push(None);
+            continue;
+        }
+        let p = d.as_usize() as *const u8;
+        // SAFETY: datum points into the live image; short or 4B varlena.
+        let payload = unsafe {
+            use ::types_tuple::varatt::{varatt_is_1b, varsize_1b, varsize_4b};
+            if varatt_is_1b(p) {
+                std::slice::from_raw_parts(p.add(1), varsize_1b(p) - 1)
+            } else {
+                std::slice::from_raw_parts(p.add(4), varsize_4b(p) - 4)
+            }
+        };
+        got.push(Some(payload.to_vec()));
+    }
+    got
+}
+
+#[test]
+fn index_sort_text_arms_leading_key_abbreviation() {
+    let mcx = leaked_mcx();
+    let desc = text_desc(mcx);
+    let vals = random_texts(3000, 0x5151, b"");
+    let mut ts = Tuplesort::begin_index_with_keys(
+        desc.clone(), &[text_index_key()], 1, false, false, "t_txt_idx", None, 1024, TUPLESORT_NONE,
+    );
+    // C: sortKey->abbreviate = (i == 0 && haveDatum1) in tuplesort_begin_index_btree.
+    ts.0.with(|st| {
+        assert!(st.abbrev.is_some(), "index sort must arm abbreviation");
+        assert!(matches!(st.sort_keys[0].comparator, SortComparator::Unsigned));
+    });
+    let _blobs = put_text_index_tuples(&mut ts, &vals);
+    ts.performsort().unwrap();
+    assert_eq!(drain_index_texts(&mut ts, &desc), text_oracle(vals, false));
+    ts.end();
+}
+
+#[test]
+fn index_sort_abbrev_abort_refetches_index_datum1() {
+    let mcx = leaked_mcx();
+    let desc = text_desc(mcx);
+    // 8-byte shared prefix: every abbrev word equal, full keys distinct ->
+    // varstr_abbrev_abort fires; removeabbrev_index restores datum1.
+    let vals = random_texts(4000, 0x77, b"zzzzzzzz");
+    let mut ts = Tuplesort::begin_index_with_keys(
+        desc.clone(), &[text_index_key()], 1, false, false, "t_txt_idx", None, 1024, TUPLESORT_NONE,
+    );
+    let _blobs = put_text_index_tuples(&mut ts, &vals);
+    ts.0.with(|st| assert!(st.abbrev.is_none(), "abort should have fired"));
+    ts.performsort().unwrap();
+    assert_eq!(drain_index_texts(&mut ts, &desc), text_oracle(vals, false));
+    ts.end();
+}
+
+#[test]
+fn index_sort_abbrev_unique_violation_uses_full_comparator() {
+    let mcx = leaked_mcx();
+    let desc = text_desc(mcx);
+    // Abbrev words collide on the 8-byte prefix; only the full comparator
+    // can tell the true duplicate from its near-duplicate.
+    let vals: Vec<Option<Vec<u8>>> = [b"abcdefghXY".as_slice(), b"abcdefghXZ", b"abcdefghXY"]
+        .iter()
+        .map(|s| Some(s.to_vec()))
+        .collect();
+    let mut ts = Tuplesort::begin_index_with_keys(
+        desc.clone(), &[text_index_key()], 1, true, false, "t_txt_key", None, 1024, TUPLESORT_NONE,
+    );
+    let _blobs = put_text_index_tuples(&mut ts, &vals);
+    let err = ts.performsort().unwrap_err();
+    assert_eq!(err.sqlstate(), ERRCODE_UNIQUE_VIOLATION);
+    assert!(err.message().contains("could not create unique index \"t_txt_key\""));
+
+    let vals: Vec<Option<Vec<u8>>> = [b"abcdefghXY".as_slice(), b"abcdefghXZ", b"abcdefghXW"]
+        .iter()
+        .map(|s| Some(s.to_vec()))
+        .collect();
+    let mut ts = Tuplesort::begin_index_with_keys(
+        desc.clone(), &[text_index_key()], 1, true, false, "t_txt_key", None, 1024, TUPLESORT_NONE,
+    );
+    let _blobs = put_text_index_tuples(&mut ts, &vals);
+    ts.performsort().unwrap();
+    assert_eq!(drain_index_texts(&mut ts, &desc), text_oracle(vals, false));
+    ts.end();
 }

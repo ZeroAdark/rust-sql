@@ -127,7 +127,7 @@ impl WriteVfs for RealVfs {
             }
             done += n as usize;
         }
-        // GL-BULKWRITE-1 (#686): a sealed part is up to 256 MiB of dirty
+        // regression (#686): a sealed part is up to 256 MiB of dirty
         // page cache in one call; account it against the dirty-page
         // governor (no-op unless armed). WHAT is written is untouched —
         // parts stay byte-identical; only writeback timing changes.
@@ -146,7 +146,7 @@ impl WriteVfs for RealVfs {
     }
 
     fn close_file(&mut self, fd: WvFd) -> WriteResult<()> {
-        // GL-BULKWRITE-1 (#686): kick + forget any pending governor window
+        // regression (#686): kick + forget any pending governor window
         // before the descriptor number can be reused.
         write_governor::note_close(fd.raw);
         if vfs::close(fd.raw) < 0 {

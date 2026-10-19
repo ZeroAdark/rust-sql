@@ -503,7 +503,7 @@ mod hexfloat_underflow_witness {
     }
 
     #[test]
-    fn fleet_divergence_input_replays_clean() {
+    fn ci_divergence_input_replays_clean() {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../corpus/guc_units_diff");
         let f = format!("{dir}/seed-CI-crash-83e8055b5c");
         super::guc_units_diff(&std::fs::read(f).unwrap());

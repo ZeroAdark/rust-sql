@@ -27,8 +27,9 @@ pub fn PostgresSingleUserMain(argv: &[String], username: &str) -> ! {
             Err(err) => err,
         };
         // A FATAL that unwound as Err (rather than ereport-finish): report
-        // it, then take C's proc_exit(1).
-        elog::emit_error_report_for(&err);
+        // it, then take C's proc_exit(1). Nothing here has a handler yet, so
+        // an ERROR is FATAL (elog.c:375-380).
+        report_startup_error(&err);
         ipc_seams::proc_exit::call(1, init_small::globals::MyProcPid())
     },
     ));
@@ -43,6 +44,10 @@ pub fn PostgresSingleUserMain(argv: &[String], username: &str) -> ! {
         // Anything else is a crash; let it abort the process as a panic.
         None => std::panic::resume_unwind(payload),
     }
+}
+
+pub(crate) fn report_startup_error(err: &::types_error::PgError) {
+    elog::emit_unhandled_error_report(err);
 }
 
 // Never returns Ok: the tail call is PostgresMain (-> !); every early exit is

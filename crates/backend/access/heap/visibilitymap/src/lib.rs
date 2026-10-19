@@ -4,6 +4,7 @@
 
 #![allow(non_snake_case)]
 
+use ::elog::CritSection;
 use ::bufmgr_seams::BufferPin;
 use ::types_core::{
     BlockNumber, Buffer, BufferIsValid, ForkNumber, InvalidBlockNumber, InvalidXLogRecPtr,
@@ -319,12 +320,12 @@ pub fn visibilitymap_set(
     let status = (unsafe { *map_byte_ptr } >> mapOffset) & VISIBILITYMAP_VALID_BITS;
     let res = (|| -> PgResult<()> {
         if flags != status {
-            init_small::globals::StartCriticalSection();
-            let res = set_bits_and_log(
-                rel, heapBuf, recptr, pin, cutoff_xid, flags, map_byte_ptr, mapOffset,
-            );
-            init_small::globals::EndCriticalSection();
-            res?;
+            // visibilitymap.c:313 START_CRIT_SECTION() .. :344 END.
+            CritSection::run(|| {
+                set_bits_and_log(
+                    rel, heapBuf, recptr, pin, cutoff_xid, flags, map_byte_ptr, mapOffset,
+                )
+            })?;
         }
         Ok(())
     })();
@@ -393,10 +394,8 @@ pub fn visibilitymap_clear(
 }
 
 // upstream f581fa729d8e (18.5): Fix VM clear WAL logging by registering VM blocks
-/// `visibilitymap_clear_locked`: like `visibilitymap_clear`, except the caller
-/// already holds the VM buffer's exclusive lock and unlocks it afterwards
-/// (typically after registering the buffer in the WAL record and stamping its
-/// LSN). Returns whether any bit was actually cleared.
+/// `visibilitymap_clear_locked`: `visibilitymap_clear` with the caller holding
+/// (and later releasing) the VM buffer's exclusive lock -> any bit cleared.
 pub fn visibilitymap_clear_locked(
     _rel: &RelationData<'_>,
     heapBlk: BlockNumber,
@@ -457,8 +456,8 @@ pub fn visibilitymap_prepare_truncate(
             return Ok(InvalidBlockNumber);
         };
         let guard = pin.lock_exclusive()?;
-        init_small::globals::StartCriticalSection();
-        let res = (|| -> PgResult<()> {
+        // visibilitymap.c:521 START_CRIT_SECTION() .. :550 END.
+        let res = CritSection::run(|| -> PgResult<()> {
             // SAFETY: exclusive content lock held for `guard`'s lifetime;
             // CONTENTS_OFF..CONTENTS_OFF+MAPSIZE is in-page.
             let map = unsafe {
@@ -482,8 +481,7 @@ pub fn visibilitymap_prepare_truncate(
                 xloginsert_seams::log_newpage_buffer::call(pin.buffer(), false)?;
             }
             Ok(())
-        })();
-        init_small::globals::EndCriticalSection();
+        });
         guard.unlock();
         pin.release();
         res?;

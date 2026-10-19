@@ -48,15 +48,15 @@
 //! CALIBRATION (witnessed-ab; constants of record in
 //! crates/backend/optimizer/path/costsize/src/runtime-cost-constants.tsv, pinned by
 //! `serial_constants_match_tsv`; fit script scripts/serial-term-fit.py):
-//! * topn-nonint family: the GL-TOPNNI-1 three-way grid (10M dist job
-//!   pgrust-fast-tests-8cf38a8c7c-1784631271-6af8 + the wave-3 100M dist
+//! * topn-nonint family: the regression three-way grid (10M dist job
+//!   pgrust-tests-8cf38a8c7c-1784631271-6af8 + the wave-3 100M dist
 //!   leg @ 8cf38a8c7; per-cell serial/legacy/runtime witnesses), plus the
 //!   real-sorted-bank friendly anchors (flip-sanity jobs -628/-632/-634272
 //!   @ 34b23fdf2).
-//! * tstrunc family: the GL-OPENROWS car-3 two-scale record (jobs
+//! * tstrunc family: the regression car-3 two-scale record (jobs
 //!   -0c51/-2e14/-70ed/-66f5 @ 0ead86dcd/cd271d726).
 //! * topn-selqual family (the carve flip's ENFORCING model): the
-//!   GL-RESIDUAL-2 born-RED red legs' star-wide selective cells (jobs
+//!   regression born-RED red legs' star-wide selective cells (jobs
 //!   pgrust-resid-bornred-red-s{10m,100m}-… -31c8/-0156, 3 draws each)
 //!   plus the green legs' stock-posture cells (-2f77/-671f).
 //! * scanfold-meta family: the ladder-spec L4 named serial-dominance cell
@@ -199,18 +199,18 @@ pub const SCANFOLD_PAR_CAP: f64 = 12.0;
 /// — plan-time proxy is an estimated survival at (or mirrored below) 1.
 pub const SCANFOLD_META_MIN_SURVIVAL: f64 = 0.999;
 
-/// Bounded top-N over INT keys — the GL-COST-TOPN-1 four-posture grid
+/// Bounded top-N over INT keys — the regression four-posture grid
 /// folded into the term's support (coordinator routing: "serial beats
 /// both engines at k=10 — the L4 serial-term gap on this class's own
 /// fixture; a 2-engine ratio cannot price a 3-way verdict"). Two
 /// WITNESSED k-PLANES (uniform pseudo-random int keys, 2-col tlist,
-/// N 250k-10M x dop 1-16, jobs pgrust-fast-tests-27db94812f-17846695
+/// N 250k-10M x dop 1-16, jobs pgrust-tests-27db94812f-17846695
 /// {68-376a,77-3d75,84-7436,92-7d0c,97-4b35} @ 27db94812, per-leg
 /// witnesses): the ENTIRE k=10 plane is serial-dominant (the zone
 /// walk's cutoff skips ~99% of granules — flat 1.2-2.4ms across 40x N);
 /// the ENTIRE k=1000 plane is Gather-Merge-dominant. For this family
 /// `t_gather` prices the forced GATHER MERGE plan (the class's legacy
-/// engine of record post the GL-COST-TOPN-1 guard-off). The k-band
+/// engine of record post the regression guard-off). The k-band
 /// BETWEEN the planes is unwitnessed — the verdict abstains there
 /// (fail toward the incumbent), and the k-crossover sweep is an L7 cell.
 #[derive(Clone, Copy, Debug)]
@@ -381,7 +381,7 @@ pub fn tstrunc_two_way(rows: f64) -> Option<ThreeWay> {
 }
 
 /// The selective-qual band-eligible-lead carve family (SE-TOPNNI,
-/// GL-RESIDUAL-2 re-adjudication): the STARVED serial zone walk vs the
+/// regression re-adjudication): the STARVED serial zone walk vs the
 /// kept Gather (Merge) on the REAL sorted banks, wide-tlist (star) shape
 /// — the ONLY class with witnessed sub-threshold-survival cells; every
 /// other shape in the carve region abstains (incumbent stands). The
@@ -511,7 +511,7 @@ mod tests {
     /// conservative, never wrong-way.
     #[test]
     fn carve_agreement_at_the_fenced_shapes() {
-        // (1) Selective-qual datetime-lead carve, RE-FIT (GL-RESIDUAL-2):
+        // (1) Selective-qual datetime-lead carve, RE-FIT (regression):
         // below the survival threshold the ENFORCING verdict is now the
         // star-wide selqual two-way — the serial walk wins at BOTH
         // witnessed scales at the current tree (the minting-era losing
@@ -676,7 +676,7 @@ mod tests {
         }
     }
 
-    /// The GL-COST-TOPN-1 four-posture grid (50 witnessed cells; the
+    /// The regression four-posture grid (50 witnessed cells; the
     /// int-bounded family's fit table — provenance in the family doc).
     /// (N, dop, limit, serial_ms, gm_ms, runtime_ms).
     const TOPN4P: &[(f64, i32, f64, f64, f64, f64)] = &[
@@ -716,7 +716,7 @@ mod tests {
     /// int-bounded family's argmin is the measured argmin — the k=10
     /// plane routes SERIAL everywhere, the k=1000 plane routes GATHER
     /// (Gather Merge) everywhere, and the runtime arm wins zero cells
-    /// (the GL-COST-TOPN-1 verdict, now priced three-way).
+    /// (the regression verdict, now priced three-way).
     #[test]
     fn topn_int_planes_match_the_four_posture_grid() {
         for &(rows, dop, limit, ser, gm, rt) in TOPN4P {

@@ -53,6 +53,17 @@ seam_core::seam!(
     ) -> PgResult<bool>
 );
 
+// Statement-level UPDATE/DELETE events run the same *_upd_check_required
+// entry with NULL slots (trigger.c:6470): ri_FetchConstraintInfo rejects
+// every SQL-creatable trigger before either slot is read.
+seam_core::seam!(
+    pub fn ri_fkey_stmt_check_required<'mcx>(
+        trigger: &Trigger<'mcx>,
+        rel: &Relation<'mcx>,
+        rel_is_pk: bool,
+    ) -> PgResult<()>
+);
+
 seam_core::seam!(
     pub fn ri_partition_remove_check<'mcx>(
         mcx: mcx::Mcx<'mcx>,

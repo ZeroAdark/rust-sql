@@ -15,8 +15,8 @@ fn pg_mbstrlen(s: &[u8]) -> i32 {
     mbutils::pg_mbstrlen_with_len(s).unwrap_or(s.len() as i32)
 }
 
-fn pg_mblen_range(s: &[u8]) -> i32 {
-    mbutils::pg_mblen_range(s).unwrap_or(s.len() as i32)
+fn pg_mblen_range(s: &[u8]) -> PgResult<i32> {
+    mbutils::pg_mblen_range(s)
 }
 
 // upstream 580e7be88ce2 (18.4): Guard against overly-long numeric formatting symbols from locale.
@@ -642,7 +642,7 @@ impl NumFromChar<'_> {
         self.number_p += 1;
     }
 
-    fn eat_non_data_chars(&mut self, mut n: i32) {
+    fn eat_non_data_chars(&mut self, mut n: i32) -> PgResult<()> {
         while n > 0 {
             n -= 1;
             if self.overload() {
@@ -651,8 +651,9 @@ impl NumFromChar<'_> {
             if b"0123456789.,+-".contains(&self.inout_at(self.inout_p)) {
                 break;
             }
-            self.inout_p += pg_mblen_range(&self.inout[self.inout_p..]) as usize;
+            self.inout_p += pg_mblen_range(&self.inout[self.inout_p..])? as usize;
         }
+        Ok(())
     }
 
     fn numpart(&mut self, id: i32) {
@@ -961,7 +962,7 @@ pub fn num_processor_from_char(
                 }
                 NUM_L => {
                     let cnt = pg_mbstrlen(np.loc.currency);
-                    np.eat_non_data_chars(cnt);
+                    np.eat_non_data_chars(cnt)?;
                     idx += 1;
                     continue;
                 }
@@ -993,7 +994,7 @@ pub fn num_processor_from_char(
                         idx += 1;
                         continue;
                     }
-                    np.eat_non_data_chars(2);
+                    np.eat_non_data_chars(2)?;
                     idx += 1;
                     continue;
                 }
@@ -1001,7 +1002,7 @@ pub fn num_processor_from_char(
                     if np.inout_at(np.inout_p) == b'-' {
                         np.number[0] = b'-';
                     } else {
-                        np.eat_non_data_chars(1);
+                        np.eat_non_data_chars(1)?;
                         idx += 1;
                         continue;
                     }
@@ -1010,7 +1011,7 @@ pub fn num_processor_from_char(
                     if np.inout_at(np.inout_p) == b'+' {
                         np.number[0] = b'+';
                     } else {
-                        np.eat_non_data_chars(1);
+                        np.eat_non_data_chars(1)?;
                         idx += 1;
                         continue;
                     }
@@ -1022,7 +1023,7 @@ pub fn num_processor_from_char(
                     } else if c == b'+' {
                         np.number[0] = b'+';
                     } else {
-                        np.eat_non_data_chars(1);
+                        np.eat_non_data_chars(1)?;
                         idx += 1;
                         continue;
                     }
@@ -1034,7 +1035,7 @@ pub fn num_processor_from_char(
             }
             np.inout_p += 1;
         } else {
-            np.inout_p += pg_mblen_range(&np.inout[np.inout_p..]) as usize;
+            np.inout_p += pg_mblen_range(&np.inout[np.inout_p..])? as usize;
             idx += 1;
             continue;
         }

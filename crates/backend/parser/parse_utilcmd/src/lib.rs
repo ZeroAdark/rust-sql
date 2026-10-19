@@ -11,7 +11,8 @@ use mcx::{Mcx, PgString};
 use types_core::{InvalidOid, Oid, INT2OID, INT4OID, INT8OID};
 use types_error::{
     ereturn, PgError, PgResult, SoftErrorContext, ERRCODE_FEATURE_NOT_SUPPORTED,
-    ERRCODE_INVALID_TABLE_DEFINITION, ERRCODE_SYNTAX_ERROR, ERRCODE_UNDEFINED_OBJECT, ERROR,
+    ERRCODE_INVALID_TABLE_DEFINITION, ERRCODE_QUERY_CANCELED, ERRCODE_SYNTAX_ERROR,
+    ERRCODE_UNDEFINED_OBJECT, ERROR,
 };
 use types_nodes::rawnodes::{
     ColumnDef, Constraint, ConstrType, CreateSeqStmt, CreateStmt, IndexElem, IndexStmt, SortByDir,
@@ -584,19 +585,10 @@ fn resolve_type_names_ext<'mcx, 'tn>(
             if namespace_id == InvalidOid {
                 return Ok((InvalidOid, typname));
             }
-            syscache_seams::lookup_pg_type_oid_by_name::call(typname, namespace_id)?
+            syscache_seams::lookup_pg_type_oid_by_name::call(typname, namespace_id)
+                .map_err(|e| cursor_at(e, src, tn.location))?
         }
-        None => {
-            // TypenameGetTypidExtended walk; temp_ok arm unreachable (no temp rels).
-            let mut found = InvalidOid;
-            for &namespace_id in catalog_namespace::fetch_search_path(mcx, true)?.iter() {
-                found = syscache_seams::lookup_pg_type_oid_by_name::call(typname, namespace_id)?;
-                if found != InvalidOid {
-                    break;
-                }
-            }
-            found
-        }
+        None => catalog_namespace::TypenameGetTypidExtended(typname, true)?,
     };
     Ok((typoid, typname))
 }
@@ -650,8 +642,16 @@ pub fn typeStringToTypeNameEsc<'mcx>(
     if s.bytes().all(|c| matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0c | 0x0b)) {
         return ereturn(esc, None, *invalid_type_name(s));
     }
-    let list = gram_core::raw_parser(mcx, s, parser_seams::RawParseMode::RAW_PARSE_TYPE_NAME)
-        .map_err(|e| Box::new((*e).with_context(format!("invalid type name \"{s}\""))))?;
+    let context = format!("invalid type name \"{s}\"");
+    let cb = elog::push_emit_context_callback(Box::new({
+        let context = context.clone();
+        move |e| {
+            e.add_context_line(context.clone());
+        }
+    }));
+    let parsed = gram_core::raw_parser(mcx, s, parser_seams::RawParseMode::RAW_PARSE_TYPE_NAME);
+    elog::pop_emit_context_callback(cb);
+    let list = parsed.map_err(|e| Box::new((*e).with_context(context)))?;
     debug_assert_eq!(list.len(), 1);
     let node = list.first().expect("TYPE_NAME parse yields one node");
     let tn = node.as_type_name().expect("TYPE_NAME parse yields TypeName");
@@ -1304,8 +1304,7 @@ fn transformColumnDefinition<'mcx>(
     if let Some(tn_node) = col!().typeName {
         let tn = tn_node.as_variant::<TypeName>().expect("TypeName");
         // C typenameType(cxt->pstate, ...) attaches errposition at tn.location.
-        let (type_oid, _typmod) = typename_type_id_and_mod(mcx, src.map(str::as_bytes), tn)
-            .map_err(|e| position_on_src(e, src, tn.location))?;
+        let (type_oid, _typmod) = typename_type_id_and_mod(mcx, src.map(str::as_bytes), tn)?;
         if let Some(cc) = col!().collClause {
             let cc = cc.as_variant::<types_nodes::CollateClause>().expect("CollateClause");
             catalog_namespace::get_collation_oid_list(&cc.collname, false)
@@ -1460,8 +1459,7 @@ fn transformColumnDefinition<'mcx>(
                     .expect("TypeName");
                 // C typenameType(cxt->pstate, ...) attaches errposition here.
                 let (type_oid, _typmod) =
-                    typename_type_id_and_mod(mcx, src.map(str::as_bytes), tn)
-                        .map_err(|e| position_on_src(e, src, tn.location))?;
+                    typename_type_id_and_mod(mcx, src.map(str::as_bytes), tn)?;
                 if saw_identity {
                     return Err(column_syntax_error(
                         format_args!(
@@ -1832,8 +1830,7 @@ fn transformOfType<'mcx>(
     src: Option<&str>,
 ) -> PgResult<()> {
     let tn = of_tn_node.as_variant::<TypeName>().expect("TypeName");
-    let (of_type_id, _typmod) = typenameTypeIdAndModAllowComposite(mcx, None, tn)
-        .map_err(|e| position_on_src(e, src, tn.location))?;
+    let (of_type_id, _typmod) = typename_type_id_and_mod(mcx, src.map(str::as_bytes), tn)?;
     tablecmds_seams::check_of_type::call(mcx, of_type_id)?;
     // SAFETY: parse tree is analyze-owned; no derived refs live.
     unsafe {
@@ -2914,7 +2911,7 @@ fn transform_existing_index_constraint<'mcx>(
     if index_form.indexprs_src.is_some() {
         return Err(wrong_type(format!("index \"{index_name}\" contains expressions"), true));
     }
-    if index_form.has_indpred {
+    if !execindexing::RelationGetIndexPredicate(mcx, &index_rel)?.is_nil() {
         return Err(wrong_type(format!("\"{index_name}\" is a partial index"), true));
     }
     if !index_form.indimmediate && !constraint.deferrable {
@@ -3212,7 +3209,7 @@ pub(crate) fn generateSerialExtraStmts<'mcx>(
                     PgError::new(
                         ERROR,
                         format!(
-                            "improper qualified name (too many dotted names): {}",
+                            "improper relation name (too many dotted names): {}",
                             parts.join(".")
                         ),
                     )
@@ -3222,8 +3219,13 @@ pub(crate) fn generateSerialExtraStmts<'mcx>(
         };
         (nschema.unwrap_or(snamespace_default), nname)
     } else {
-        let sname =
-            leak_str(ChooseRelationName(mcx, relname, Some(colname), "seq", snamespaceid)?);
+        // A sequence name rides a RangeVar (&str): a byte-clipped non-UTF-8
+        // name is a typed refusal, never a panic (pg_constraint::generated_name_utf8).
+        let sname_bytes = ChooseRelationName(mcx, relname, Some(colname.as_bytes()), "seq", snamespaceid)?;
+        let sname = leak_str(PgString::from_str_in(
+            pg_constraint::generated_name_utf8(&sname_bytes, "sequence")?,
+            mcx,
+        )?);
         (snamespace_default, sname)
     };
 
@@ -3387,10 +3389,10 @@ fn RangeVarGetAndCheckCreationNamespace<'mcx>(
 fn ChooseRelationName<'mcx>(
     mcx: Mcx<'mcx>,
     name1: &str,
-    name2: Option<&str>,
+    name2: Option<&[u8]>,
     label: &str,
     namespaceid: Oid,
-) -> PgResult<PgString<'mcx>> {
+) -> PgResult<mcx::PgVec<'mcx, u8>> {
     indexcmds_seams::choose_relation_name::call(mcx, name1, name2, label, namespaceid, false)
 }
 
@@ -3783,6 +3785,9 @@ fn alter_undefined_column(colname: &str, relname: &str) -> Box<PgError> {
 #[cold]
 #[inline(never)]
 fn cursor_at(mut e: Box<PgError>, src: Option<&[u8]>, location: i32) -> Box<PgError> {
+    if e.sqlstate() == ERRCODE_QUERY_CANCELED {
+        return e;
+    }
     let pos =
         parser_small1::parser_errposition_source(src, location, mbutils::GetDatabaseEncoding());
     if pos > 0 {
@@ -4105,7 +4110,7 @@ mod tests {
 
     #[test]
     fn transform_index_constraint_overlaps_before_include() {
-        // a fuzzing round overlaps-prec (run 1701f43cdb3787befc34cc00308f1a29-59-13,
+        // a fuzzing round overlaps-prec (recorded run,
         // seed 764198082900334493): C processes key columns — including the
         // WITHOUT OVERLAPS range/multirange check (parse_utilcmd.c:2808) —
         // before the INCLUDE list (parse_utilcmd.c:2841), so a non-range
@@ -4161,7 +4166,7 @@ mod tests {
 
     #[test]
     fn transform_index_constraint_dup_pkey_beats_using_index() {
-        // a fuzzing round pkusingindex (run b06122a0724ea9d22a905d228d73548d-59-13,
+        // a fuzzing round pkusingindex (recorded run,
         // seed 1833222682333586209): a second PRIMARY KEY that is also a USING
         // INDEX form reports 42P16 multiple-primary-keys, not the 0A000 USING
         // INDEX rejection — upstream checks the duplicate PK at the top of

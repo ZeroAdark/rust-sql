@@ -22,8 +22,8 @@ pub use fastpath::{
     VirtualXactLockTableInsert,
 };
 pub use locallock::{
-    AbortStrongLockAcquire, GetAwaitedLockHashcode, GrantAwaitedLock, InitLockManagerAccess,
-    LockHeldByMe, MarkLockClear, ResetAwaitedLock,
+    AbortStrongLockAcquire, GetAwaitedLockHashcode, GrantAwaitedLock, HoldsSessionLock,
+    InitLockManagerAccess, LockHeldByMe, MarkLockClear, ResetAwaitedLock,
 };
 pub use shared::{
     foreach_proclock_on_lock, GetRunningTransactionLocks, GrantLock, LockCheckConflicts,

@@ -1,5 +1,5 @@
 // The re2 engine compiles only where libre2 development files exist — but
-// absence must never be SILENT (GL-STRDEFECTS-1): a Spencer-only binary is a
+// absence must never be SILENT (regression): a Spencer-only binary is a
 // multi-x regression on regexp-heavy shapes and shipped once with zero
 // warnings. Loudness contract:
 //   * release-family profiles (PROFILE=release: release/fast-profile/dist/

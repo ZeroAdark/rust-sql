@@ -174,7 +174,7 @@ pub fn fc_array_to_vector(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
             .with_sqlstate(ERRCODE_DATA_EXCEPTION)
             .into());
     }
-    if arrayfuncs::arr_hasnull(arr) && arrayfuncs::array_contains_nulls(arr) {
+    if arrayfuncs::arr_hasnull(arr) && arrayfuncs::array_contains_nulls(arr)? {
         return Err(PgError::error("array must not contain nulls")
             .with_sqlstate(ERRCODE_NULL_VALUE_NOT_ALLOWED)
             .into());

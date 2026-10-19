@@ -406,26 +406,46 @@ fn logical_mapping_file_write(src: &mut RewriteMappingFile, waldata: &[u8]) -> P
 // pgstat_report_wait_start/end).
 fn logical_mapping_file_sync(src: &RewriteMappingFile) -> PgResult<()> {
     report_wait_start(WAIT_EVENT_LOGICAL_REWRITE_SYNC);
-    let synced = src.file.sync_all();
+    let rc = pg_fsync_file(&src.file);
     report_wait_end();
-    if let Err(e) = synced {
+    if rc != 0 {
         // C rewriteheap.c:923: data_sync_elevel(ERROR) — PANIC at default
         // data_sync_retry=off; a failed fsync must never be retried.
         return ereport(fd::data_sync_elevel(ERROR))
             .errcode_for_file_access()
-            .errmsg(format!("could not fsync file \"{}\": {e}", src.path.display()))
+            .errmsg(format!("could not fsync file \"{}\": %m", mapping_relpath(&src.path)))
             .finish(loc(921, "logical_end_heap_rewrite"));
     }
     Ok(())
+}
+
+// fd.c pg_fsync: honors fsync=off (returns success without a syscall) and
+// the wal_sync_method writethrough routing; -1 with errno set on failure.
+fn pg_fsync_file(file: &std::fs::File) -> i32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        fd::pg_fsync(file.as_raw_fd())
+    }
+    #[cfg(not(unix))]
+    {
+        match file.sync_all() {
+            Ok(()) => 0,
+            Err(e) => {
+                fd::set_errno(e.raw_os_error().unwrap_or(0));
+                -1
+            }
+        }
+    }
 }
 
 // rewriteheap.c:1236-1240: pg_fsync(fd) of one surviving mapping file at
 // checkpoint time, under WAIT_EVENT_LOGICAL_REWRITE_CHECKPOINT_SYNC.
 fn checkpoint_fsync_mapping_file(file: &std::fs::File, path: &std::path::Path) -> PgResult<()> {
     report_wait_start(WAIT_EVENT_LOGICAL_REWRITE_CHECKPOINT_SYNC);
-    let synced = file.sync_all();
+    let rc = pg_fsync_file(file);
     report_wait_end();
-    if let Err(e) = synced {
+    if rc != 0 {
         // C rewriteheap.c:1238: data_sync_elevel(ERROR) — PANIC at
         // default data_sync_retry=off. This is the fsyncgate file
         // shape (written by a backend, fsynced by the checkpoint);
@@ -433,7 +453,7 @@ fn checkpoint_fsync_mapping_file(file: &std::fs::File, path: &std::path::Path) -
         // lost mapping data.
         return ereport(fd::data_sync_elevel(ERROR))
             .errcode_for_file_access()
-            .errmsg(format!("could not fsync file \"{}\": {e}", path.display()))
+            .errmsg(format!("could not fsync file \"{}\": %m", mapping_relpath(&path)))
             .finish(loc(1249, "CheckPointLogicalRewriteHeap"));
     }
     Ok(())
@@ -478,8 +498,9 @@ fn logical_rewrite_log_mapping(
             Ok(f) => f,
             Err(e) => {
                 return ereport(ERROR)
+                    .with_saved_errno(e.raw_os_error().unwrap_or(0))
                     .errcode_for_file_access()
-                    .errmsg(format!("could not create file \"{}\": {e}", path.display()))
+                    .errmsg(format!("could not create file \"{}\": %m", mapping_relpath(&path)))
                     .finish(loc(977, "logical_rewrite_log_mapping"));
             }
         };
@@ -823,12 +844,13 @@ pub fn CheckPointLogicalRewriteHeap() -> PgResult<()> {
         if lsn < cutoff || cutoff == types_core::InvalidXLogRecPtr {
             let _ = elog::elog(
                 DEBUG1,
-                format!("removing logical rewrite file \"{}\"", path.display()),
+                format!("removing logical rewrite file \"{}\"", mapping_relpath(&path)),
             );
             if let Err(e) = std::fs::remove_file(&path) {
                 return ereport(ERROR)
+                    .with_saved_errno(e.raw_os_error().unwrap_or(0))
                     .errcode_for_file_access()
-                    .errmsg(format!("could not remove file \"{}\": {e}", path.display()))
+                    .errmsg(format!("could not remove file \"{}\": %m", mapping_relpath(&path)))
                     .finish(loc(1224, "CheckPointLogicalRewriteHeap"));
             }
         } else {
@@ -838,8 +860,9 @@ pub fn CheckPointLogicalRewriteHeap() -> PgResult<()> {
                 Ok(f) => f,
                 Err(e) => {
                     return ereport(ERROR)
+                        .with_saved_errno(e.raw_os_error().unwrap_or(0))
                         .errcode_for_file_access()
-                        .errmsg(format!("could not open file \"{}\": {e}", path.display()))
+                        .errmsg(format!("could not open file \"{}\": %m", mapping_relpath(&path)))
                         .finish(loc(1237, "CheckPointLogicalRewriteHeap"));
                 }
             };
@@ -849,7 +872,7 @@ pub fn CheckPointLogicalRewriteHeap() -> PgResult<()> {
                 fd::set_errno(e.raw_os_error().unwrap_or(0));
                 return ereport(ERROR)
                     .errcode_for_file_access()
-                    .errmsg(format!("could not close file \"{}\": %m", path.display()))
+                    .errmsg(format!("could not close file \"{}\": %m", mapping_relpath(&path)))
                     .finish(loc(1244, "CheckPointLogicalRewriteHeap"));
             }
         }

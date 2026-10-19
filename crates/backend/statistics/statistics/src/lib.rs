@@ -484,7 +484,17 @@ fn make_build_data<'mcx, 'b>(
         statsv.push(expression::expr_col_stats(e, stattarget)?);
     }
     if !stat.exprs.is_empty() {
-        expression::eval_exprs(mcx, bmcx, onerel, &stat.exprs, rows, &mut values, &mut nulls)?;
+        let expr_stats = &statsv[stat.columns.len()..];
+        expression::eval_exprs(
+            mcx,
+            bmcx,
+            onerel,
+            &stat.exprs,
+            expr_stats,
+            rows,
+            &mut values,
+            &mut nulls,
+        )?;
     }
 
     Ok(StatsBuildData { numrows, attnums, stats: statsv, values, nulls })

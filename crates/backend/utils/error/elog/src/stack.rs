@@ -36,11 +36,11 @@ thread_local! {
     });
 }
 
-// Scoped replacement for `error_context_stack`'s emit-time decoration of
-// non-ERROR reports (divergence #10): warnings/notices are emitted inline by
-// `errfinish`, so an enclosing frame registers a callback that runs over the
-// in-flight non-ERROR report before emission (innermost-first). The ERROR
-// path is unaffected (context attaches on propagation).
+// Scoped replacement for `error_context_stack` (divergence #10): the ERROR
+// path attaches context on propagation, so a frame registers a callback that
+// decorates in-flight non-ERROR reports before emission (`emit`, innermost-
+// first) and/or answers GetErrorContextStack (`walk`; a level whose reports
+// another crate decorates — SPI under PL/pgSQL — registers walk-only).
 thread_local! {
     static EMIT_CONTEXT_CALLBACKS: RefCell<Vec<EmitContextCallback>> = const {
         RefCell::new(Vec::new())
@@ -50,18 +50,30 @@ thread_local! {
 struct EmitContextCallback {
     id: u64,
     callback: Box<dyn FnMut(&mut PgError)>,
+    emit: bool,
+    walk: bool,
 }
 
 thread_local! { static EMIT_CONTEXT_NEXT_ID: Cell<u64> = const { Cell::new(1) }; }
 
-pub fn push_emit_context_callback(callback: Box<dyn FnMut(&mut PgError)>) -> u64 {
+fn push_context_callback(callback: Box<dyn FnMut(&mut PgError)>, emit: bool, walk: bool) -> u64 {
     let id = EMIT_CONTEXT_NEXT_ID.with(|n| {
         let id = n.get();
         n.set(id + 1);
         id
     });
-    EMIT_CONTEXT_CALLBACKS.with(|s| s.borrow_mut().push(EmitContextCallback { id, callback }));
+    EMIT_CONTEXT_CALLBACKS
+        .with(|s| s.borrow_mut().push(EmitContextCallback { id, callback, emit, walk }));
     id
+}
+
+pub fn push_emit_context_callback(callback: Box<dyn FnMut(&mut PgError)>) -> u64 {
+    push_context_callback(callback, true, false)
+}
+
+/// A frame GetErrorContextStack walks; `emit` also decorates non-ERROR reports.
+pub fn push_context_frame(callback: Box<dyn FnMut(&mut PgError)>, emit: bool) -> u64 {
+    push_context_callback(callback, emit, true)
 }
 
 pub fn pop_emit_context_callback(id: u64) {
@@ -73,7 +85,10 @@ pub fn pop_emit_context_callback(id: u64) {
     });
 }
 
-fn run_emit_context_callbacks() {
+// C's error_context_stack walk over the top frame: `emit` selects the frames
+// that decorate a report (errfinish), otherwise the ones GetErrorContextStack
+// reads.
+fn run_context_callbacks(emit: bool) {
     if EMIT_CONTEXT_CALLBACKS.with(|s| s.borrow().is_empty()) {
         return;
     }
@@ -87,7 +102,7 @@ fn run_emit_context_callbacks() {
     EMIT_CONTEXT_CALLBACKS.with(|s| {
         let mut st = s.borrow_mut();
         // innermost-registered first, as C walks error_context_stack.
-        for entry in st.iter_mut().rev() {
+        for entry in st.iter_mut().rev().filter(|c| if emit { c.emit } else { c.walk }) {
             (entry.callback)(&mut error);
         }
     });
@@ -315,7 +330,7 @@ pub fn errfinish(filename: Option<&str>, lineno: i32, funcname: Option<&str>) ->
     }
 
     apply_armed_parser_errposition();
-    run_emit_context_callbacks();
+    run_context_callbacks(true);
 
     let emitted = emit_top_frame();
 
@@ -424,6 +439,21 @@ pub fn EmitErrorReport() -> PgResult<()> {
 #[inline(never)]
 pub fn emit_error_report_for(error: &PgError) {
     report::reset_formatted_log_time();
+    let traced;
+    let error = if error.backtrace.is_none()
+        && error
+            .location
+            .as_ref()
+            .and_then(|l| l.funcname.as_deref())
+            .is_some_and(config::matches_backtrace_functions)
+    {
+        let mut owned = error.clone();
+        report::set_backtrace(&mut owned, 2);
+        traced = owned;
+        &traced
+    } else {
+        error
+    };
     let mut output_to_server = policy::should_output_to_server(error.level);
     let output_to_client = policy::should_output_to_client(error.level);
     if output_to_server {
@@ -436,7 +466,11 @@ pub fn emit_error_report_for(error: &PgError) {
         // The client-encoding conversion failure is what C's PG_CATCH then
         // reports in place of the original error (its text is ASCII).
         if let Err(e) = report::send_message_to_frontend(error) {
-            let _ = report::send_message_to_frontend(&e);
+            if e.level >= FATAL {
+                let _ = ThrowErrorData(*e);
+            } else {
+                let _ = report::send_message_to_frontend(&e);
+            }
         }
     }
 }
@@ -747,11 +781,14 @@ pub fn ThrowErrorData(edata: PgError) -> PgResult<()> {
         }
         if !edata.message.is_empty() {
             new.message = edata.message;
+            new.message_raw = edata.message_raw;
         }
         new.detail = edata.detail;
+        new.detail_raw = edata.detail_raw;
         new.detail_log = edata.detail_log;
         new.hint = edata.hint;
         new.context = edata.context;
+        new.context_raw = edata.context_raw;
         new.backtrace = edata.backtrace;
         if edata.message_id.is_some() {
             new.message_id = edata.message_id;
@@ -835,6 +872,8 @@ pub fn GetErrorContextStack() -> Option<String> {
         let _ = ThrowErrorData(PgError::new(PANIC, "ERRORDATA_STACK_SIZE exceeded"));
         std::process::abort();
     }
+
+    run_context_callbacks(false);
 
     STACK.with(|s| {
         let mut st = s.borrow_mut();

@@ -13,6 +13,7 @@ datum = { path = "../../_support/types/datum" }
 mcx = { path = "../../_support/mcx" }
 types_error = { path = "../../_support/types/types_error" }
 types_fmgr = { path = "../../_support/types/fmgr" }
+types_tuple = { path = "../../_support/types/types_tuple" }
 adt_numeric = { path = "../../backend/utils/adt/numeric" }
 dfmgr = { path = "../../backend/utils/fmgr/dfmgr" }
 funcapi = { path = "../../backend/utils/fmgr/funcapi" }

@@ -12,6 +12,7 @@ types_fmgr = { path = "../../../../_support/types/fmgr" }
 types_storage = { path = "../../../../_support/types/types_storage" }
 elog = { path = "../../../utils/error/elog" }
 init_small = { path = "../../../utils/init/init_small" }
+interrupt = { path = "../../../postmaster/interrupt" }
 latch = { path = "../latch" }
 lmgr_proc = { path = "../../lmgr/lmgr_proc" }
 procarray = { path = "../procarray" }
@@ -25,3 +26,6 @@ pmsignal = { path = "../pmsignal" }
 acl_seams = { path = "../../../utils/adt/acl_seams" }
 postgres_seams = { path = "../../../tcop/postgres_seams" }
 libc = "0.2"
+
+[dev-dependencies]
+latch_seams = { path = "../latch_seams" }

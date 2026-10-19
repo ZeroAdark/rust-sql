@@ -143,7 +143,7 @@ function prepareSql(sql) {
   // The single-user backend ends a statement at every newline, so flatten each
   // SQL statement onto one line before feeding it in.
   // (The old harness appended an explicit CHECKPOINT here because the reference
-  // build's shutdown checkpoint never completed; pgrust-fast's --single exits
+  // build's shutdown checkpoint never completed; pgrust's --single exits
   // through a completed shutdown checkpoint — pg_control is DB_SHUTDOWNED —
   // so the next boot over the mutated VFS is a normal clean restart.)
   return normalizeSingleUserInput(sql) || 'SELECT 1;\n';

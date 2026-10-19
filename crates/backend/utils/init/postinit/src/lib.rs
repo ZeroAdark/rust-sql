@@ -431,10 +431,15 @@ pub fn InitializeMaxBackends() -> PgResult<()> {
 /// (PROC_HDR.fpLockGroupsPerBackend is its storage — repo rule: parameters,
 /// not ambient-global seams).
 pub fn InitializeFastPathLocks() -> i32 {
-    let max_locks_per_xact = guc_tables::vars::max_locks_per_xact.read();
-    let groups = ((max_locks_per_xact as u32).next_power_of_two() as i32
-        / FP_LOCK_SLOTS_PER_GROUP)
-        .clamp(1, FP_LOCK_GROUPS_PER_BACKEND_MAX);
+    fast_path_lock_groups(guc_tables::vars::max_locks_per_xact.read())
+}
+
+// postinit.c:594: pg_nextpower2_32 / FP_LOCK_SLOTS_PER_GROUP in unsigned
+// arithmetic (2^31 for max_locks_per_transaction > 2^30 must not go negative).
+fn fast_path_lock_groups(max_locks_per_xact: i32) -> i32 {
+    let groups = ((max_locks_per_xact as u32).next_power_of_two()
+        / FP_LOCK_SLOTS_PER_GROUP as u32)
+        .clamp(1, FP_LOCK_GROUPS_PER_BACKEND_MAX as u32) as i32;
     debug_assert_eq!(groups, (groups as u32).next_power_of_two() as i32);
     groups
 }

@@ -60,6 +60,16 @@ fn hex_decode_errors() {
 }
 
 #[test]
+fn base64_invalid_symbol_message_stops_at_nul() {
+    install_mb();
+    let ctx = MemoryContext::new("t");
+    let err = binary_decode(ctx.mcx(), b"ab\0", b"base64").unwrap_err();
+    assert_eq!(err.message, "invalid symbol \"\" found while decoding base64 sequence");
+    // The raw-byte (non-UTF-8) rendering of the quoted symbol is
+    // regression (batch-225, PR #2332), not this row's claim.
+}
+
+#[test]
 fn base64_round_trip_rfc_vectors() {
     assert_eq!(enc(b"", b"base64"), b"");
     assert_eq!(enc(b"f", b"base64"), b"Zg==");

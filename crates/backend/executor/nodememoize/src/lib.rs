@@ -567,20 +567,23 @@ fn probe_equal<'mcx>(
 }
 
 fn build_hash_table(node: &mut MemoizeState<'_>) -> PgResult<()> {
-    let mut size = node.plan.est_entries;
+    reserve_hash_table(&mut node.hashtab, node.plan.est_entries)?;
+    node.built = true;
+    Ok(())
+}
+
+// memoize_create(..., est_entries): the bucket array is an MCXT_ALLOC_HUGE
+// allocation (simplehash.h:417-418) — only a failed allocation is an ERROR,
+// never a MaxAllocSize ceiling; the table grows on demand anyway.
+fn reserve_hash_table(hashtab: &mut hashbrown::HashTable<u32>, est_entries: u32) -> PgResult<()> {
+    let mut size = est_entries;
     if size == 0 {
         size = 1024;
     }
-    // C memoize_create(..., est_entries): a planner estimate inflated by the
-    // session's hash_mem GUCs is an ERROR (palloc MaxAllocSize), never an
-    // abort; the table grows on demand past this reservation anyway.
     let bytes = (size as usize).saturating_mul(core::mem::size_of::<u32>() + 1);
-    ::mcx::check_alloc_size(bytes)?;
-    node.hashtab
+    hashtab
         .try_reserve(size as usize, |_| unreachable!("empty table rehash"))
-        .map_err(|_| ::mcx::oom_named("Memoize hash table", bytes))?;
-    node.built = true;
-    Ok(())
+        .map_err(|_| Box::new(::mcx::oom_named("Memoize hash table", bytes)))
 }
 
 fn empty_entry_bytes(params_len: u32) -> u64 {
@@ -1080,3 +1083,18 @@ mcx::forget_safe_struct!(
         ps_ResultTupleDesc, tableslot, probeslot, param_exprs, hash_expr,
         eq_expr, hashtab, stats },
 );
+
+#[cfg(test)]
+mod tests {
+    // simplehash.h:417 SH_ALLOCATE is MCXT_ALLOC_HUGE: an est_entries whose
+    // bucket bytes exceed MaxAllocSize (214748365 * 5 > 1 GiB) reserves.
+    #[test]
+    fn reserve_hash_table_has_no_max_alloc_size_ceiling() {
+        let mut t = hashbrown::HashTable::<u32>::new();
+        super::reserve_hash_table(&mut t, 214748365).expect("huge reservation");
+        assert!(t.capacity() >= 214748365);
+        let mut t = hashbrown::HashTable::<u32>::new();
+        super::reserve_hash_table(&mut t, 0).expect("default size");
+        assert!(t.capacity() >= 1024);
+    }
+}

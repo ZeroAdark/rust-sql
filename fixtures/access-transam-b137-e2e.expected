@@ -7,7 +7,7 @@
 CREATE DATABASE b137e2e TEMPLATE template0 ENCODING 'UTF8';
 \c b137e2e
 \set VERBOSITY verbose
--- fp-transam-parallel#2: a parallel worker names the leader's temp relations
+-- regression: a parallel worker names the leader's temp relations
 -- by the leader's proc number (ParallelLeaderProcNumber)
 CREATE TEMP TABLE tt(a int);
 CREATE TABLE leader_path AS SELECT pg_relation_filepath('tt') AS p;
@@ -18,7 +18,7 @@ SELECT pg_relation_filepath('tt') = p AS worker_matches_leader FROM leader_path;
  t
 (1 row)
 
--- fp-misc-guc-p3#1: a retained worker reloading the leader's libraries does
+-- regression: a retained worker reloading the leader's libraries does
 -- not redefine their custom GUCs
 LOAD 'postgres_fdw';
 SELECT count(*) FROM leader_path;
@@ -40,7 +40,7 @@ SELECT count(*) FROM leader_path;
 (1 row)
 
 RESET debug_parallel_query;
--- fp-transam-commit_ts#1: RETURNS record aliases of the commit_ts builtins
+-- regression: RETURNS record aliases of the commit_ts builtins
 -- take their row type from the FROM-clause column definition list
 CREATE TABLE t18(a int);
 INSERT INTO t18 VALUES (1);

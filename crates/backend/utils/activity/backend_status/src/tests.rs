@@ -92,10 +92,30 @@ fn start_backend(procno: ProcNumber, pid: i32) {
 fn shmem_size_matches_c_formula() {
     let _g = bringup();
     let slots = (g::MaxBackends() + NUM_AUXILIARY_PROCS) as usize;
-    let expected = slots * std::mem::size_of::<PgBackendStatus>()
-        + 2 * slots * NAMELEN
-        + slots * 1024;
+    let ssl = if cfg!(feature = "ssl") { slots * C_SIZEOF_PG_BACKEND_SSL_STATUS } else { 0 };
+    let expected = slots * C_SIZEOF_PG_BACKEND_STATUS + 2 * slots * NAMELEN + slots * 1024 + ssl;
     assert_eq!(BackendStatusShmemSize().unwrap(), expected);
+}
+
+// backend_status.c:124-200 registers every buffer under its C name and size;
+// C attaches by name and size (shmem.c:428-456), the probe used here.
+#[test]
+fn shmem_init_registers_c_named_buffers_in_shmem_index() {
+    let _g = bringup();
+    let slots = (g::MaxBackends() + NUM_AUXILIARY_PROCS) as usize;
+    let mut rows = vec![
+        ("Backend Status Array", slots * C_SIZEOF_PG_BACKEND_STATUS),
+        ("Backend Application Name Buffer", slots * NAMELEN),
+        ("Backend Client Host Name Buffer", slots * NAMELEN),
+        ("Backend Activity Buffer", slots * 1024),
+    ];
+    if cfg!(feature = "ssl") {
+        rows.push(("Backend SSL Status Buffer", slots * C_SIZEOF_PG_BACKEND_SSL_STATUS));
+    }
+    for (name, size) in rows {
+        let (_, found) = shmem::ShmemInitStruct(name, size).unwrap();
+        assert!(found, "{name} is not registered in the ShmemIndex");
+    }
 }
 
 #[test]
@@ -267,7 +287,7 @@ fn local_snapshot_reads_entries_with_transaction_ids() {
     assert_eq!(e.proc_number, me);
     assert_eq!(e.st_backendType, BackendType::Backend);
     assert_eq!(e.st_state, BackendState::STATE_RUNNING);
-    assert_eq!(e.st_activity_raw, "SELECT 42");
+    assert_eq!(e.st_activity_raw, b"SELECT 42");
     assert_eq!(e.st_appname, "snaptest");
     assert_eq!(e.st_proc_start_timestamp, 777);
     assert_eq!(e.backend_xid, 555);
@@ -289,4 +309,36 @@ fn local_snapshot_reads_entries_with_transaction_ids() {
     pgstat_clear_backend_status_snapshot();
     assert!(pgstat_get_beentry_by_proc_number(me).is_none());
     pgstat_clear_backend_status_snapshot();
+}
+
+// backend_status.c:911 copies the activity bytes unchanged; a 1023-byte
+// buffer ending in three bytes of a four-byte character is clipped to the
+// last complete character by pgstat_clip_activity, never shown as U+FFFD.
+#[test]
+fn snapshot_keeps_raw_activity_bytes_for_clipping() {
+    let _g = bringup();
+    let me = my_pgproc(910002);
+    start_backend(me, 910002);
+    mbutils::SetDatabaseEncoding(mbutils::pg_char_to_encoding("UTF8")).unwrap();
+    let prefix = "x".repeat(1020);
+    let query = format!("{prefix}\u{1F600}yyy");
+    backend_status_seams::pgstat_report_activity::call(
+        BackendState::STATE_RUNNING,
+        Some(&query),
+    );
+    pgstat_clear_backend_status_snapshot();
+    let _ = pgstat_fetch_stat_numbackends();
+    let e = pgstat_get_beentry_by_proc_number(me).unwrap();
+    assert_eq!(e.st_activity_raw.len(), 1023);
+    assert_eq!(&e.st_activity_raw[..1020], prefix.as_bytes());
+    assert_eq!(pgstat_clip_activity(&e.st_activity_raw), prefix);
+    pgstat_beshutdown_hook(0, 0);
+    pgstat_clear_backend_status_snapshot();
+}
+
+// ascii.c:187-194: DEL and the three whitespace controls survive, other
+// controls and non-ASCII bytes become '?', the copy stops at NUL.
+#[test]
+fn crashed_backend_activity_keeps_whitespace_and_del() {
+    assert_eq!(ascii_safe(b"a\tb\nc\rd\x7fe\x01f\xc3\xa9g\0zz"), "a\tb\nc\rd\x7fe?f??g");
 }

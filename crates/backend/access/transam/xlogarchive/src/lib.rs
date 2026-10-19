@@ -11,6 +11,7 @@
 
 use elog::ereport;
 use init_small::globals as g;
+use types_storage::waiteventset::{WL_EXIT_ON_PM_DEATH, WL_LATCH_SET, WL_TIMEOUT};
 use transam_xlog::{
     IsTLHistoryFileName, StatusFilePath, XLByteToSeg, XLogArchivingActive, XLogArchivingAlways,
     XLogFileName, GetRecoveryState, RECOVERY_STATE_ARCHIVE, XLOGDIR,
@@ -103,10 +104,21 @@ pub fn RestoreArchivedFile(
 
     waitevent_seams::pgstat_report_wait_start::call(WAIT_EVENT_RESTORE_COMMAND);
     postmaster_startup::PreRestoreCommand();
-    let rc = wait_error::system_tracked(
+    // Latch-ticked wait: SIGTERM runs StartupProcShutdownHandler as C's handler does inside system(3).
+    let rc = wait_error::system_tracked_ticking(
         &xlog_restore_cmd,
         g::register_backend_child,
         g::unregister_backend_child,
+        || {
+            let my_latch = g::MyLatch();
+            let events = if my_latch.is_some() { WL_LATCH_SET } else { 0 }
+                | WL_TIMEOUT
+                | WL_EXIT_ON_PM_DEATH;
+            let _ = latch::WaitLatch(my_latch, events, 10, WAIT_EVENT_RESTORE_COMMAND);
+            if let Some(l) = my_latch {
+                latch::ResetLatch(l);
+            }
+        },
     );
     postmaster_startup::PostRestoreCommand();
     waitevent_seams::pgstat_report_wait_end::call();

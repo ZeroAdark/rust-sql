@@ -26,6 +26,8 @@ dfmgr = { path = "../../backend/utils/fmgr/dfmgr" }
 mbutils = { path = "../../backend/utils/mb/mbutils" }
 wchar = { path = "../../common/wchar" }
 arrayfuncs = { path = "../../backend/utils/adt/arrayfuncs" }
+stringinfo = { path = "../../_support/types/stringinfo" }
+pg_clock = { path = "../../port/pg_clock" }
 # CHECK_FOR_INTERRUPTS in the bcrypt/sha-crypt cost loops (C parity).
 postgres_seams = { path = "../../backend/tcop/postgres_seams" }
 funcapi = { path = "../../backend/utils/fmgr/funcapi" }

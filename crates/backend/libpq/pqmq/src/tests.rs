@@ -20,7 +20,13 @@ fn setup() {
         pg_sema_seams::pg_semaphore_create::set(|_| {});
         waitevent_seams::pgstat_report_wait_start::set(|_| {});
         waitevent_seams::pgstat_report_wait_end::set(|| {});
-        postgres_seams::check_for_interrupts::set(|| Ok(()));
+        postgres_seams::check_for_interrupts::set(|| {
+            use std::sync::atomic::Ordering::SeqCst;
+            if CFI_NESTED_SEND.swap(false, SeqCst) {
+                NESTED_SEND_RESULT.store(pqcomm::pq_putmessage(b'N', b"nested").unwrap(), SeqCst);
+            }
+            Ok(())
+        });
         lmgr_proc_seams::proc_latch::set(|p| &lmgr_proc::GetPGProcByNumber(p).procLatch);
         g::SetIsUnderPostmaster(false);
         g::SetMaxConnections(4);
@@ -36,6 +42,9 @@ fn setup() {
         latch::init_seams();
     });
 }
+
+static CFI_NESTED_SEND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static NESTED_SEND_RESULT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 fn become_backend(procno: types_core::ProcNumber, pid: i32) {
     use init_small::globals as g;
@@ -135,6 +144,31 @@ fn detached_receiver_returns_eof() {
     teardown_redirect();
 }
 
+// pqmq.c:131: a send re-entered from the interrupt taken while the outer
+// send waits on a full queue detaches the queue and returns EOF; the outer
+// send reports EOF too and later messages find no queue.
+#[test]
+fn nested_send_during_wait_detaches() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let _s = serial();
+    setup();
+    become_backend(0, 7305);
+    let (tx, rx) = queue_pair();
+    pq_redirect_to_shm_mq(tx);
+
+    latch::SetLatch(init_small::globals::MyLatch().unwrap());
+    NESTED_SEND_RESULT.store(0, SeqCst);
+    CFI_NESTED_SEND.store(true, SeqCst);
+    let big = vec![b'x'; 2000];
+    assert_eq!(pqcomm::pq_putmessage(b'N', &big).unwrap(), EOF);
+    assert_eq!(NESTED_SEND_RESULT.load(SeqCst), EOF);
+    assert!(!CFI_NESTED_SEND.load(SeqCst));
+    assert_eq!(pqcomm::pq_putmessage(b'N', b"after").unwrap(), 0);
+
+    teardown_redirect();
+    drop(rx);
+}
+
 #[test]
 fn putmessage_noblock_unsupported() {
     let _s = serial();
@@ -206,6 +240,18 @@ fn parse_errornotice_all_fields() {
     assert_eq!(loc.filename.as_deref(), Some("parse_relation.c"));
     assert_eq!(loc.lineno, 1384);
     assert_eq!(loc.funcname.as_deref(), Some("parserOpenTable"));
+}
+
+// pqmq.c:219: sqlerrcode starts at 0, so a payload without a C field
+// parses as SQLSTATE 00000.
+#[test]
+fn parse_errornotice_without_sqlstate_field_is_00000() {
+    let ctx = mcx::MemoryContext::new("pqmq-test");
+    let mut msg = errnotice_msg(&ctx, &[(b'M', b"no code")]);
+    let edata = pq_parse_errornotice(&mut msg).unwrap();
+    assert_eq!(edata.sqlstate, make_sqlstate(*b"00000"));
+    let mut msg = errnotice_msg(&ctx, &[]);
+    assert_eq!(pq_parse_errornotice(&mut msg).unwrap().sqlstate, make_sqlstate(*b"00000"));
 }
 
 #[test]

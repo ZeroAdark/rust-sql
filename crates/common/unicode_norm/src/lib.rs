@@ -320,13 +320,16 @@ fn normalize_into<'mcx>(
     let compat = is_compat_form(form);
 
     // decomp_size is the exact decomposed length; the pushes below cannot
-    // reallocate.
-    let decomp_size = input
-        .iter()
-        .copied()
-        .map(|code| get_decomposed_size(code, compat))
-        .sum();
-    let mut decomp_chars = vec_with_capacity_in(mcx, decomp_size)?;
+    // reallocate. C stops summing once past MaxAllocSize / sizeof(pg_wchar)
+    // and lets the (decomp_size + 1)-element palloc raise the error.
+    let mut decomp_size = 0usize;
+    for &code in input {
+        decomp_size += get_decomposed_size(code, compat);
+        if decomp_size > mcx::MAX_ALLOC_SIZE / core::mem::size_of::<pg_wchar>() {
+            break;
+        }
+    }
+    let mut decomp_chars = vec_with_capacity_in(mcx, decomp_size + 1)?;
 
     for &code in input {
         decompose_code(code, compat, &mut decomp_chars);
@@ -456,6 +459,25 @@ mod tests {
         let out = unicode_normalize(cx.mcx(), form, input)
             .expect("normalization should not run out of memory");
         out.iter().copied().collect()
+    }
+
+    #[test]
+    fn decomposed_length_at_max_alloc_size_errors_like_c_palloc() {
+        // unicode_norm.c:447 pallocs (decomp_size + 1) * sizeof(pg_wchar):
+        // exactly MaxAllocSize / 4 decomposed codepoints request 1073741824
+        // bytes, one over the limit. U+AC01 (Hangul LVT) decomposes into 3.
+        let limit = mcx::MAX_ALLOC_SIZE / core::mem::size_of::<pg_wchar>();
+        assert_eq!(limit % 3, 0);
+        let mut input = vec![0xac01 as pg_wchar; limit / 3];
+        let cx = MemoryContext::new("test-unicode-norm-oversized");
+        let err = unicode_normalize(cx.mcx(), UNICODE_NFD, &input).unwrap_err();
+        assert_eq!(err.message(), "invalid memory alloc request size 1073741824");
+        // Past the limit C stops summing at the first overshoot and reports
+        // that partial request, not the full decomposed length.
+        input.push(0xac01);
+        input.push(0xac01);
+        let err = unicode_normalize(cx.mcx(), UNICODE_NFD, &input).unwrap_err();
+        assert_eq!(err.message(), "invalid memory alloc request size 1073741836");
     }
 
     #[test]

@@ -53,19 +53,25 @@ fn deflist_bad_format() {
     for bad in [&b"k v"[..], b"k = 'unterminated", b"k ="] {
         assert!(deserialize_deflist(ctx.mcx(), bad).is_err(), "{:?}", bad);
     }
+    let err = deserialize_deflist(ctx.mcx(), b"MaxWords\xff").err().expect("bad format");
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(&b"invalid parameter list format: \"MaxWords\xff\""[..])
+    );
+    assert_eq!(err.message(), "invalid parameter list format: \"MaxWords\u{fffd}\"");
 }
 
 #[test]
 fn def_get_boolean_matrix() {
     use ts_locale::dict_api::def_get_boolean;
-    assert!(def_get_boolean(b"x", b"1", Some(1)).unwrap());
-    assert!(!def_get_boolean(b"x", b"0", Some(0)).unwrap());
-    assert!(def_get_boolean(b"x", b"true", None).unwrap());
-    assert!(!def_get_boolean(b"x", b"off", None).unwrap());
-    assert!(def_get_boolean(b"x", b"2", Some(2)).is_err());
+    assert!(def_get_boolean(b"x", Some(b"1".as_slice()), Some(1)).unwrap());
+    assert!(!def_get_boolean(b"x", Some(b"0".as_slice()), Some(0)).unwrap());
+    assert!(def_get_boolean(b"x", Some(b"true".as_slice()), None).unwrap());
+    assert!(!def_get_boolean(b"x", Some(b"off".as_slice()), None).unwrap());
+    assert!(def_get_boolean(b"x", Some(b"2".as_slice()), Some(2)).is_err());
     // Quoted '1' is a String node in C: not accepted.
-    assert!(def_get_boolean(b"x", b"1", None).is_err());
-    let err = def_get_boolean(b"casesensitive", b"2", Some(2)).unwrap_err();
+    assert!(def_get_boolean(b"x", Some(b"1".as_slice()), None).is_err());
+    let err = def_get_boolean(b"casesensitive", Some(b"2".as_slice()), Some(2)).unwrap_err();
     assert_eq!(err.message(), "casesensitive requires a Boolean value");
 }
 

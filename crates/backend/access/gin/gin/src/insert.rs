@@ -98,6 +98,7 @@ pub(crate) fn cached_gin_state(rel: &Relation<'_>) -> PgResult<GinState> {
                 can_partial_match: c.can_partial_match,
                 key_byval: c.key_byval,
                 key_len: c.key_len,
+                key_storage: c.key_storage,
             };
         }
         return Ok(GinState {
@@ -119,6 +120,7 @@ pub(crate) fn cached_gin_state(rel: &Relation<'_>) -> PgResult<GinState> {
         can_partial_match: false,
         key_byval: false,
         key_len: 0,
+        key_storage: 0,
     }; GIN_MAX_KEY_COLS];
     for (i, col) in state.cols.iter().enumerate().take(state.natts as usize) {
         cached_cols[i] = RdAmCacheGinCol {
@@ -136,6 +138,7 @@ pub(crate) fn cached_gin_state(rel: &Relation<'_>) -> PgResult<GinState> {
             can_partial_match: col.can_partial_match,
             key_byval: col.key_byval,
             key_len: col.key_len,
+            key_storage: col.key_storage,
         };
     }
     *rel.rd_amcache_gin.borrow_mut() = Some(Box::new(RdAmCacheGin {

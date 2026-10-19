@@ -76,13 +76,17 @@ pub fn defGetString<'mcx>(mcx: Mcx<'mcx>, def: &DefElem<'mcx>) -> PgResult<&'mcx
     })
 }
 
+pub fn floatVal(fval: &str) -> f64 {
+    let s = fval.split('_').next().unwrap_or(fval);
+    s.parse::<f64>().unwrap_or(0.0)
+}
+
 pub fn defGetNumeric(def: &DefElem<'_>) -> PgResult<f64> {
     let err = || syntax_err(format!("{} requires a numeric value", defname(def)));
     let Some(arg) = def.arg else { return Err(err()) };
     match arg.node_tag() {
         NodeTag::T_Integer => Ok(arg.as_integer().unwrap().ival as f64),
-        // floatVal: strtod semantics; grammar-produced Floats always parse.
-        NodeTag::T_Float => arg.as_float().unwrap().fval.parse::<f64>().map_err(|_| err()),
+        NodeTag::T_Float => Ok(floatVal(arg.as_float().unwrap().fval)),
         _ => Err(err()),
     }
 }
@@ -433,5 +437,29 @@ mod tests {
         pstate.p_sourcetext = None;
         def.location = second;
         assert_eq!(errorConflictingDefElem(&def, Some(&pstate)).cursor_position, None);
+    }
+
+    #[test]
+    fn def_get_numeric_float_is_atof() {
+        let ctx = mcx::MemoryContext::new("commands_define-test");
+        let mcx = ctx.mcx();
+        let float = |v: &'static str| Node::mk(mcx, types_nodes::Float { fval: v }).unwrap();
+        for (text, want) in [
+            ("1_000.0", 1.0),
+            ("2_5.5_0", 2.0),
+            ("1_0e1", 1.0),
+            ("7.5_0", 7.5),
+            ("-1_0.5", -1.0),
+            ("99999999999_9", 99999999999.0),
+            ("1e5", 100000.0),
+            (".5", 0.5),
+        ] {
+            let def = defel_with(mcx, "cost", Some(float(text)));
+            assert_eq!(defGetNumeric(&def).unwrap(), want, "{text}");
+        }
+        let def = defel_with(mcx, "cost", None);
+        let e = defGetNumeric(&def).unwrap_err();
+        assert_eq!(e.message(), "cost requires a numeric value");
+        assert_eq!(e.sqlstate(), ERRCODE_SYNTAX_ERROR);
     }
 }

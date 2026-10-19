@@ -22,6 +22,7 @@ enum Token {
     LParen,
     RParen,
     Junk,
+    LexError(String),
 }
 
 /// One scanned token with its yytext (syncrep_scanner.l): the raw text the
@@ -50,7 +51,12 @@ fn scan(input: &str) -> Result<Vec<Tok>, String> {
                 let mut j = i + 1;
                 loop {
                     if j >= b.len() {
-                        return Err("unterminated quoted identifier at end of input".into());
+                        // <xd><<EOF>> (syncrep_scanner.l:113): JUNK carrying the message.
+                        toks.push(Tok {
+                            kind: Token::LexError("unterminated quoted identifier at end of input".into()),
+                            yytext: String::new(),
+                        });
+                        return Ok(toks);
                     }
                     if b[j] == b'"' {
                         if j + 1 < b.len() && b[j + 1] == b'"' {
@@ -131,6 +137,7 @@ fn syntax_error(toks: &[Tok], pos: usize) -> String {
     // syncrep_yyerror (syncrep_scanner.l:165): "%s at or near \"%s\"" with
     // yytext of the offending lookahead token, or "%s at end of input".
     match toks.get(pos) {
+        Some(Tok { kind: Token::LexError(msg), .. }) => msg.clone(),
         Some(t) => format!("syntax error at or near \"{}\"", t.yytext),
         None => "syntax error at end of input".into(),
     }

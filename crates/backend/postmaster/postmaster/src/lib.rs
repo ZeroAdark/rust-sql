@@ -16,7 +16,7 @@ use std::sync::OnceLock;
 
 use types_core::init::{BackendType, BACKEND_NUM_TYPES};
 use types_core::pid_t;
-use types_error::{ErrorLocation, PgResult, DEBUG1, DEBUG2, LOG};
+use types_error::{ErrorLocation, PgResult, DEBUG1, DEBUG2, DEBUG4, LOG};
 use types_storage::latch::LatchHandle;
 use types_storage::waiteventset::WaitEventSetHandle;
 
@@ -48,7 +48,7 @@ pub const FastShutdown: i32 = 2;
 pub const ImmediateShutdown: i32 = 3;
 
 pub const SIGKILL_CHILDREN_AFTER_SECS: i64 = 5;
-/// GL-DISCONNECT-WEDGE-1: grace after the SIGKILL broadcast before the
+/// regression: grace after the SIGKILL broadcast before the
 /// postmaster forces its own exit. C's SIGKILL is unconditional, so C's
 /// PM_WAIT_BACKENDS always drains; the thread rendering (SendThreadKill)
 /// lands at a drain point, and a thread wedged off its drain points (deep
@@ -60,7 +60,7 @@ pub const SIGKILL_CHILDREN_AFTER_SECS: i64 = 5;
 /// the OS had killed us.
 pub const FORCED_EXIT_AFTER_LETHAL_SECS: i64 = 8;
 
-/// GL-GANGWEDGE-1: bound on a NON-immediate shutdown that stops making
+/// regression: bound on a NON-immediate shutdown that stops making
 /// progress through the shutdown states.
 ///
 /// C's fast/smart shutdown waits forever by design at every shutdown gate,
@@ -89,7 +89,7 @@ pub const FORCED_EXIT_AFTER_LETHAL_SECS: i64 = 8;
 ///
 /// On firing, the postmaster SELF-ESCALATES to immediate shutdown — exactly
 /// the operator action C assumes — which flows into the already-audited kill
-/// ladder (SIGKILL_CHILDREN_AFTER_SECS, then the GL-DISCONNECT-WEDGE-1
+/// ladder (SIGKILL_CHILDREN_AFTER_SECS, then the regression
 /// FORCED_EXIT_AFTER_LETHAL_SECS floor). The worst case becomes bounded and
 /// loud instead of infinite and silent. Escalation forfeits the shutdown
 /// checkpoint, so the next start runs crash recovery — strictly better than
@@ -222,7 +222,7 @@ pub struct PostmasterState {
     /// forced-exit floor (serverloop) fires FORCED_EXIT_AFTER_LETHAL_SECS
     /// after it if children still have not drained. 0 = not sent.
     pub lethal_time: i64,
-    /// GL-GANGWEDGE-1: wall-clock second of the last PMState change, and
+    /// regression: wall-clock second of the last PMState change, and
     /// whether the shutdown-stall watchdog has already escalated for this
     /// shutdown (it fires once — after that the immediate-shutdown ladder
     /// owns the outcome). 0 = never stamped.
@@ -320,9 +320,15 @@ pub(crate) fn publish_pm_latch(l: LatchHandle) {
     let _ = PM_LATCH.set(l);
 }
 
+// Reached from the real sigaction handlers (main_entry.rs pqsignal), which
+// may interrupt this very thread while it holds its waiter slot mutex
+// (begin_fd_park/end_fd_park around the ServerLoop block): the signal-route
+// SetLatch never blocks, as C's handler-safe SetLatch (latch.c:290) never
+// does. The latch is the postmaster's own, so the route is the self-pipe
+// byte (WakeupMyProc) when the mutex is held.
 pub(crate) fn set_pm_latch() {
     if let Some(l) = PM_LATCH.get() {
-        latch::SetLatch(*l);
+        latch::SetLatchFromSignalHandler(*l);
     }
 }
 
@@ -357,6 +363,13 @@ pub fn handle_pm_shutdown_request_signal(sig: i32) {
 pub fn handle_pm_child_exit_signal(_sig: i32) {
     PENDING_PM_CHILD_EXIT.store(true, Ordering::Release);
     set_pm_latch();
+}
+
+/// postmaster.c:3755/3760 signal_child(SysLoggerPMChild, SIGUSR1): the
+/// DEBUG3 signal line, then the collector's direct poke.
+pub(crate) fn rotate_syslogger(logger: &PmChild) {
+    statemachine::log_signal_child(logger, procsignal::signums::SIGUSR1);
+    syslogger::collector_kill(procsignal::signums::SIGUSR1);
 }
 
 pub(crate) fn report(level: types_error::ErrorLevel, msg: String, line: i32, func: &'static str) {
@@ -511,12 +524,12 @@ pub fn process_pm_pmsignal() -> PgResult<()> {
 
     // signal_child(SIGUSR1) has no route to the slotless logger thread;
     // direct poke (see syslogger::collector_kill).
-    if with_pm(|pm| pm.syslogger.is_some()) {
+    if let Some(logger) = with_pm(|pm| pm.syslogger) {
         if syslogger_seams::check_logrotate_signal::call() {
-            syslogger::collector_kill(procsignal::signums::SIGUSR1);
+            rotate_syslogger(&logger);
             syslogger_seams::remove_logrotate_signal_files::call();
         } else if pmsignal::CheckPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE) {
-            syslogger::collector_kill(procsignal::signums::SIGUSR1);
+            rotate_syslogger(&logger);
         }
     }
 
@@ -589,6 +602,23 @@ pub fn process_pm_pmsignal() -> PgResult<()> {
 // table process_pm_child_exit reaps. C wait-status encoding throughout.
 static CHILD_EXIT_QUEUE: std::sync::Mutex<Vec<(pid_t, i32)>> = std::sync::Mutex::new(Vec::new());
 
+/// postmaster.c:2505-2512: maybe_reap_io_worker frees the pm slot and drops
+/// the count; only a crash status is reported (no LogChildExit line).
+fn reap_io_worker(child_slot: pmchild_seams::PmChildSlot, pid: pid_t, exitstatus: i32) -> PgResult<()> {
+    pmchild_seams::release_postmaster_child_slot::call(child_slot);
+    with_pm(|pm| {
+        if let Some(i) = pm.io_worker_children.iter().position(|c| c.map(|c| c.pid) == Some(pid)) {
+            pm.io_worker_children[i] = None;
+        }
+        pm.io_worker_count -= 1;
+    });
+    if !(exit_status_code(exitstatus) == Some(0) || exit_status_code(exitstatus) == Some(1)) {
+        handle_child_crash("io worker", pid, exitstatus)?;
+    }
+    serverloop::maybe_adjust_io_workers();
+    Ok(())
+}
+
 fn announce_child_exit(pid: pid_t, exitstatus: i32) {
     CHILD_EXIT_QUEUE.lock().unwrap_or_else(|e| e.into_inner()).push((pid, exitstatus));
     handle_pm_child_exit_signal(0);
@@ -653,11 +683,16 @@ pub(crate) fn log_child_exit_at(level: types_error::ErrorLevel, procname: &str, 
     let _ = builder.finish(loc(line, "LogChildExit"));
 }
 
+/// postmaster.c:2240: the reaper's entry line is DEBUG4.
+pub(crate) fn log_reaping_dead_processes() {
+    report_internal(DEBUG4, "reaping dead processes".into(), 2240, "process_pm_child_exit");
+}
+
 /// process_pm_child_exit — the SIGCHLD reaper over the thread-exit queue.
 pub fn process_pm_child_exit() -> PgResult<()> {
     PENDING_PM_CHILD_EXIT.store(false, Ordering::Release);
 
-    report_internal(DEBUG2, "reaping dead processes".into(), 2240, "process_pm_child_exit");
+    log_reaping_dead_processes();
 
     while let Some((pid, exitstatus)) = reap_one() {
         let status0 = exit_status_code(exitstatus) == Some(0);
@@ -890,26 +925,7 @@ pub fn process_pm_child_exit() -> PgResult<()> {
             // is normal; the liveness term (pm.io_worker_count) decrements
             // here and the pool is re-leveled, mirroring C's
             // maybe_adjust_io_workers-after-reap.
-            Some((child_slot, BackendType::IoWorker)) => {
-                pmchild_seams::release_postmaster_child_slot::call(child_slot);
-                // maybe_reap_io_worker: free the pm slot + drop the count.
-                with_pm(|pm| {
-                    if let Some(i) = pm
-                        .io_worker_children
-                        .iter()
-                        .position(|c| c.map(|c| c.pid) == Some(pid))
-                    {
-                        pm.io_worker_children[i] = None;
-                    }
-                    pm.io_worker_count -= 1;
-                });
-                if !(status0 || status1) {
-                    handle_child_crash("io worker", pid, exitstatus)?;
-                } else {
-                    log_child_exit_at(DEBUG2, "io worker", pid, exitstatus);
-                }
-                serverloop::maybe_adjust_io_workers();
-            }
+            Some((child_slot, BackendType::IoWorker)) => reap_io_worker(child_slot, pid, exitstatus)?,
             Some((_slot, btype)) => panic!(
                 "process_pm_child_exit: reaper arm for {} unported (its owner extends the reaper when its main lands)",
                 miscinit::GetBackendTypeDesc(btype)

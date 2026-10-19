@@ -445,7 +445,7 @@ fn rename_constraint_internal<'mcx>(
         )
     {
         // Renaming the index renames the constraint as well.
-        RenameRelationInternal(mcx, con.conindid, newconname, true)?;
+        RenameRelationInternal(mcx, con.conindid, newconname, true, false)?;
     } else {
         pg_constraint::RenameConstraintById(mcx, con.oid, newconname)?;
     }
@@ -499,6 +499,7 @@ pub fn RenameRelation<'mcx>(mcx: Mcx<'mcx>, stmt: &RenameStmt<'_>) -> PgResult<O
         relid,
         stmt.newname.expect("RenameStmt.newname"),
         is_index_stmt,
+        false,
     )?;
     Ok(ObjectAddress::set(RELATION_RELATION_ID, relid))
 }
@@ -508,6 +509,7 @@ pub fn RenameRelationInternal<'mcx>(
     myrelid: Oid,
     newrelname: &str,
     is_index: bool,
+    is_internal: bool,
 ) -> PgResult<()> {
     let lock = if is_index {
         ShareUpdateExclusiveLock
@@ -517,6 +519,7 @@ pub fn RenameRelationInternal<'mcx>(
     let targetrelation = relation_seams::relation_open::call(mcx, myrelid, lock)?;
     let namespace_id = targetrelation.rd_rel.relnamespace;
 
+    let relrelation = table::table_open(mcx, RELATION_RELATION_ID, RowExclusiveLock)?;
     if lsyscache::get_relname_relid(newrelname, namespace_id)? != InvalidOid {
         return Err(Box::new(
             PgError::new(ERROR, format!("relation \"{newrelname}\" already exists"))
@@ -524,7 +527,6 @@ pub fn RenameRelationInternal<'mcx>(
         ));
     }
 
-    let relrelation = table::table_open(mcx, RELATION_RELATION_ID, RowExclusiveLock)?;
     let key = crate::alter::oid_scankey(1, myrelid);
     let mut scan = genam::systable_beginscan(
         mcx,
@@ -562,7 +564,7 @@ pub fn RenameRelationInternal<'mcx>(
         myrelid,
         0,
         InvalidOid,
-        false,
+        is_internal,
     )?;
     relrelation.close(RowExclusiveLock)?;
 

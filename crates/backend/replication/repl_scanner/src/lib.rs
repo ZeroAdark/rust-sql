@@ -48,6 +48,9 @@ pub enum Token {
     UseSnapshot,
     Wait,
     UploadManifest,
+    // replication_yyerror raised inside the scanner (repl_scanner.l:159,220);
+    // the parser reports it only when it pulls this token, as bison would.
+    LexError(Box<PgError>),
 }
 
 impl Token {
@@ -365,6 +368,24 @@ pub fn replication_lex_all(input: &str) -> PgResult<Vec<Token>> {
         tokens.push(tok);
         if is_eof {
             return Ok(tokens);
+        }
+    }
+}
+
+pub fn replication_lex_deferred(input: &str) -> Vec<Token> {
+    let mut scanner = Scanner::new(input);
+    let mut tokens: Vec<Token> = Vec::new();
+    loop {
+        match scanner.next_token() {
+            Ok(Token::Eof) => {
+                tokens.push(Token::Eof);
+                return tokens;
+            }
+            Ok(tok) => tokens.push(tok),
+            Err(e) => {
+                tokens.push(Token::LexError(e));
+                return tokens;
+            }
         }
     }
 }

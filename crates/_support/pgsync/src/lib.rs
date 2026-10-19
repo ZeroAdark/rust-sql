@@ -52,6 +52,9 @@
 //!   model needs it; recorded choice per contract §2.3).
 //! - L6 loom `mpsc` has `channel` only → `sync_channel` absent under loom
 //!   (composite when a model needs it).
+//! - L7 loom `Condvar::wait_timeout` is `wait` (0.7.2 hard-codes
+//!   `WaitTimeoutResult(false)`) → the timeout arm of `Semaphore::acquire_timeout`
+//!   is unreachable under loom; a no-clock composite is a later increment.
 //!
 //! The scheduler seam: the sim arm calls [`sim::hooks`] (pinned in WS-SYNC's
 //! first commit; WS-CORE owns `src/sim/**` and implements the scheduler
@@ -204,7 +207,7 @@ impl Semaphore {
     /// `timeout` budget (no deadline arithmetic — this compiles and models
     /// identically in all three pgsync worlds, where loom/sim time is not
     /// wall time). Callers use it as a deadlock-escape bound, not a timer:
-    /// the serial-lease safe-point admission (GL-SLEASE-2) re-tries on its
+    /// the serial-lease safe-point admission (regression) re-tries on its
     /// sweeper cadence.
     pub fn acquire_timeout(&self, timeout: core::time::Duration) -> bool {
         let mut g = lock(&self.permits);
@@ -286,7 +289,7 @@ pub struct ParkLot {
     epoch: atomic::AtomicU64,
     m: Mutex<()>,
     cv: Condvar,
-    /// GL-STMTTASK-2 wake elision (the Go nmspinning/wakep protocol): count
+    /// regression wake elision (the Go nmspinning/wakep protocol): count
     /// of workers in the SEARCH phase — woken (or between tasks) and about
     /// to re-scan for work, not yet parked. A publisher that observes a
     /// spinner may skip its notify entirely: the spinner's re-scan (or its
@@ -314,7 +317,7 @@ pub struct ParkLot {
     legacy_parked: atomic::AtomicUsize,
 }
 
-/// One pool worker's directed-wake slot (GL-STMTTASK-2). Owned by the worker
+/// One pool worker's directed-wake slot (regression). Owned by the worker
 /// loop for the thread's lifetime; registered in the lot's LIFO idle stack
 /// for the duration of each park.
 pub struct WorkerParker {
@@ -487,7 +490,7 @@ impl ParkLot {
     }
 
     // -----------------------------------------------------------------------
-    // GL-STMTTASK-2 — spinner-elided submission wakes + LIFO directed parks.
+    // regression — spinner-elided submission wakes + LIFO directed parks.
     // Only the pool worker loop uses park_worker/spin_*; publishers that
     // OPT IN to elision use wake_work. Every other caller keeps
     // park/wake_all byte-identically.
@@ -534,7 +537,7 @@ impl ParkLot {
         if spinning {
             self.spinners.fetch_sub(1, atomic::Ordering::SeqCst);
         }
-        // GL-SPINPARK-1: the StoreLoad hinge made EXPLICIT (survey rule 2 —
+        // regression: the StoreLoad hinge made EXPLICIT (survey rule 2 —
         // the Go wakep protocol's fence): decrement-then-recheck here pairs
         // with bump-then-read-spinners in wake_work; each side fences
         // between its write and its read so one of them always sees the

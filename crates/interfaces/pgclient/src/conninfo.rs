@@ -46,7 +46,7 @@ conn_options! {
     ("sslcompression", Some("PGSSLCOMPRESSION"), Some("0"), ""),
     ("sslcert", Some("PGSSLCERT"), None, ""),
     ("sslkey", Some("PGSSLKEY"), None, ""),
-    ("sslcertmode", Some("PGSSLCERTMODE"), None, ""),
+    ("sslcertmode", Some("PGSSLCERTMODE"), Some("allow"), ""),
     ("sslpassword", None, None, "*"),
     ("sslrootcert", Some("PGSSLROOTCERT"), None, ""),
     ("sslcrl", Some("PGSSLCRL"), None, ""),
@@ -58,7 +58,7 @@ conn_options! {
     ("max_protocol_version", Some("PGMAXPROTOCOLVERSION"), None, ""),
     ("ssl_min_protocol_version", Some("PGSSLMINPROTOCOLVERSION"), Some("TLSv1.2"), ""),
     ("ssl_max_protocol_version", Some("PGSSLMAXPROTOCOLVERSION"), None, ""),
-    ("gssencmode", Some("PGGSSENCMODE"), Some("prefer"), ""),
+    ("gssencmode", Some("PGGSSENCMODE"), Some("disable"), ""),
     ("krbsrvname", Some("PGKRBSRVNAME"), Some("postgres"), ""),
     ("gsslib", Some("PGGSSLIB"), None, ""),
     ("gssdelegation", Some("PGGSSDELEGATION"), Some("0"), ""),
@@ -442,9 +442,14 @@ pub fn parse_conninfo(s: &str) -> Result<Vec<(String, String)>, String> {
             }
         } else {
             while i < b.len() && !isspace_c_locale(b[i]) {
-                if b[i] == b'\\' && i + 1 < b.len() {
-                    val.push(b[i + 1]);
-                    i += 2;
+                if b[i] == b'\\' {
+                    // conninfo_parse (fe-connect.c:6376): a backslash takes
+                    // the next byte; a terminal one is dropped.
+                    i += 1;
+                    if i < b.len() {
+                        val.push(b[i]);
+                        i += 1;
+                    }
                 } else {
                     val.push(b[i]);
                     i += 1;
@@ -478,26 +483,37 @@ pub fn resolve_conninfo(conninfo: &str) -> Result<Vec<(String, String)>, String>
         }
     }
     parse_service_info(&mut opts)?;
-    for o in CONNINFO_OPTIONS {
-        if opt(&opts, o.keyword).is_some() {
-            continue;
-        }
-        if let Some(env) = o.envvar {
-            if let Ok(v) = std::env::var(env) {
-                opts.push((o.keyword.to_string(), v));
-                continue;
-            }
-        }
-        if let Some(def) = o.compiled {
-            opts.push((o.keyword.to_string(), def.to_string()));
-        }
-    }
+    add_defaults(&mut opts, &|name| std::env::var(name).ok());
     // connectOptions2: dbname defaults to the user name.
     if opt(&opts, "dbname").is_none() {
         let user = opt(&opts, "user").map(|s| s.to_string()).unwrap_or_else(super::os_user_name);
         opts.push(("dbname".to_string(), user));
     }
     Ok(opts)
+}
+
+// conninfo_add_defaults (fe-connect.c:6640): environment, then the compiled
+// default; the deprecated PGREQUIRESSL (a value starting with '1') stands in
+// for an unset PGSSLMODE as sslmode=require.
+fn add_defaults(opts: &mut Vec<(String, String)>, getenv: &dyn Fn(&str) -> Option<String>) {
+    for o in CONNINFO_OPTIONS {
+        if opt(opts, o.keyword).is_some() {
+            continue;
+        }
+        if let Some(env) = o.envvar {
+            if let Some(v) = getenv(env) {
+                opts.push((o.keyword.to_string(), v));
+                continue;
+            }
+        }
+        if o.keyword == "sslmode" && getenv("PGREQUIRESSL").is_some_and(|v| v.starts_with('1')) {
+            opts.push((o.keyword.to_string(), "require".to_string()));
+            continue;
+        }
+        if let Some(def) = o.compiled {
+            opts.push((o.keyword.to_string(), def.to_string()));
+        }
+    }
 }
 
 fn parse_service_info(opts: &mut Vec<(String, String)>) -> Result<(), String> {
@@ -625,7 +641,7 @@ mod ws_tests {
     }
 }
 
-const DEFAULT_PGSOCKET_DIR: &str = "/tmp";
+pub(crate) const DEFAULT_PGSOCKET_DIR: &str = "/tmp";
 
 // pqConnectOptions2 (fe-connect.c:1440): the passfile option, else
 // ~/PGPASSFILE; None when no home directory can be found.
@@ -820,5 +836,31 @@ mod passfile_tests {
         assert_eq!(password_from_file("h1", "5432", "db", "bob", &f), None);
         std::fs::remove_file(&f).unwrap();
         assert_eq!(password_from_file("h1", "5432", "db", "bob", "/nonexistent/pgpass"), None);
+    }
+
+    // conninfo_add_defaults (fe-connect.c:6670): PGREQUIRESSL=1 stands in
+    // for an unset PGSSLMODE; PGSSLMODE and an explicit sslmode win; other
+    // values are ignored.
+    #[test]
+    fn pgrequiressl_defaults_sslmode_to_require() {
+        let env = |vars: &'static [(&'static str, &'static str)]| {
+            move |name: &str| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string())
+        };
+        let resolved = |explicit: &[(&str, &str)], vars: &'static [(&'static str, &'static str)]| {
+            let mut opts: Vec<(String, String)> =
+                explicit.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            super::add_defaults(&mut opts, &env(vars));
+            super::opt(&opts, "sslmode").unwrap().to_string()
+        };
+        assert_eq!(resolved(&[], &[]), "prefer");
+        assert_eq!(resolved(&[], &[("PGREQUIRESSL", "1")]), "require");
+        assert_eq!(resolved(&[], &[("PGREQUIRESSL", "1yes")]), "require");
+        assert_eq!(resolved(&[], &[("PGREQUIRESSL", "0")]), "prefer");
+        assert_eq!(resolved(&[], &[("PGREQUIRESSL", "true")]), "prefer");
+        assert_eq!(resolved(&[], &[("PGREQUIRESSL", "1"), ("PGSSLMODE", "disable")]), "disable");
+        assert_eq!(resolved(&[("sslmode", "allow")], &[("PGREQUIRESSL", "1")]), "allow");
+        let mut opts = vec![];
+        super::add_defaults(&mut opts, &env(&[("PGREQUIRESSL", "1"), ("PGPORT", "5999")]));
+        assert_eq!(super::opt(&opts, "port"), Some("5999"));
     }
 }

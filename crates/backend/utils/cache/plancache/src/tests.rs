@@ -26,6 +26,7 @@ thread_local! {
     static PLAN_CACHE_MODE_VAR: Cell<i32> = const { Cell::new(0) };
     static LOCKS_TAKEN: Cell<u32> = const { Cell::new(0) };
     static PLANNER_DEPENDS_ON_ROLE: Cell<bool> = const { Cell::new(false) };
+    static USAGE_TITLES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 fn stub_planner<'a, 'mcx>(
@@ -69,6 +70,11 @@ fn install() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         planner_seams::planner::set(stub_planner);
+        postgres_seams::reset_usage::set(|| USAGE_TITLES.with(|t| t.borrow_mut().push("reset".into())));
+        postgres_seams::show_usage::set(|title| {
+            USAGE_TITLES.with(|t| t.borrow_mut().push(title.to_owned()));
+            Ok(())
+        });
         syscache_seams::lookup_pg_type_shape::set(|_typid| {
             Ok(Some(types_tuple::tupdesc::PgTypeShape {
                 typlen: 4,
@@ -603,6 +609,30 @@ fn invalidated_source_reanalyzes_via_installed_hook() {
 }
 
 #[test]
+fn revalidation_reports_parse_analysis_statistics() {
+    install();
+    push_snapshot();
+    let h = make_saved_source(false);
+    let p1 = GetCachedPlan(h, ParamListHandle::NULL, None, QueryEnvHandle::NULL).unwrap();
+    ReleaseCachedPlan(p1);
+    PlanCacheSysCallback(Datum::from_oid(InvalidOid), NAMESPACEOID, 0);
+    assert!(!CachedPlanIsValid(h));
+
+    USAGE_TITLES.with(|t| t.borrow_mut().clear());
+    guc_tables::backing::set_log_parser_stats(true);
+    let p2 = GetCachedPlan(h, ParamListHandle::NULL, None, QueryEnvHandle::NULL);
+    guc_tables::backing::set_log_parser_stats(false);
+    let p2 = p2.unwrap();
+    assert!(CachedPlanIsValid(h));
+    assert_eq!(
+        USAGE_TITLES.with(|t| t.borrow().clone()),
+        ["reset", "PARSE ANALYSIS STATISTICS", "reset", "REWRITER STATISTICS"]
+    );
+    ReleaseCachedPlan(p2);
+    DropCachedPlan(h);
+}
+
+#[test]
 fn requires_reanalysis_probe_tracks_invalidation() {
     install();
     push_snapshot();
@@ -725,6 +755,40 @@ fn release_after_exit_reclaim_is_abandoned_not_stale() {
     let p2 = GetCachedPlan(h2, ParamListHandle::NULL, None, QueryEnvHandle::NULL).unwrap();
     ReleaseCachedPlan(p2);
     DropCachedPlan(h2);
+}
+
+// Session-teardown lane (OWNER-DECISIONS B.6): the exit reclaim used to
+// `clear()` the registry Vecs, keeping their capacity inside a ManuallyDrop
+// TLS that dies with the backend thread — 200 PREPAREs grew `sources` and
+// `plans` to ~80 KiB each, left behind by every session (measured ~115 KiB
+// of the ~140 KiB/session prepare-heavy residue). The reclaim must hand
+// the slabs back, not just empty them.
+#[test]
+fn exit_reclaim_releases_registry_slabs() {
+    install();
+    push_snapshot();
+    let mut handles = Vec::new();
+    for _ in 0..64 {
+        let h = make_saved_source(true);
+        let p = GetCachedPlan(h, ParamListHandle::NULL, None, QueryEnvHandle::NULL).unwrap();
+        ReleaseCachedPlan(p);
+        handles.push(h);
+    }
+    with_cache(|pc| assert!(pc.sources.capacity() >= 64 && pc.plans.capacity() >= 64));
+    ReleaseAllCachedPlansAtExit(0, 0);
+    with_cache(|pc| {
+        assert!(pc.torn_down);
+        assert_eq!(pc.sources.capacity(), 0, "sources slab kept after exit reclaim");
+        assert_eq!(pc.plans.capacity(), 0, "plans slab kept after exit reclaim");
+        assert_eq!(pc.saved_plan_list.capacity(), 0);
+        assert_eq!(pc.source_free.capacity(), 0);
+        assert_eq!(pc.plan_free.capacity(), 0);
+    });
+    // Post-reclaim drops are C's abandoned refcounts: no-ops.
+    for h in handles {
+        DropCachedPlan(h);
+    }
+    with_cache(|pc| pc.torn_down = false);
 }
 
 // Regression (bug_797bd58f): RevalidateCachedQuery `.take()`s the source's

@@ -12,11 +12,13 @@ struct Loc {
 
 /// `generate_normalized_query` (returns the normalized text; query is the
 /// CleanQuerytext'd slice, query_loc its offset in the original string).
+use types_error::PgResult;
+
 pub(crate) fn generate_normalized_query(
     jstate: &queryjumble::JumbleState<'_>,
     query: &str,
     query_loc: i32,
-) -> String {
+) -> PgResult<String> {
     let mut locs: Vec<Loc> = jstate
         .clocations
         .iter()
@@ -28,7 +30,7 @@ pub(crate) fn generate_normalized_query(
         })
         .collect();
 
-    fill_in_constant_lengths(&mut locs, query, query_loc);
+    fill_in_constant_lengths(&mut locs, query, query_loc)?;
 
     let qbytes = query.as_bytes();
     let mut norm = String::with_capacity(query.len() + locs.len() * 10);
@@ -73,11 +75,11 @@ pub(crate) fn generate_normalized_query(
     }
 
     norm.push_str(core::str::from_utf8(&qbytes[quer_loc..]).unwrap());
-    norm
+    Ok(norm)
 }
 
 /// `fill_in_constant_lengths`.
-fn fill_in_constant_lengths(locs: &mut [Loc], query: &str, query_loc: i32) {
+fn fill_in_constant_lengths(locs: &mut [Loc], query: &str, query_loc: i32) -> PgResult<()> {
     locs.sort_by_key(|l| l.location);
 
     let ctx = mcx::MemoryContext::new("pgss normalize");
@@ -108,10 +110,7 @@ fn fill_in_constant_lengths(locs: &mut [Loc], query: &str, query_loc: i32) {
             break;
         }
         loop {
-            let tok = match scanner.core_yylex(&mut lval, &mut lloc) {
-                Ok(t) => t,
-                Err(_) => 0,
-            };
+            let tok = scanner.core_yylex(&mut lval, &mut lloc)?;
             if tok == 0 {
                 eof = true;
                 break;
@@ -120,10 +119,7 @@ fn fill_in_constant_lengths(locs: &mut [Loc], query: &str, query_loc: i32) {
                 if query.as_bytes().get(loc as usize) == Some(&b'-') {
                     // Negative constant: the '-' and the value are replaced
                     // as one token pair (C keeps the minus in the $n span).
-                    let tok = match scanner.core_yylex(&mut lval, &mut lloc) {
-                        Ok(t) => t,
-                        Err(_) => 0,
-                    };
+                    let tok = scanner.core_yylex(&mut lval, &mut lloc)?;
                     if tok == 0 {
                         eof = true;
                         break;
@@ -135,4 +131,5 @@ fn fill_in_constant_lengths(locs: &mut [Loc], query: &str, query_loc: i32) {
             }
         }
     }
+    Ok(())
 }

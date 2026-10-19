@@ -66,6 +66,9 @@ impl Affix<'_> {
     }
 }
 
+// spell.h SPNodeData: `affix:19` — an alias index is stored modulo 2^19.
+pub const SPNODE_AFFIX_MASK: u32 = (1 << 19) - 1;
+
 #[derive(Clone, Copy)]
 pub struct SpNodeData {
     pub val: u8,
@@ -371,6 +374,7 @@ fn strtol(s: &[u8]) -> (i64, usize, bool) {
     if p == digits_start {
         return (0, 0, false);
     }
+    let overflow = overflow || (!neg && val == i64::MIN);
     let val = if neg {
         if overflow {
             i64::MIN

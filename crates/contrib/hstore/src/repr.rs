@@ -76,6 +76,13 @@ pub fn unique_pairs(pairs: Vec<Pair>) -> Vec<Pair> {
     out
 }
 
+// C sizes hstorePairs' and hstore_subscript_assign's palloc through an
+// int32 (hstore_io.c:458 len, hstore_subs.c:204 vsize): a CALCDATASIZE past
+// INT_MAX wraps negative, and palloc reports that (Size) value.
+pub(crate) fn c_int32_alloc_size(n: usize) -> usize {
+    n as i32 as isize as usize
+}
+
 // hstorePairs: serialize sorted+unique pairs into a header-ful image.
 pub fn build_hstore(pairs: &[Pair]) -> Vec<u8> {
     let count = pairs.len();

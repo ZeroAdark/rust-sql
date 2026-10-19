@@ -121,7 +121,7 @@ fn report_invalid_page(
     }
 }
 
-fn log_invalid_page(
+pub fn log_invalid_page(
     locator: RelFileLocator,
     forkno: ForkNumber,
     blkno: BlockNumber,

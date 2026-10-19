@@ -1638,12 +1638,21 @@ fn reconsider_full_join_clause<'mcx>(
     Ok(false)
 }
 
-// remove_nulling_relids over the single ojrelid bit, expression-copy form.
+// remove_nulling_relids over the single ojrelid bit, expression-copy form:
+// the whole tree, so a cross-type USING column's cast is seen through.
 fn strip_ojrelid_nulling<'mcx>(
     mcx: ::mcx::Mcx<'mcx>,
     node: Node<'mcx>,
     ojrelid: u32,
 ) -> PgResult<Node<'mcx>> {
+    Ok(strip_ojrelid_nulling_mut(mcx, node, ojrelid)?.unwrap_or(node))
+}
+
+fn strip_ojrelid_nulling_mut<'mcx>(
+    mcx: ::mcx::Mcx<'mcx>,
+    node: Node<'mcx>,
+    ojrelid: u32,
+) -> PgResult<Option<Node<'mcx>>> {
     match node.node_tag() {
         NodeTag::T_Var => {
             let v = node.as_var().unwrap();
@@ -1653,17 +1662,9 @@ fn strip_ojrelid_nulling<'mcx>(
                     ..*v
                 };
                 nv.varnullingrels.del_member(ojrelid as i32);
-                return Node::mk(mcx, nv);
+                return Ok(Some(Node::mk(mcx, nv)?));
             }
-            Ok(node)
-        }
-        NodeTag::T_RelabelType => {
-            let r = node.as_relabel_type().unwrap();
-            let arg = strip_ojrelid_nulling(mcx, r.arg, ojrelid)?;
-            if arg.ptr_eq(r.arg) {
-                return Ok(node);
-            }
-            Node::mk(mcx, types_nodes::primnodes::RelabelType { arg, ..*r })
+            Ok(None)
         }
         NodeTag::T_PlaceHolderVar => {
             let phv = node.as_place_holder_var().unwrap();
@@ -1677,7 +1678,7 @@ fn strip_ojrelid_nulling<'mcx>(
                 phnullingrels.del_member(ojrelid as i32);
                 phrels.del_member(ojrelid as i32);
                 debug_assert!(!phrels.is_empty());
-                return Node::mk(
+                return Ok(Some(Node::mk(
                     mcx,
                     types_nodes::primnodes::PlaceHolderVar {
                         phexpr: new_expr,
@@ -1686,11 +1687,16 @@ fn strip_ojrelid_nulling<'mcx>(
                         phid: phv.phid,
                         phlevelsup: phv.phlevelsup,
                     },
-                );
+                )?));
             }
-            Ok(node)
+            Ok(None)
         }
-        _ => Ok(node),
+        NodeTag::T_SubLink | NodeTag::T_Query => panic!(
+            "remove_nulling_relids_mutator (rewriteManip.c): sublevel recursion in a full-join COALESCE"
+        ),
+        _ => nodes_core::expression_tree_mutator(mcx, node, &mut |n| {
+            strip_ojrelid_nulling_mut(mcx, n, ojrelid)
+        }),
     }
 }
 

@@ -587,3 +587,33 @@ fn log_level_explain_probe_raises_c_syntax_error() {
         Node::mk(mcx, ExecuteStmt { name: Some("b093_nosuch"), ..ExecuteStmt::default() }).unwrap();
     assert_eq!(GetCommandLogLevel(exec).unwrap(), LOGSTMT_ALL);
 }
+
+// regression: foreigncmds.c:1558 parses each FDW-generated
+// command through pg_parse_query, PARSER STATISTICS bracket included.
+static IMPORT_USAGE_SEQ: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+#[test]
+fn import_foreign_schema_commands_report_parser_statistics() {
+    use core::sync::atomic::Ordering::SeqCst;
+    parser_seams::raw_parser::set(|mcx, _sql, _mode| Ok(::mcx::PgVec::new_in(mcx)));
+    postgres_seams::reset_usage::set(|| {
+        let _ = IMPORT_USAGE_SEQ.fetch_update(SeqCst, SeqCst, |v| Some(v * 10 + 1));
+    });
+    postgres_seams::show_usage::set(|title| {
+        let code = if title == "PARSER STATISTICS" { 2 } else { 9 };
+        let _ = IMPORT_USAGE_SEQ.fetch_update(SeqCst, SeqCst, |v| Some(v * 10 + code));
+        Ok(())
+    });
+    let ctx = MemoryContext::new("t");
+    guc_tables::backing::set_log_parser_stats(true);
+    let parsed = crate::dispatch::pg_parse_import_command(
+        ctx.mcx(),
+        "CREATE FOREIGN TABLE t (a int) SERVER s",
+    );
+    guc_tables::backing::set_log_parser_stats(false);
+    assert_eq!(parsed.unwrap().len(), 0);
+    assert_eq!(IMPORT_USAGE_SEQ.load(SeqCst), 12);
+    let parsed = crate::dispatch::pg_parse_import_command(ctx.mcx(), "SELECT 1");
+    assert_eq!(parsed.unwrap().len(), 0);
+    assert_eq!(IMPORT_USAGE_SEQ.load(SeqCst), 12);
+}

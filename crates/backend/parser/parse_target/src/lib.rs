@@ -704,16 +704,8 @@ fn ExpandRowReference<'mcx>(
 
     let tupdesc = match expr.as_var() {
         Some(var) if var.vartype == RECORDOID => expandRecordVariable(mcx, pstate, expr, 0)?,
-        // C falls back to lookup_rowtype_tupdesc_copy(exprType, exprTypmod):
-        // registered RECORD-typmod expressions (plpgsql rec whole-row Params).
-        _ => match funcapi::get_expr_result_tupdesc(mcx, Some(expr), true)? {
-            Some(td) => td,
-            None => typcache_seams::lookup_rowtype_tupdesc_copy::call(
-                mcx,
-                expr_type(expr),
-                nodes_core::node_funcs::expr_typmod(expr),
-            )?,
-        },
+        _ => funcapi::get_expr_result_tupdesc(mcx, Some(expr), false)?
+            .expect("noError=false yields a tupdesc"),
     };
     let mut result = NodeList::nil();
     for i in 0..tupdesc.natts as usize {
@@ -724,7 +716,7 @@ fn ExpandRowReference<'mcx>(
         let fselect = Node::mk(
             mcx,
             types_nodes::primnodes::FieldSelect {
-                arg: expr,
+                arg: copyfuncs::copy_object(mcx, expr)?,
                 fieldnum: (i + 1) as AttrNumber,
                 resulttype: att.atttypid,
                 resulttypmod: att.atttypmod,
@@ -1001,9 +993,9 @@ fn ExpandColumnRefStar<'mcx>(
     ExpandSingleTable(mcx, pstate, nsitem, levels_up, cref.location, make_target_entry)
 }
 
-// resolve_column_ref's whole-row arms (pl_comp.c): the trailing A_Star maps
-// to "*" (blocks scalar matches, keeps the valueless-rec 55000 arm), then a
-// rec-gated prefix lookup returns the whole-row Param.
+// resolve_column_ref's whole-row arm (pl_comp.c:1133): the trailing A_Star
+// maps to the whole-row key, which only the nearest rec binding of that name
+// carries (scalars never match, a field named "*" is distinct).
 fn plpgsql_star_ref<'mcx>(
     mcx: Mcx<'mcx>,
     pstate: &ParseState<'_, 'mcx>,
@@ -1022,27 +1014,12 @@ fn plpgsql_star_ref<'mcx>(
             None => return Ok(None),
         }
     }
-    names[n - 1] = "*";
-    if let Some(node) = parser_small1::plpgsql_resolve_column_ref(
-        mcx,
-        pstate,
-        st,
-        &names[..n],
-        location,
-        false,
-        mbutils::GetDatabaseEncoding(),
-    )? {
-        return Ok(Some(node));
-    }
-    let prefix = names[..n - 1].join(".").to_ascii_lowercase();
-    if !st.recs.iter().any(|r| *r == prefix) {
-        return Ok(None);
-    }
+    names[n - 1] = parser_small1::WHOLE_ROW_FIELD;
     parser_small1::plpgsql_resolve_column_ref(
         mcx,
         pstate,
         st,
-        &names[..n - 1],
+        &names[..n],
         location,
         false,
         mbutils::GetDatabaseEncoding(),

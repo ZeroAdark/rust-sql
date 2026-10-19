@@ -178,3 +178,15 @@ fn signal_children_dead_end_delivery_is_tolerated_not_fatal() {
 fn libc_sigterm() -> i32 {
     15
 }
+
+/// postmaster.c:3435-3439: the signal number, its pm_signame, and
+/// GetBackendTypeDesc (not the launch table's short name).
+#[test]
+fn signal_child_line_matches_c() {
+    assert_eq!(
+        signal_child_line(procsignal::signums::SIGTERM, BackendType::Backend, 4242),
+        "sending signal 15/SIGTERM to client backend process with pid 4242"
+    );
+    assert_eq!(launch_backend::pm_signame(procsignal::signums::SIGUSR1), "SIGUSR1");
+    assert_eq!(launch_backend::pm_signame(0), "(unknown)");
+}

@@ -119,11 +119,17 @@ pub const LATE: &[u8] = b"infinity";
 
 #[track_caller]
 #[cold]
-fn date_out_of_range(s: &str) -> Box<PgError> {
-    Box::new(
-        PgError::error(format!("date out of range: \"{s}\""))
-            .with_sqlstate(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-    )
+fn date_out_of_range(s: &[u8]) -> Box<PgError> {
+    let e = match core::str::from_utf8(s) {
+        Ok(s) => PgError::error(format!("date out of range: \"{s}\"")),
+        Err(_) => {
+            let mut msg = b"date out of range: \"".to_vec();
+            msg.extend_from_slice(s);
+            msg.push(b'"');
+            PgError::error_raw_message(msg)
+        }
+    };
+    Box::new(e.with_sqlstate(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE))
 }
 
 #[track_caller]
@@ -163,7 +169,7 @@ impl ExtraOwned {
     fn parse_error(
         &self,
         dterr: i32,
-        s: &str,
+        s: &[u8],
         datatype: &str,
         escontext: Option<&mut SoftErrorContext>,
     ) -> PgResult<()> {
@@ -232,12 +238,17 @@ fn decode_str(
 
 /// On soft error the sentinel is `Ok(0)` with `escontext.error_occurred()`
 /// set (adt_timestamp convention).
-pub fn date_in(s: &str, mut escontext: Option<&mut SoftErrorContext>) -> PgResult<DateADT> {
+pub fn date_in(
+    s: impl AsRef<[u8]>,
+    mut escontext: Option<&mut SoftErrorContext>,
+) -> PgResult<DateADT> {
+    let raw = s.as_ref();
+    let s = &*String::from_utf8_lossy(raw);
     let mut workbuf = [0u8; DATE_WORKBUF];
     let mut d = match decode_str(s, &mut workbuf, false)? {
         Ok(d) => d,
         Err((dterr, extra)) => {
-            extra.parse_error(dterr, s, "date", escontext)?;
+            extra.parse_error(dterr, raw, "date", escontext)?;
             return Ok(0);
         }
     };
@@ -248,19 +259,19 @@ pub fn date_in(s: &str, mut escontext: Option<&mut SoftErrorContext>) -> PgResul
         DTK_LATE => return Ok(DATEVAL_NOEND),
         DTK_EARLY => return Ok(DATEVAL_NOBEGIN),
         _ => {
-            DateTimeParseError(DTERR_BAD_FORMAT, None, s, "date", escontext)?;
+            DateTimeParseError(DTERR_BAD_FORMAT, None, raw, "date", escontext)?;
             return Ok(0);
         }
     }
 
     if !IS_VALID_JULIAN(d.tm.tm_year, d.tm.tm_mon, d.tm.tm_mday) {
-        return ereturn(escontext.as_deref_mut(), 0, *date_out_of_range(s));
+        return ereturn(escontext.as_deref_mut(), 0, *date_out_of_range(raw));
     }
 
     let date = date2j(d.tm.tm_year, d.tm.tm_mon, d.tm.tm_mday) - POSTGRES_EPOCH_JDATE;
 
     if !IS_VALID_DATE(date) {
-        return ereturn(escontext, 0, *date_out_of_range(s));
+        return ereturn(escontext, 0, *date_out_of_range(raw));
     }
 
     Ok(date)
@@ -607,15 +618,17 @@ pub fn time2tm(mut time: TimeADT, tm: &mut pg_tm, fsec: &mut fsec_t) {
 }
 
 pub fn time_in(
-    s: &str,
+    s: impl AsRef<[u8]>,
     typmod: i32,
     escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<TimeADT> {
+    let raw = s.as_ref();
+    let s = &*String::from_utf8_lossy(raw);
     let mut workbuf = [0u8; DATE_WORKBUF];
     let d = match decode_str(s, &mut workbuf, true)? {
         Ok(d) => d,
         Err((dterr, extra)) => {
-            extra.parse_error(dterr, s, "time", escontext)?;
+            extra.parse_error(dterr, raw, "time", escontext)?;
             return Ok(0);
         }
     };
@@ -740,15 +753,17 @@ pub fn tm2timetz(tm: &pg_tm, fsec: fsec_t, tz: i32, result: &mut TimeTzADT) {
 }
 
 pub fn timetz_in(
-    s: &str,
+    s: impl AsRef<[u8]>,
     typmod: i32,
     escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<TimeTzADT> {
+    let raw = s.as_ref();
+    let s = &*String::from_utf8_lossy(raw);
     let mut workbuf = [0u8; DATE_WORKBUF];
     let d = match decode_str(s, &mut workbuf, true)? {
         Ok(d) => d,
         Err((dterr, extra)) => {
-            extra.parse_error(dterr, s, "time with time zone", escontext)?;
+            extra.parse_error(dterr, raw, "time with time zone", escontext)?;
             return Ok(TimeTzADT::default());
         }
     };
@@ -1065,10 +1080,11 @@ fn timetz_rotate(t: &TimeTzADT, tz: i32) -> TimeTzADT {
     TimeTzADT { time, zone: tz }
 }
 
-// C text_to_cstring_buffer(zone, buf, TZ_STRLEN_MAX + 1); adt_timestamp's
-// byte-truncation divergence note applies.
+// C text_to_cstring_buffer(zone, buf, TZ_STRLEN_MAX + 1): at most 255 bytes,
+// clipped at a character boundary (pg_mbcliplen), C-string semantics end at
+// an embedded NUL.
 fn text_to_tzname(zone: &[u8]) -> &[u8] {
-    let z = &zone[..zone.len().min(255)];
+    let z = &zone[..adt_timestamp::mbcliplen(zone, 255)];
     match z.iter().position(|&b| b == 0) {
         Some(i) => &z[..i],
         None => z,
@@ -1111,8 +1127,10 @@ pub fn timetz_at_local(t: &TimeTzADT) -> PgResult<TimeTzADT> {
     timetz_zone(tzn.as_bytes(), t)
 }
 
+// C downcase_truncate_identifier: ASCII downcase, then truncate_identifier
+// clips at NAMEDATALEN-1 on a character boundary (pg_mbcliplen).
 fn downcase_ident<'a>(src: &[u8], out: &'a mut [u8; 64]) -> &'a [u8] {
-    let n = src.len().min(63);
+    let n = adt_timestamp::mbcliplen(src, 63);
     for (dst, b) in out.iter_mut().zip(&src[..n]) {
         *dst = b.to_ascii_lowercase();
     }
@@ -1123,11 +1141,8 @@ fn downcase_ident<'a>(src: &[u8], out: &'a mut [u8; 64]) -> &'a [u8] {
 #[cold]
 fn unit_not_supported(lowunits: &[u8], typename: &str) -> Box<PgError> {
     Box::new(
-        PgError::error(format!(
-            "unit \"{}\" not supported for type {typename}",
-            String::from_utf8_lossy(lowunits)
-        ))
-        .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
+        PgError::error_bytes("unit \"", lowunits, &format!("\" not supported for type {typename}"))
+            .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED),
     )
 }
 
@@ -1135,12 +1150,16 @@ fn unit_not_supported(lowunits: &[u8], typename: &str) -> Box<PgError> {
 #[cold]
 fn unit_not_recognized(lowunits: &[u8], typename: &str) -> Box<PgError> {
     Box::new(
-        PgError::error(format!(
-            "unit \"{}\" not recognized for type {typename}",
-            String::from_utf8_lossy(lowunits)
-        ))
-        .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE),
+        PgError::error_bytes("unit \"", lowunits, &format!("\" not recognized for type {typename}"))
+            .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE),
     )
+}
+
+// date.c:1271 format_type_be(DATEOID): "pg_catalog.date" when another
+// "date" type shadows it on search_path.
+#[cold]
+fn date_type_name() -> PgResult<String> {
+    format_type::format_type_be(types_core::catalog::DATEOID)
 }
 
 pub fn extract_date(units: &[u8], date: DateADT) -> PgResult<PartValue> {
@@ -1225,7 +1244,7 @@ pub fn extract_date(units: &[u8], date: DateADT) -> PgResult<PartValue> {
                 r
             }
             DTK_DOY => (date2j(year, mon, mday) - date2j(year, 1, 1) + 1) as i64,
-            _ => return Err(unit_not_supported(lowunits, "date")),
+            _ => return Err(unit_not_supported(lowunits, &date_type_name()?)),
         }
     } else if type_ == RESERV {
         match val {
@@ -1233,10 +1252,10 @@ pub fn extract_date(units: &[u8], date: DateADT) -> PgResult<PartValue> {
                 (date as i64 + POSTGRES_EPOCH_JDATE as i64 - UNIX_EPOCH_JDATE as i64)
                     * SECS_PER_DAY as i64
             }
-            _ => return Err(unit_not_supported(lowunits, "date")),
+            _ => return Err(unit_not_supported(lowunits, &date_type_name()?)),
         }
     } else {
-        return Err(unit_not_recognized(lowunits, "date"));
+        return Err(unit_not_recognized(lowunits, &date_type_name()?));
     };
 
     Ok(PartValue::Numeric(int64_to_numeric(intresult)))

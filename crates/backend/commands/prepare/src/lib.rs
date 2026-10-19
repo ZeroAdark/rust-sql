@@ -74,7 +74,27 @@ fn query_hash_table() -> PgResult<*mut HTAB> {
     info.entrysize = size_of::<PreparedStatementEntry>();
     let hashp = dynahash::hash_create("Prepared Queries", 32, &info, HASH_ELEM | HASH_STRINGS)?;
     PREPARED_QUERIES.with(|c| c.set(hashp));
+    // C never hash_destroy()s prepared_queries: the table lives in the
+    // backend's memory and dies with the process. One backend = one thread
+    // here and threads are reused (retention park), so the process-death
+    // teardown is an on_proc_exit callback (the plancache does the same for
+    // its own per-backend registry, ReleaseAllCachedPlansAtExit).
+    // installed() guard: unit-test rigs run without ipc.
+    if ipc_seams::on_proc_exit::is_installed() {
+        ipc_seams::on_proc_exit::call(destroy_prepared_queries_at_exit, 0);
+    }
     Ok(hashp)
+}
+
+/// Backend-exit teardown of prepared_queries (regression): the
+/// plancache entries go with ReleaseAllCachedPlansAtExit (registered earlier
+/// in the session, so it runs after this LIFO callback); here only the HTAB
+/// and its memory context are released, and the thread-local pointer is
+/// cleared so a retained (reused) thread's next session starts from C's
+/// `prepared_queries = NULL`.
+fn destroy_prepared_queries_at_exit(_code: i32, _arg: usize) {
+    let hashp = PREPARED_QUERIES.with(|c| c.replace(core::ptr::null_mut()));
+    dynahash::hash_destroy(hashp);
 }
 
 fn key_buf(name: &str) -> [u8; NAMEDATALEN] {

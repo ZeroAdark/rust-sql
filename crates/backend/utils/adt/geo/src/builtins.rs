@@ -50,11 +50,10 @@ unsafe fn arg_poly<'a>(fcinfo: &'a Fcinfo, i: usize) -> PgResult<PolyRef<'a>> {
     Ok(PolyRef::from_payload(unsafe { varlena_payload(fcinfo, i) }?))
 }
 
-unsafe fn arg_cstr<'a>(fcinfo: &'a Fcinfo, i: usize) -> PgResult<&'a str> {
-    fcinfo
-        .arg_cstring(i)
-        .to_str()
-        .map_err(|_| Box::new(::types_error::PgError::error("invalid UTF-8 in cstring arg")))
+// Raw server-encoding bytes: C's parsers take the cstring as-is and echo it
+// in the 22P02 message (SQL_ASCII / non-UTF-8 input).
+unsafe fn arg_cstr<'a>(fcinfo: &'a Fcinfo, i: usize) -> PgResult<&'a [u8]> {
+    Ok(fcinfo.arg_cstring(i).to_bytes())
 }
 
 // SAFETY: fcinfo.context, if set, rides per the ErrorSaveNode contract.

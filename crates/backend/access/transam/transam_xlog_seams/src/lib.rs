@@ -43,7 +43,7 @@ seam_core::seam!(
 );
 
 seam_core::seam!(
-    // GL-FLUSHPIPE-1: XLogFlush for the sync-commit durability wait —
+    // regression: XLogFlush for the sync-commit durability wait —
     // xact.c:1502's `XLogFlush(XactLastRecEnd)` call site ONLY (every
     // other flush caller uses xlog_flush above). Behaviorally identical to
     // xlog_flush unless PGRUST_FLUSH_PIPELINE is armed, in which case the

@@ -690,7 +690,7 @@ fn text_to_stavalues<'m>(
 
     if esn.ctx.error_occurred() {
         if let Some(err) = esn.ctx.take_error() {
-            warn_error_data("text_to_stavalues", err)?;
+            warn_error_data(err)?;
         }
         return Ok(None);
     }
@@ -711,7 +711,7 @@ fn text_to_stavalues<'m>(
         return Ok(None);
     }
 
-    if arrayfuncs::array_contains_nulls(&img) {
+    if arrayfuncs::array_contains_nulls(&img)? {
         warn(
             "text_to_stavalues",
             format!("\"{staname}\" array must not contain null values"),

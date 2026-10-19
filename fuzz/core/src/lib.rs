@@ -1,4 +1,4 @@
-//! Byte-level decoder fuzz drivers for pgrust-fast.
+//! Byte-level decoder fuzz drivers for pgrust.
 //!
 //! Each `fn` takes an arbitrary byte slice (from libFuzzer) and pushes it
 //! through one of pgrust's byte-level decoders. A Rust panic in any of these

@@ -1,4 +1,4 @@
--- bugs/batch-55-backend-commands-misc, fp-commands-event_trigger#1: the
+-- bugs/batch-55-backend-commands-misc, regression: the
 -- object-access hooks at event_trigger.c:340 (create), :465 (enable/disable)
 -- and :568 (owner change) fire. Witnessed via LOAD 'test_oat_hooks'; the
 -- expected file is captured from pgrust (the C install has no test modules).

@@ -13,6 +13,7 @@ mod inline_fn;
 mod retval;
 mod srf_inline;
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use datum::Datum;
@@ -194,55 +195,68 @@ fn planned_command_tag(stmt: &types_nodes::plannodes::PlannedStmt<'_>) -> types_
     }
 }
 
+// C's error_context_stack frames (sql_compile_error_callback,
+// sql_function_parse_error_callback, sql_inline_error_callback,
+// sql_exec_error_callback) run over every report while installed; here the
+// same callback decorates non-ERROR reports at emit time and serves
+// GetErrorContextStack through elog, and the Err path applies it on
+// propagation.
+pub(crate) struct ContextFrame(u64);
+
+impl ContextFrame {
+    pub(crate) fn push(callback: impl FnMut(&mut PgError) + 'static) -> ContextFrame {
+        ContextFrame(elog::push_context_frame(Box::new(callback), true))
+    }
+}
+
+impl Drop for ContextFrame {
+    fn drop(&mut self) {
+        elog::pop_emit_context_callback(self.0);
+    }
+}
+
 // sql_compile_error_callback (functions.c:1894).
-#[cold]
-pub(crate) fn startup_error_context(e: Box<PgError>, fname: &str, src: &str) -> Box<PgError> {
-    let mut err = transpose_position(*e, src);
+pub(crate) fn startup_error_callback(err: &mut PgError, fname: &str, src: &str) {
+    transpose_position(err, src);
     err.add_context_line(format!("SQL function \"{fname}\" during startup"));
-    Box::new(err)
 }
 
 // sql_function_parse_error_callback (pg_proc.c:1000): a positioned error is
 // transposed onto the original CREATE FUNCTION text (or demoted to an
 // internal-query report); only position-less errors get the context line.
-#[track_caller]
-#[cold]
-fn validator_error_context(e: Box<PgError>, fname: &str, src: &str) -> Box<PgError> {
-    let mut err = *e;
-    if !catalog_seams::function_parse_error_transpose::call(&mut err, src) {
+fn validator_error_callback(err: &mut PgError, fname: &str, src: &str) {
+    if !catalog_seams::function_parse_error_transpose::call(err, src) {
         err.add_context_line(format!("SQL function \"{fname}\""));
     }
-    Box::new(err)
 }
 
-// sql_exec_error_callback (functions.c:1928).
-#[track_caller]
-#[cold]
-fn exec_error_context(
-    e: Box<PgError>,
-    fname: &str,
-    src: &str,
-    error_query_index: usize,
-) -> Box<PgError> {
-    let mut err = transpose_position(*e, src);
-    if error_query_index > 0 {
-        err.add_context_line(format!("SQL function \"{fname}\" statement {error_query_index}"));
+// sql_exec_error_callback's arg (functions.c:1928): the function identity and
+// the statement being executed, shared with the emit-time frame.
+#[derive(Default)]
+struct ExecFrame {
+    fname: String,
+    src: String,
+    error_query_index: Cell<usize>,
+}
+
+fn exec_error_callback(err: &mut PgError, frame: &ExecFrame) {
+    transpose_position(err, &frame.src);
+    let (fname, index) = (&frame.fname, frame.error_query_index.get());
+    if index > 0 {
+        err.add_context_line(format!("SQL function \"{fname}\" statement {index}"));
     } else {
         err.add_context_line(format!("SQL function \"{fname}\" during startup"));
     }
-    Box::new(err)
 }
 
-fn transpose_position(err: PgError, src: &str) -> PgError {
+fn transpose_position(err: &mut PgError, src: &str) {
     if let Some(pos) = err.cursor_position() {
         if pos > 0 && err.internal_query().is_none() {
-            return err
-                .with_cursor_position(0)
-                .with_internal_position(pos)
-                .with_internal_query(src.to_string());
+            err.cursor_position = Some(0);
+            err.internal_position = Some(pos);
+            err.internal_query = Some(src.to_string());
         }
     }
-    err
 }
 
 // datumCopy (datum.c) for by-ref values leaving a tuplestore image.
@@ -373,7 +387,7 @@ struct SqlFcacheState<'mcx> {
     jf_generation: i32,
     cplan: CachedPlanHandle,
     next_query_index: usize,
-    error_query_index: usize,
+    frame: Rc<ExecFrame>,
     // std Vec justified: ExecState is droppy (Rc snapshot + dest receiver).
     eslist: Vec<ExecState<'mcx>>,
     lazy_eval_ok: bool,
@@ -515,7 +529,7 @@ pub fn fmgr_sql(
                     jf_generation: -1,
                     cplan: CachedPlanHandle::default(),
                     next_query_index: 0,
-                    error_query_index: 0,
+                    frame: Rc::new(ExecFrame::default()),
                     eslist: Vec::new(),
                     lazy_eval_ok: false,
                     lazy_eval: false,
@@ -564,26 +578,22 @@ pub fn fmgr_sql(
             if changed {
                 s.junk = None;
                 s.jf_generation = -1;
+                s.frame = Rc::new(e.owned.with(|es| ExecFrame {
+                    fname: es.fname.to_string(),
+                    src: es.src.to_string(),
+                    error_query_index: Cell::new(0),
+                }));
             }
             s.entry = Some(e.clone());
             e.owned.with(|es| -> PgResult<()> {
-                // Defense-in-depth: with the definition-time pseudo-type check
-                // in fmgr_sql_validator (see is_polymorphic above), a SQL
-                // function can never carry a VARIADIC "any" argument, so the
-                // declared arg count always matches the call's nargs. Should a
-                // skewed catalog (e.g. binary upgrade, direct catalog edit)
-                // still reach here, raise a catchable error rather than panic
-                // in a SQL-reachable code path (SQB-F2 / FTSRANK-X1).
-                if nargs != es.argtypes.len() {
-                    return Err(efn(
-                        types_error::ERRCODE_INTERNAL_ERROR,
-                        format!(
-                            "fmgr_sql: argument count mismatch ({} passed, {} declared)",
-                            nargs,
-                            es.argtypes.len()
-                        ),
-                    ));
-                }
+                // postquel_sub_params (functions.c:1478) binds fcinfo->nargs
+                // params: a FunctionCall3 of a one-argument cast function
+                // (ri_triggers.c:3079) passes more than the body declares,
+                // and the surplus are never referenced.
+                let declared = |i: usize| match es.argtypes.get(i) {
+                    Some(&t) => (t, es.argtyplen[i]),
+                    None => (types_core::InvalidOid, 0),
+                };
                 if s.params_buf.len() != nargs {
                     if !s.params_h.is_null() {
                         types_portal::params::free(s.params_h);
@@ -591,43 +601,38 @@ pub fn fmgr_sql(
                     }
                     s.params_buf.clear();
                     s.params_buf.try_reserve_exact(nargs.max(1)).map_err(|_| mcx.oom(nargs))?;
-                    for (i, &t) in es.argtypes.iter().enumerate() {
+                    for i in 0..nargs {
+                        let (ptype, typlen) = declared(i);
                         s.params_buf.push(ParamExternData {
-                            value: sql_fn_param_value(
-                                arg_vals[i].value,
-                                arg_vals[i].isnull,
-                                es.argtyplen[i],
-                            ),
+                            value: sql_fn_param_value(arg_vals[i].value, arg_vals[i].isnull, typlen),
                             isnull: arg_vals[i].isnull,
                             pflags: PARAM_FLAG_CONST,
-                            ptype: t,
+                            ptype,
                         });
                     }
                 } else {
                     for i in 0..nargs {
-                        s.params_buf[i].value = sql_fn_param_value(
-                            arg_vals[i].value,
-                            arg_vals[i].isnull,
-                            es.argtyplen[i],
-                        );
+                        let (ptype, typlen) = declared(i);
+                        s.params_buf[i].value =
+                            sql_fn_param_value(arg_vals[i].value, arg_vals[i].isnull, typlen);
                         s.params_buf[i].isnull = arg_vals[i].isnull;
-                        s.params_buf[i].ptype = es.argtypes[i];
+                        s.params_buf[i].ptype = ptype;
                     }
                 }
                 Ok(())
             })?;
             if !s.params_buf.is_empty() && s.params_h.is_null() {
-                // C functions.c: paramLI->paramFetch = sql_fn_param_fetch —
-                // a hooked PL-owned list (params.c BuildParamLogString bails
-                // on it; auto_explain's Query Parameters suppression).
+                // functions.c:1490 makeParamList: a plain list (paramFetch
+                // NULL, so auto_explain logs its Query Parameters), owned by
+                // the function for the engine's PL-provenance gate.
                 // SAFETY: freed in release_execution_state before the buffer
                 // is next reallocated.
-                s.params_h = unsafe { types_portal::params::register_hooked(&s.params_buf) };
+                s.params_h = unsafe { types_portal::params::register_pl_owned(&s.params_buf) };
             }
             s.lazy_eval_ok = lazy_eval_ok;
             s.lazy_eval = false;
             s.next_query_index = 0;
-            s.error_query_index = 0;
+            s.frame.error_query_index.set(0);
             Ok(())
         })?;
     }
@@ -646,6 +651,11 @@ pub fn fmgr_sql(
 
     let result_mcx = fcinfo.result_mcx();
     let guard = flinfo.fn_extra_mut::<SqlFcacheGuard>().expect("set above");
+    let frame = guard.0.with(|s| s.frame.clone());
+    let _errctx = {
+        let frame = frame.clone();
+        ContextFrame::push(move |e| exec_error_callback(e, &frame))
+    };
     let run = guard.0.with_mut_mcx(|mcx, state| {
         state.active = true;
         state.random_access = random_access;
@@ -658,10 +668,9 @@ pub fn fmgr_sql(
     });
     let outcome = match run {
         Ok(o) => o,
-        Err(e) => {
-            let (fname, src) = entry.owned.with(|es| (es.fname.to_string(), es.src.to_string()));
-            let eqi = guard.0.with(|s| s.error_query_index);
-            return Err(exec_error_context(e, &fname, &src, eqi));
+        Err(mut e) => {
+            exec_error_callback(&mut e, &frame);
+            return Err(e);
         }
     };
 
@@ -772,7 +781,7 @@ fn execute_function<'mcx>(
                 pushed_snapshot = true;
             }
 
-            let completed = postquel_getnext(mcx, state, i)?;
+            let completed = postquel_getnext(state, i)?;
 
             if completed || !facts.returns_set {
                 postquel_end(state, i)?;
@@ -917,10 +926,10 @@ fn init_execution_state<'mcx>(
         if state.next_query_index >= facts.num_queries {
             return Ok(false);
         }
-        state.error_query_index += 1;
+        state.frame.error_query_index.set(state.frame.error_query_index.get() + 1);
         cache::prepare_next_query(entry)?;
     } else {
-        state.error_query_index += 1;
+        state.frame.error_query_index.set(state.frame.error_query_index.get() + 1);
     }
     let psrc = cache::query_plansource(entry, state.next_query_index);
     state.next_query_index += 1;
@@ -1179,7 +1188,6 @@ fn postquel_start<'mcx>(
 
 // postquel_getnext (functions.c:1399).
 fn postquel_getnext<'mcx>(
-    mcx: Mcx<'mcx>,
     state: &mut SqlFcacheState<'mcx>,
     i: usize,
 ) -> PgResult<bool> {
@@ -1187,21 +1195,21 @@ fn postquel_getnext<'mcx>(
     let stmt = &stmt_list[state.eslist[i].stmt_idx];
     if stmt.commandType == CmdType::CMD_UTILITY {
         let query_string = current_query_string(state);
-        let mut qc = types_portal::QueryCompletion::default();
-        cmdtag::InitializeQueryCompletion(&mut qc);
         let params_h = state.params_h;
-        let es = &mut state.eslist[i];
-        let dest = es.dest.as_mut().expect("started es has a dest");
+        // functions.c:1314: a utility statement runs in its own subcontext,
+        // deleted at postquel_end; the executor path makes its own.
+        let subcontext = MemoryContext::new("SQL function execution");
+        let mut dest = tcop_dest::CreateDestReceiver(CommandDest::None);
         utility_seams::process_utility::call(
-            mcx,
+            subcontext.mcx(),
             stmt,
             query_string,
             true,
             utility_seams::ProcessUtilityContext::PROCESS_UTILITY_QUERY,
             params_h,
             QueryEnvHandle::NULL,
-            dest,
-            Some(&mut qc),
+            &mut dest,
+            None,
         )?;
         return Ok(true);
     }
@@ -1349,6 +1357,10 @@ fn fc_fmgr_sql_validator(
     }
 
     if guc_tables::vars::check_function_bodies.read() {
+        let _errctx = {
+            let (fname, src) = (proname.as_str().to_string(), prosrc.as_str().to_string());
+            ContextFrame::push(move |e| validator_error_callback(e, &fname, &src))
+        };
         let r = (|| -> PgResult<()> {
             let rettupdesc = if is_polymorphic(rettype) || haspolyarg {
                 None
@@ -1406,6 +1418,7 @@ fn fc_fmgr_sql_validator(
                     &name_refs,
                     types_core::InvalidOid,
                     QueryEnvHandle::NULL,
+                    true,
                 )?;
                 cache::usage_show("PARSE ANALYSIS STATISTICS")?;
                 lists.push(cache::pg_rewrite_query(mcx, query)?);
@@ -1431,7 +1444,10 @@ fn fc_fmgr_sql_validator(
             }
             Ok(())
         })();
-        r.map_err(|e| validator_error_context(e, proname.as_str(), prosrc.as_str()))?;
+        r.map_err(|mut e| {
+            validator_error_callback(&mut e, proname.as_str(), prosrc.as_str());
+            e
+        })?;
     }
     Ok(Datum::null())
 }

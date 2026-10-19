@@ -9,6 +9,7 @@ name = "slot"
 path = "src/lib.rs"
 
 [dependencies]
+shmem_seams = { path = "../../storage/ipc/shmem_seams" }
 injection_point = { path = "../../utils/misc/injection_point" }
 datum = { path = "../../../_support/types/datum" }
 types_core = { path = "../../../_support/types/types_core" }
@@ -57,7 +58,6 @@ deadlock_seams = { path = "../../storage/lmgr/deadlock_seams" }
 pmsignal_seams = { path = "../../storage/ipc/pmsignal_seams" }
 lock_seams = { path = "../../storage/lmgr/lock_seams" }
 timeout_seams = { path = "../../utils/misc/timeout_seams" }
-shmem_seams = { path = "../../storage/ipc/shmem_seams" }
 condition_variable_seams = { path = "../../storage/lmgr/condition_variable_seams" }
 autovacuum_seams = { path = "../../postmaster/autovacuum_seams" }
 xact_seams = { path = "../../access/transam/xact_seams" }

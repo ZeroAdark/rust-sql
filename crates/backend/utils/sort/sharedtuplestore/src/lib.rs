@@ -1,19 +1,22 @@
 // sharedtuplestore.c, thread-native: multiple participants write, then all
 // scan a page-chunked union of the files. The shared control block is an
-// Arc'd struct (C: shm following ParallelHashJoinBatch); the per-participant
-// LWLock is a Mutex. File sharing rides fd's FileSet (participants open each
+// Arc'd struct (C: shm following ParallelHashJoinBatch) carrying C's
+// per-participant LWLock. File sharing rides fd's FileSet (participants open each
 // other's files by name; VFD tables are thread-local, so every accessor holds
 // its own handles).
 #![allow(non_snake_case)]
 
+use core::cell::UnsafeCell;
 use core::ptr::NonNull;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use ::elog::ereport;
 use ::fd::fileset::FileSet;
 use ::fd::BufFile;
+use ::lwlock::{LWLock, LWLockAcquire, LWLockPadded, LWLockRelease, LW_EXCLUSIVE};
 use ::mcx::{Mcx, PgVec};
 use ::types_error::{ErrorLocation, PgError, PgResult, ERROR};
+use ::types_storage::LWTRANCHE_SHARED_TUPLESTORE;
 use ::types_tuple::MinimalTupleData;
 
 pub fn init_seams() {}
@@ -39,18 +42,27 @@ fn loc(funcname: &'static str) -> ErrorLocation {
     ErrorLocation::new(site.file(), site.line() as i32, funcname)
 }
 
-struct StsParticipant {
+struct StsParticipantState {
     read_page: u32,
     npages: u32,
     writing: bool,
 }
+
+struct StsParticipant {
+    lock: LWLockPadded,
+    state: UnsafeCell<StsParticipantState>,
+}
+
+// SAFETY: scanners mutate `state` only under `lock`; the owning writer's
+// npages/writing stores happen before any scan, as in C.
+unsafe impl Sync for StsParticipant {}
 
 /// The shared control object (C `SharedTuplestore`).
 pub struct SharedTuplestore {
     nparticipants: i32,
     meta_data_size: usize,
     name: String,
-    participants: Box<[Mutex<StsParticipant>]>,
+    participants: Box<[StsParticipant]>,
 }
 
 impl SharedTuplestore {
@@ -70,16 +82,30 @@ impl SharedTuplestore {
             meta_data_size,
             name: name.to_string(),
             participants: (0..nparticipants.max(0))
-                .map(|_| Mutex::new(StsParticipant { read_page: 0, npages: 0, writing: false }))
+                .map(|_| StsParticipant {
+                    lock: LWLockPadded::new_unlocked(LWTRANCHE_SHARED_TUPLESTORE),
+                    state: UnsafeCell::new(StsParticipantState {
+                        read_page: 0,
+                        npages: 0,
+                        writing: false,
+                    }),
+                })
                 .collect(),
         })
+    }
+
+    /// C `&sts->participants[i].lock` (tranche SharedTupleStore).
+    pub fn participant_lock(&self, i: i32) -> &LWLock {
+        &self.participants[i as usize].lock.lock
     }
 
     /// `sts_reinitialize`: reset every participant's shared read head. Only
     /// one participant may call this, not concurrently with a scan.
     pub fn reinitialize(&self) {
         for p in self.participants.iter() {
-            p.lock().unwrap_or_else(|e| e.into_inner()).read_page = 0;
+            // SAFETY: caller contract above (no concurrent scan), as C's
+            // unlocked store.
+            unsafe { (*p.state.get()).read_page = 0 };
         }
     }
 }
@@ -136,11 +162,9 @@ impl<'mcx> SharedTuplestoreAccessor<'mcx> {
         }
     }
 
-    fn participant_mut(
-        &self,
-        i: i32,
-    ) -> std::sync::MutexGuard<'_, StsParticipant> {
-        self.sts.participants[i as usize].lock().unwrap_or_else(|e| e.into_inner())
+    // C stores to the accessor's own participant slot outside the lock.
+    unsafe fn participant_mut(&self, i: i32) -> &mut StsParticipantState {
+        &mut *self.sts.participants[i as usize].state.get()
     }
 
     // `sts_flush_chunk`.
@@ -152,7 +176,8 @@ impl<'mcx> SharedTuplestoreAccessor<'mcx> {
             .write(&chunk[..])?;
         chunk.fill(0);
         self.write_pointer = STS_CHUNK_HEADER_SIZE;
-        self.participant_mut(self.participant).npages += STS_CHUNK_PAGES;
+        // SAFETY: own slot, before any scan (C sts_flush_chunk).
+        unsafe { self.participant_mut(self.participant).npages += STS_CHUNK_PAGES };
         Ok(())
     }
 
@@ -162,7 +187,8 @@ impl<'mcx> SharedTuplestoreAccessor<'mcx> {
             self.flush_chunk()?;
             self.write_file.take().expect("just checked").close()?;
             self.write_chunk = None;
-            self.participant_mut(self.participant).writing = false;
+            // SAFETY: own slot, before any scan (C sts_end_write).
+            unsafe { self.participant_mut(self.participant).writing = false };
         }
         Ok(())
     }
@@ -172,7 +198,8 @@ impl<'mcx> SharedTuplestoreAccessor<'mcx> {
         self.end_parallel_scan()?;
         #[cfg(debug_assertions)]
         for p in self.sts.participants.iter() {
-            debug_assert!(!p.lock().unwrap_or_else(|e| e.into_inner()).writing);
+            // SAFETY: every writer finished (C's assertion-only read).
+            debug_assert!(!unsafe { (*p.state.get()).writing });
         }
         // Start with this participant's own file (cache locality, as C).
         self.read_participant = self.participant;
@@ -197,9 +224,11 @@ impl<'mcx> SharedTuplestoreAccessor<'mcx> {
         if self.write_file.is_none() {
             let name = sts_filename(&self.sts.name, self.participant);
             self.write_file = Some(::fd::BufFileCreateFileSet(self.mcx, &self.fileset, &name)?);
-            self.participant_mut(self.participant).writing = true;
+            // SAFETY: own slot, before any scan (C sts_begin_write, assertions only).
+            unsafe { self.participant_mut(self.participant).writing = true };
         }
-        if self.write_chunk.is_none() {
+        let fresh_chunk = self.write_chunk.is_none();
+        if fresh_chunk {
             let mut chunk: PgVec<'mcx, u8> = ::mcx::vec_with_capacity_in(self.mcx, STS_CHUNK_SIZE)?;
             chunk.resize(STS_CHUNK_SIZE, 0);
             self.write_chunk = Some(chunk);
@@ -209,8 +238,11 @@ impl<'mcx> SharedTuplestoreAccessor<'mcx> {
         let mut size = self.sts.meta_data_size + tuple.len();
         if self.write_pointer + size > STS_CHUNK_SIZE {
             // Flush and retry; a gigantic tuple then spills into overflow
-            // chunks, meta + leading bytes first (C's layout exactly).
-            self.flush_chunk()?;
+            // chunks, meta + leading bytes first (C's layout exactly). A
+            // just-allocated chunk is empty: C only flushes an existing one.
+            if !fresh_chunk {
+                self.flush_chunk()?;
+            }
             if self.write_pointer + size > STS_CHUNK_SIZE {
                 let meta_size = self.sts.meta_data_size;
                 debug_assert!(
@@ -332,22 +364,25 @@ impl<'mcx> SharedTuplestoreAccessor<'mcx> {
             }
 
             let (eof, read_page) = {
-                let mut p = self.sts.participants[self.read_participant as usize]
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let slot = &self.sts.participants[self.read_participant as usize];
+                LWLockAcquire(&slot.lock.lock, LW_EXCLUSIVE, init_small::globals::MyProcNumber())?;
+                // SAFETY: exclusive under the participant's lock.
+                let p = unsafe { &mut *slot.state.get() };
                 // Skip directly past overflow pages we know about.
                 if p.read_page < self.read_next_page {
                     p.read_page = self.read_next_page;
                 }
                 let eof = p.read_page >= p.npages;
-                if !eof {
+                let claimed = if !eof {
                     let page = p.read_page;
                     p.read_page += STS_CHUNK_PAGES;
                     self.read_next_page = p.read_page;
                     (false, page)
                 } else {
                     (true, 0)
-                }
+                };
+                LWLockRelease(&slot.lock.lock)?;
+                claimed
             };
 
             if !eof {

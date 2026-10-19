@@ -6,6 +6,7 @@
 
 mod builder;
 pub mod config;
+pub mod crit;
 pub mod errno;
 mod errposition;
 mod policy;
@@ -16,6 +17,7 @@ mod syslog;
 
 pub use ::types_error::{ErrorLevel, PgError, PgResult, SoftErrorContext, SqlState};
 pub use builder::{elog, ereport, ErrorBuilder};
+pub use crit::CritSection;
 pub use config::{
     assign_backtrace_functions, assign_log_destination, assign_syslog_facility,
     assign_syslog_ident, check_backtrace_functions, check_log_destination,
@@ -48,7 +50,7 @@ pub use stack::{
     errhint_plural, errmsg, errmsg_internal, errmsg_plural, error_stack_clean, errposition,
     errsave_finish, errsave_start, errstart, errstart_cold, geterrcode, geterrposition,
     getinternalerrposition, in_error_recursion_trouble, internalerrposition, internalerrquery,
-    panic_on_crit_section_escape, pg_re_throw, pop_emit_context_callback,
+    panic_on_crit_section_escape, pg_re_throw, pop_emit_context_callback, push_context_frame,
     push_emit_context_callback, reset_statement_suppressed, set_errcontext_domain,
     suppress_statement, CopyErrorData, EmitErrorReport, FlushErrorState, FreeErrorData,
     GetErrorContextStack, ReThrowError, ThrowErrorData, ERRORDATA_STACK_SIZE,

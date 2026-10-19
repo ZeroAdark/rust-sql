@@ -283,3 +283,20 @@ fn xml_error_handler_accepts_memory_and_io_domains_when_wellformed() {
     }
     set_strictness_for_test(0);
 }
+
+// regression: xml.c:410 hands the declaration's encoding name bytes to
+// pg_char_to_encoding, whose clean_encoding_name drops every non-alnum byte;
+// the name is never UTF-8-validated (or lossily re-encoded) first.
+#[test]
+fn xml_char_to_encoding_takes_raw_name_bytes() {
+    const PG_UTF8: i32 = 6;
+    let mut name = b"UTF8".to_vec();
+    name.extend_from_slice(&[0xff; 30]);
+    assert_eq!(xmlChar_to_encoding(&name).unwrap(), PG_UTF8);
+    assert_eq!(xmlChar_to_encoding(b"utf-8").unwrap(), PG_UTF8);
+    let e = xmlChar_to_encoding(b"bogus").unwrap_err();
+    assert_eq!(e.message(), "invalid encoding name \"bogus\"");
+    assert_eq!(e.sqlstate(), ::types_error::ERRCODE_INVALID_PARAMETER_VALUE);
+    let e = xmlChar_to_encoding(b"bo\xffgus").unwrap_err();
+    assert_eq!(e.message_raw.as_deref(), Some(&b"invalid encoding name \"bo\xffgus\""[..]));
+}

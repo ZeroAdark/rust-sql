@@ -649,7 +649,7 @@ pub fn do_autovacuum() -> PgResult<()> {
                 if std::env::var("PGRUST_TEST_AUTOVAC_PANIC_TABLE").as_deref() == Ok(relname.as_str()) {
                     panic!("injected autovacuum panic for containment test: {relname}");
                 }
-                autovacuum_do_vac_analyze(tmcx, &tab, bstrategy.clone())
+                autovacuum_do_vac_analyze(tmcx, &tab, bstrategy.clone(), &nspname, &relname)
             }))
             .unwrap_or_else(|payload| Err(Box::new(pg_error_from_panic(payload, "autovacuum worker panicked"))));
             match vac_result {
@@ -766,13 +766,28 @@ fn autovacuum_do_vac_analyze(
     mcx: Mcx<'_>,
     tab: &AutovacTable,
     bstrategy: BufferAccessStrategy,
+    nspname: &str,
+    relname: &str,
 ) -> PgResult<()> {
+    // autovacuum.c: makeRangeVar(nspname, relname, -1) rides along so a
+    // skipped relation is named in the log (vacuum.c:838).
+    let mut rangevar = Node::build::<types_nodes::primnodes::RangeVar>(mcx)?;
+    rangevar.schemaname = Some(arena_str(mcx, nspname)?);
+    rangevar.relname = Some(arena_str(mcx, relname)?);
+    rangevar.inh = true;
+    rangevar.relpersistence = types_core::RELPERSISTENCE_PERMANENT;
+    rangevar.location = -1;
     let mut n = Node::build::<VacuumRelation>(mcx)?;
-    n.relation = None;
+    n.relation = Some(rangevar.seal());
     n.oid = tab.at_relid;
     let rel = n.seal();
     let rel_list = NodeList::make1(mcx, rel)?;
     commands_vacuum::vacuum(mcx, &rel_list, &tab.at_params, bstrategy, true)
+}
+
+fn arena_str<'mcx>(mcx: Mcx<'mcx>, s: &str) -> PgResult<&'mcx str> {
+    let bytes = mcx::PgString::from_str_in(s, mcx)?.into_bytes().leak();
+    Ok(core::str::from_utf8(bytes).expect("copied from a str"))
 }
 
 const MAX_AUTOVAC_ACTIV_LEN: usize = 64 * 2 + 56;

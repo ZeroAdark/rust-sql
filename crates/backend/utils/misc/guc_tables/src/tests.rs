@@ -39,10 +39,10 @@ fn table_counts_match_compiled_backend_shape() {
     //     runtime_sort_pool / runtime_bitmap_pool / lane_parallel_pool /
     //     gather_fair_stride -> 154 + 8 = 162.
     //   Total 435 + 10 = 445.
-    //   GL-M41-3 flip: + pgrust.runtime_vacuum_pool (Bool 131 -> 132) = 446.
-    // GL-STRDEFECTS-1: + pgrust.regex_re2_linked (pgrust-only preset, the
+    //   regression flip: + pgrust.runtime_vacuum_pool (Bool 131 -> 132) = 446.
+    // regression: + pgrust.regex_re2_linked (pgrust-only preset, the
     //   RE2-linkage runtime witness; Bool 132 -> 133) = 447.
-    // GL-MEMWATCH-1 (pgrust-only, composed at t43): the memory-watchdog
+    // regression (pgrust-only, composed at t43): the memory-watchdog
     //   family — Bool +2 (pgrust.memory_watchdog, pgrust.memory_watchdog_dump
     //   -> 135), Int +4 (pgrust.memory_watchdog_interval / _threshold /
     //   _limit, plus the hidden developer hog pgrust.memory_watchdog_test_hog
@@ -443,7 +443,7 @@ fn pg_prewarm_autoprewarm_interval_matches_autoprewarm_c() {
 // pgrust knew no such GUC (42704 on SHOW under shared_preload_libraries).
 // contrib/isn/isn.c:939 _PG_init DefineCustomBoolVariable "isn.weak" —
 // PGC_USERSET, default false, no hooks. bug-inventory 2026-09-13 batch-46
-// (fp-contrib-isn-isn#1): pgrust kept it as an unchecked string placeholder,
+// (regression): pgrust kept it as an unchecked string placeholder,
 // so SET isn.weak = 'garbage' succeeded instead of raising 22023.
 #[test]
 fn isn_weak_matches_isn_c() {
@@ -536,4 +536,14 @@ fn passwordcheck_min_password_length_matches_passwordcheck_c() {
     assert_eq!(len.boot_val, GucDefaultValue::Int(8));
     assert_eq!(len.min, 0);
     assert_eq!(len.max, i32::MAX);
+}
+
+#[test]
+fn writeback_flush_after_defaults_follow_sync_file_range() {
+    let linux = cfg!(target_os = "linux");
+    for (name, on_linux) in [("bgwriter_flush_after", 64), ("checkpoint_flush_after", 32), ("backend_flush_after", 0)] {
+        let GucSetting::Int(g) = find(name) else { panic!("{name} should be an int GUC") };
+        assert_eq!(g.boot_val, GucDefaultValue::Int(if linux { on_linux } else { 0 }), "{name}");
+        assert_eq!(g.max, consts::WRITEBACK_MAX_PENDING_FLUSHES, "{name}");
+    }
 }

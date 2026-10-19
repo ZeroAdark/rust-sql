@@ -113,6 +113,26 @@ impl<'mcx> TsParseEnv<'mcx> for MockEnv<'mcx> {
             }
             D_THES => {
                 // two-word phrase "new york" -> "nyc"; getnext protocol.
+                // "ta" -> "y" and phrase "ta tag tb tc" -> "x"; "tag" also
+                // opens the phrase "tag tz" (thesaurus_sample-style).
+                if t == "ta" {
+                    self.thes_seen = vec![t];
+                    state.getnext = true;
+                    return Ok(Some(self.lex("y")));
+                }
+                if t == "tag" {
+                    if self.thes_seen != ["ta"] {
+                        self.thes_seen.clear();
+                    }
+                    self.thes_seen.push(t);
+                    state.getnext = true;
+                    return Ok(None);
+                }
+                if t == "tb" && self.thes_seen == ["ta", "tag"] {
+                    self.thes_seen.push(t);
+                    state.getnext = true;
+                    return Ok(None);
+                }
                 if state.isend && !self.thes_seen.is_empty() {
                     let phrase = self.thes_seen.join(" ");
                     self.thes_seen.clear();
@@ -293,6 +313,21 @@ fn lexize_queue_drains_consumed_tokens() {
 // tokens retire (ts_parse.c:250-280); queue compaction must not underflow the
 // retired lastRes, and the next failed attempt consumes the stale result as
 // C does.
+// moveToWaste (ts_parse.c:146): a lastRes retired by the dictionary-mismatch
+// fallback -- here the token right before the head -- matches no live node,
+// so the whole towork list drains: C keeps 'ta' and the stale 'y' only.
+#[test]
+fn stale_thesaurus_result_drains_queue_even_when_retired_just_before_head() {
+    let ctx = MemoryContext::new("ts-parse-test");
+    let prs = run(
+        ctx.mcx(),
+        "ta tag tb 123",
+        vec![(1, "ta"), (1, "tag"), (1, "tb"), (3, "123")],
+        vec![D_THES, D_STEM],
+    );
+    assert_eq!(words(&prs), vec![("ta".into(), 1), ("y".into(), 2)]);
+}
+
 #[test]
 fn stale_thesaurus_result_survives_queue_compaction() {
     let ctx = MemoryContext::new("ts-parse-test");

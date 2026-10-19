@@ -291,37 +291,35 @@ pub fn OpenPipeStream(command: &str, mode: &str) -> PgResult<i32> {
 pub fn PipeStreamGets(index: i32, buf: &mut [u8]) -> Result<usize, i32> {
     use std::io::Read;
 
-    with_fd(|fd| {
-        let Some(Some(desc)) = fd.allocated_descs.get_mut(index as usize) else {
-            return Err(libc::EBADF);
-        };
-        let AllocatedHandle::Pipe(pipe) = &mut desc.desc else {
-            return Err(libc::EBADF);
-        };
-        let Some(out) = pipe.stdout.as_mut() else {
-            return Err(libc::EBADF);
-        };
-        let mut n = 0usize;
-        while n + 1 < buf.len() {
-            let mut byte = [0u8; 1];
+    let raw = with_pipe(index, |p| p.stdout.as_ref().map(pipe_raw_fd).ok_or(libc::EBADF))?;
+    let mut n = 0usize;
+    while n + 1 < buf.len() {
+        let mut byte = [0u8; 1];
+        wait_pipe(raw, PIPE_READABLE);
+        let got = with_pipe(index, |p| {
+            let out = p.stdout.as_mut().ok_or(libc::EBADF)?;
             match out.read(&mut byte) {
-                Ok(0) => break,
-                Ok(_) => {
-                    buf[n] = byte[0];
-                    n += 1;
-                    if byte[0] == b'\n' {
-                        break;
-                    }
+                Ok(k) => Ok(Some(k)),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => Ok(None),
+                Err(e) => Err(e.raw_os_error().unwrap_or(libc::EIO)),
+            }
+        })?;
+        match got {
+            None => continue,
+            Some(0) => break,
+            Some(_) => {
+                buf[n] = byte[0];
+                n += 1;
+                if byte[0] == b'\n' {
+                    break;
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e.raw_os_error().unwrap_or(libc::EIO)),
             }
         }
-        if n < buf.len() {
-            buf[n] = 0;
-        }
-        Ok(n)
-    })
+    }
+    if n < buf.len() {
+        buf[n] = 0;
+    }
+    Ok(n)
 }
 
 // fread(buf, 1, buf.len(), fh) over an OpenPipeStream "r" handle: greedy
@@ -330,27 +328,25 @@ pub fn PipeStreamGets(index: i32, buf: &mut [u8]) -> Result<usize, i32> {
 pub fn PipeStreamRead(index: i32, buf: &mut [u8]) -> Result<usize, i32> {
     use std::io::Read;
 
-    with_fd(|fd| {
-        let Some(Some(desc)) = fd.allocated_descs.get_mut(index as usize) else {
-            return Err(libc::EBADF);
-        };
-        let AllocatedHandle::Pipe(pipe) = &mut desc.desc else {
-            return Err(libc::EBADF);
-        };
-        let Some(out) = pipe.stdout.as_mut() else {
-            return Err(libc::EBADF);
-        };
-        let mut filled = 0usize;
-        while filled < buf.len() {
+    let raw = with_pipe(index, |p| p.stdout.as_ref().map(pipe_raw_fd).ok_or(libc::EBADF))?;
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        wait_pipe(raw, PIPE_READABLE);
+        let got = with_pipe(index, |p| {
+            let out = p.stdout.as_mut().ok_or(libc::EBADF)?;
             match out.read(&mut buf[filled..]) {
-                Ok(0) => break,
-                Ok(n) => filled += n,
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e.raw_os_error().unwrap_or(libc::EIO)),
+                Ok(k) => Ok(Some(k)),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => Ok(None),
+                Err(e) => Err(e.raw_os_error().unwrap_or(libc::EIO)),
             }
+        })?;
+        match got {
+            None => continue,
+            Some(0) => break,
+            Some(k) => filled += k,
         }
-        Ok(filled)
-    })
+    }
+    Ok(filled)
 }
 
 // fwrite over an OpenPipeStream "w" handle. Err(errno) is C's
@@ -359,6 +355,26 @@ pub fn PipeStreamRead(index: i32, buf: &mut [u8]) -> Result<usize, i32> {
 pub fn PipeStreamWrite(index: i32, buf: &[u8]) -> Result<(), i32> {
     use std::io::Write;
 
+    let raw = with_pipe(index, |p| p.stdin.as_ref().map(pipe_raw_fd).ok_or(libc::EBADF))?;
+    let mut at = 0;
+    while at < buf.len() {
+        wait_pipe(raw, PIPE_WRITABLE);
+        let end = buf.len().min(at + PIPE_WRITE_CHUNK);
+        let wrote = with_pipe(index, |p| {
+            let child_stdin = p.stdin.as_mut().ok_or(libc::EBADF)?;
+            match child_stdin.write(&buf[at..end]) {
+                Ok(0) => Err(libc::EIO),
+                Ok(k) => Ok(k),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => Ok(0),
+                Err(e) => Err(e.raw_os_error().unwrap_or(libc::EIO)),
+            }
+        })?;
+        at += wrote;
+    }
+    Ok(())
+}
+
+fn with_pipe<R>(index: i32, f: impl FnOnce(&mut PipeHandle) -> Result<R, i32>) -> Result<R, i32> {
     with_fd(|fd| {
         let Some(Some(desc)) = fd.allocated_descs.get_mut(index as usize) else {
             return Err(libc::EBADF);
@@ -366,13 +382,56 @@ pub fn PipeStreamWrite(index: i32, buf: &[u8]) -> Result<(), i32> {
         let AllocatedHandle::Pipe(pipe) = &mut desc.desc else {
             return Err(libc::EBADF);
         };
-        let Some(child_stdin) = pipe.stdin.as_mut() else {
-            return Err(libc::EBADF);
-        };
-        // write_all retries ErrorKind::Interrupted internally.
-        child_stdin.write_all(buf).map_err(|e| e.raw_os_error().unwrap_or(libc::EIO))
+        f(pipe)
     })
 }
+
+// C's SIGALRM interrupts a fread/fwrite blocked on the program's pipe and
+// StatementTimeoutHandler's group SIGINT kills the program. Here the timer
+// thread only posts the alarm, so a pipe wait runs the timeout handlers
+// between bounded polls (outside the fd borrow); the handler's thread signal
+// reaches the program through procsignal's group fan-out and the I/O call
+// then sees EOF or EPIPE.
+#[cfg(not(target_family = "wasm"))]
+const PIPE_READABLE: i16 = libc::POLLIN;
+#[cfg(not(target_family = "wasm"))]
+const PIPE_WRITABLE: i16 = libc::POLLOUT;
+#[cfg(target_family = "wasm")]
+const PIPE_READABLE: i16 = 0;
+#[cfg(target_family = "wasm")]
+const PIPE_WRITABLE: i16 = 0;
+// POLLOUT on a pipe guarantees room for PIPE_BUF bytes, so a chunk this size
+// never blocks after the wait.
+#[cfg(not(target_family = "wasm"))]
+const PIPE_WRITE_CHUNK: usize = libc::PIPE_BUF;
+#[cfg(target_family = "wasm")]
+const PIPE_WRITE_CHUNK: usize = 512;
+const PIPE_POLL_MS: i32 = 100;
+
+#[cfg(not(target_family = "wasm"))]
+fn pipe_raw_fd(end: &impl std::os::fd::AsRawFd) -> i32 {
+    end.as_raw_fd()
+}
+
+#[cfg(target_family = "wasm")]
+fn pipe_raw_fd<T>(_end: &T) -> i32 {
+    -1
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn wait_pipe(raw: i32, events: i16) {
+    loop {
+        let mut p = libc::pollfd { fd: raw, events, revents: 0 };
+        // SAFETY: poll(2) over one valid pollfd on a pipe end we own.
+        if unsafe { libc::poll(&mut p, 1, PIPE_POLL_MS) } != 0 {
+            return;
+        }
+        timeout::ProcessTimeoutInterrupt();
+    }
+}
+
+#[cfg(target_family = "wasm")]
+fn wait_pipe(_raw: i32, _events: i16) {}
 
 // C contract: pclose()'s wait status, -1 on a stream we don't track.
 pub fn ClosePipeStream(index: i32) -> PgResult<i32> {
@@ -589,7 +648,7 @@ fn popen(command: &str, mode: &str) -> Result<PipeHandle, i32> {
     #[cfg(not(target_family = "wasm"))]
     {
         use std::os::unix::process::CommandExt;
-        // SAFETY: async-signal-safe calls only (sigemptyset, pthread_sigmask,
+        // SAFETY: async-signal-safe calls only (sigemptyset, pthread_sigmask, setpgid,
         // signal), run in the child between fork and exec.
         unsafe {
             cmd.pre_exec(|| {
@@ -598,6 +657,11 @@ fn popen(command: &str, mode: &str) -> Result<PipeHandle, i32> {
                 libc::pthread_sigmask(libc::SIG_SETMASK, &set, std::ptr::null_mut());
                 libc::signal(libc::SIGALRM, libc::SIG_DFL);
                 libc::signal(libc::SIGUSR2, libc::SIG_IGN);
+                // C's program shares the backend's process group, which
+                // kill(-backend, sig) reaches whole; here the shell leads
+                // its own group so the fan-out's kill(-child) reaches the
+                // program the shell runs, not just the shell.
+                libc::setpgid(0, 0);
                 Ok(())
             });
         }

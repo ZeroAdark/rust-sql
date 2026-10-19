@@ -308,9 +308,14 @@ fn shmem_exit_internal(code: i32) {
 // already-decremented callbacks before unwinding with code 1.
 #[cold]
 fn rethrow_callback_error(e: PgError) {
-    let _ = elog::ThrowErrorData(e);
-    // Outside proc_exit ThrowErrorData returns the ERROR (C longjmps).
-    panic!("shmem_exit callback failed outside proc_exit");
+    // Outside proc_exit ThrowErrorData returns the ERROR unreported; C has no
+    // exception stack here, so errstart (elog.c:377) makes it a FATAL report.
+    let Err(mut e) = elog::ThrowErrorData(e) else {
+        panic!("shmem_exit callback failed outside proc_exit");
+    };
+    e.level = FATAL;
+    elog::emit_error_report_for(&e);
+    panic!("shmem_exit callback failed outside proc_exit: {}", e.message());
 }
 
 #[cold]

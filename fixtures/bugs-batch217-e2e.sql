@@ -1,0 +1,79 @@
+-- bugs/batch-217-mixed-reaudit: C-vs-pgrust parity for the executor /
+-- detoast / selfuncs fixes. Expected file captured from C 18.6
+-- (scripts/regress-diff.sh --capture).
+\set VERBOSITY verbose
+
+-- regression: a compressed varlena header declaring VARSIZE < 8 (or
+-- a 4B-U header declaring VARSIZE < 4) reaching detoast raises XX001, never
+-- an index-out-of-bounds panic.
+CREATE EXTENSION pageinspect;
+CREATE TABLE b217_detoast(a text);
+SELECT tuple_data_split('b217_detoast'::regclass, '\x160000000000000000'::bytea, 0, 1, NULL, true);
+SELECT tuple_data_split('b217_detoast'::regclass, '\x011264000000000000000000000000000000'::bytea, 0, 1, NULL, true);
+SELECT tuple_data_split('b217_detoast'::regclass, '\x08000000'::bytea, 0, 1, NULL, true);
+
+-- regression: a btree opfamily with no BTORDER_PROC reached by
+-- a row comparison is a catchable XX000 (execExpr.c:2108), not a panic.
+CREATE FUNCTION b217_lt(int, int) RETURNS bool LANGUAGE sql IMMUTABLE AS 'select $1 < $2';
+CREATE OPERATOR <<< (leftarg = int, rightarg = int, function = b217_lt);
+CREATE OPERATOR CLASS b217_int_ops FOR TYPE int USING btree AS OPERATOR 1 <<<;
+CREATE TABLE b217_rc(a int, b int);
+INSERT INTO b217_rc VALUES (1,2);
+DO $$
+BEGIN
+  PERFORM * FROM b217_rc WHERE ROW(a, b) <<< ROW(2, 3);
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE '% %', SQLSTATE, regexp_replace(SQLERRM, 'opfamily \d+', 'opfamily N');
+END $$;
+SELECT 1 AS session_alive;
+
+-- regression: FieldStore re-reads the composite's tupdesc
+-- on every eval (get_cached_rowtype); a type widened since the ExprState was
+-- built raises "too many columns in composite type".
+CREATE TYPE b217_inner AS (x int, y int);
+CREATE TYPE b217_outer AS (a b217_inner);
+CREATE FUNCTION b217_fs(p b217_outer) RETURNS b217_outer LANGUAGE plpgsql AS $$ BEGIN p.a.x := 1; RETURN p; END $$;
+BEGIN;
+SELECT b217_fs(ROW(ROW(0,0)::b217_inner)::b217_outer);
+ALTER TYPE b217_inner ADD ATTRIBUTE z int;
+DO $$
+BEGIN
+  PERFORM b217_fs(ROW(ROW(0,0,5)::b217_inner)::b217_outer);
+  RAISE NOTICE 'no error';
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE '% %', SQLSTATE, regexp_replace(SQLERRM, 'type \d+', 'type N');
+END $$;
+ROLLBACK;
+
+-- regression: a SetOp child whose params changed is rescanned
+-- lazily at its next pull (nodeSetOp.c:742-745); an inner arm never pulled
+-- (empty outer arm) never evaluates its LIMIT expression.
+CREATE TABLE b217_o(x int);
+INSERT INTO b217_o VALUES (1),(0);
+CREATE TABLE b217_t1(a int);
+INSERT INTO b217_t1 VALUES (1);
+CREATE TABLE b217_t2(b int);
+INSERT INTO b217_t2 VALUES (2);
+SELECT o.x, (SELECT count(*) FROM (SELECT a FROM b217_t1 WHERE a = o.x EXCEPT (SELECT b FROM b217_t2 LIMIT 1/o.x)) s) AS n FROM b217_o o ORDER BY x DESC;
+SET enable_hashagg = off;
+SELECT o.x, (SELECT count(*) FROM (SELECT a FROM b217_t1 WHERE a = o.x EXCEPT (SELECT b FROM b217_t2 LIMIT 1/o.x)) s) AS n FROM b217_o o ORDER BY x DESC;
+SELECT o.x, (SELECT count(*) FROM (SELECT a FROM b217_t1 WHERE a = o.x INTERSECT (SELECT b FROM b217_t2 LIMIT 1/o.x)) s) AS n FROM b217_o o ORDER BY x DESC;
+RESET enable_hashagg;
+
+-- regression: generic_restriction_selectivity runs the leakproof
+-- check in both mcv_selectivity and histogram_selectivity, so the DEBUG2
+-- line is emitted twice per estimate.
+CREATE TABLE b217_jt(j jsonb);
+INSERT INTO b217_jt SELECT jsonb_build_object('a', g) FROM generate_series(1,1000) g;
+ANALYZE b217_jt;
+ALTER TABLE b217_jt ENABLE ROW LEVEL SECURITY;
+CREATE POLICY b217_p ON b217_jt FOR SELECT USING (true);
+CREATE ROLE b217_app;
+GRANT SELECT ON b217_jt TO b217_app;
+SET ROLE b217_app;
+SET client_min_messages = debug2;
+EXPLAIN (COSTS OFF) SELECT * FROM b217_jt WHERE j @> '{"a": 1}';
+RESET client_min_messages;
+RESET ROLE;
+DROP OWNED BY b217_app;
+DROP ROLE b217_app;

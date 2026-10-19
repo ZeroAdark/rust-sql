@@ -1,0 +1,85 @@
+-- Two-binary differential corpus for the 2026-09-13 bug-inventory batch
+-- batch-87-backend-access-nbtree (C 18.6 oracle vs pgrust). Each leg is one
+-- row of the batch (scripts/access-nbtree-b87-e2e.sh).
+\set VERBOSITY verbose
+CREATE DATABASE b87e2e TEMPLATE template0 ENCODING 'UTF8';
+\c b87e2e
+\set VERBOSITY verbose
+CREATE EXTENSION pageinspect;
+-- regression / nbtdedup#1 / nbtsplitloc#1: _bt_keep_natts_fast
+-- compares detoasted payloads (datum.c:303-324), so a pglz-compressed and an
+-- uncompressed image of one value deduplicate into one posting tuple.
+CREATE TABLE b87_t (v text);
+ALTER TABLE b87_t ALTER COLUMN v SET STORAGE EXTENDED;
+INSERT INTO b87_t SELECT repeat('abcdef', 400) FROM generate_series(1, 5);
+ALTER TABLE b87_t ALTER COLUMN v SET STORAGE EXTERNAL;
+INSERT INTO b87_t SELECT repeat('abcdef', 400) FROM generate_series(1, 5);
+SELECT pg_column_compression(v) IS NOT NULL AS compressed, count(*) FROM b87_t GROUP BY 1 ORDER BY 1;
+ compressed | count 
+------------+-------
+ f          |     5
+ t          |     5
+(2 rows)
+
+CREATE INDEX b87_i ON b87_t (v);
+SELECT itemoffset, itemlen, tids FROM bt_page_items('b87_i', 1);
+ itemoffset | itemlen |                                        tids                                        
+------------+---------+------------------------------------------------------------------------------------
+          1 |     120 | {"(0,1)","(0,2)","(0,3)","(0,4)","(0,5)","(0,6)","(0,7)","(0,8)","(0,9)","(0,10)"}
+(1 row)
+
+SELECT pg_relation_size('b87_i') / 8192 AS pages;
+ pages 
+-------
+     2
+(1 row)
+
+-- The same images through the insert-path deduplication pass (nbtdedup.c):
+-- the leaf fills on the uncompressed inserts and the pass merges every image.
+CREATE TABLE b87_u (v text);
+CREATE INDEX b87_ui ON b87_u (v);
+ALTER TABLE b87_u ALTER COLUMN v SET STORAGE EXTENDED;
+INSERT INTO b87_u SELECT repeat('abcdef', 400) FROM generate_series(1, 3);
+ALTER TABLE b87_u ALTER COLUMN v SET STORAGE EXTERNAL;
+INSERT INTO b87_u SELECT repeat('abcdef', 400) FROM generate_series(1, 8);
+SELECT itemoffset, itemlen, tids FROM bt_page_items('b87_ui', 1);
+ itemoffset | itemlen |                                   tids                                    
+------------+---------+---------------------------------------------------------------------------
+          1 |     112 | {"(0,1)","(0,2)","(0,3)","(0,4)","(0,5)","(0,6)","(0,7)","(0,8)","(0,9)"}
+          2 |    2416 | 
+          3 |    2416 | 
+(3 rows)
+
+SELECT pg_relation_size('b87_ui') / 8192 AS pages;
+ pages 
+-------
+     2
+(1 row)
+
+DROP TABLE b87_t, b87_u;
+-- regression: nbtsort.c publishes the table-scan / sort / load
+-- subphases and tuples_total (block counters cleared) to
+-- pg_stat_progress_create_index; a logging comparator sees the sort phase.
+CREATE TABLE b87_log (phase text, tuples_total bigint, tuples_done bigint, blocks_total bigint, blocks_done bigint);
+CREATE FUNCTION b87_cmp(int, int) RETURNS int LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO public.b87_log SELECT phase, tuples_total, tuples_done, blocks_total, blocks_done
+    FROM pg_catalog.pg_stat_progress_create_index WHERE pid = pg_backend_pid();
+  RETURN CASE WHEN $1 < $2 THEN -1 WHEN $1 > $2 THEN 1 ELSE 0 END;
+END $$;
+CREATE OPERATOR CLASS b87_int4_ops FOR TYPE int4 USING btree AS
+  OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, OPERATOR 4 >=, OPERATOR 5 >,
+  FUNCTION 1 b87_cmp(int4, int4);
+CREATE TABLE b87_p (a int);
+INSERT INTO b87_p SELECT g FROM generate_series(1, 2000) g;
+CREATE INDEX b87_pi ON b87_p (a b87_int4_ops);
+SELECT phase, tuples_total, tuples_done > 0 AS loading, blocks_total, blocks_done
+  FROM b87_log GROUP BY 1, 2, 3, 4, 5 ORDER BY 1, 2, 3;
+                phase                | tuples_total | loading | blocks_total | blocks_done 
+-------------------------------------+--------------+---------+--------------+-------------
+ building index: sorting live tuples |         2000 | f       |            0 |           0
+(1 row)
+
+DROP TABLE b87_p, b87_log;
+\c postgres
+DROP DATABASE b87e2e;

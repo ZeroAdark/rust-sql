@@ -310,14 +310,14 @@ fn preprocess_aggrefs_walker<'mcx>(
         },
         NodeTag::T_JsonExpr => {
             let j = node.as_json_expr().unwrap();
-            for e in [j.formatted_expr, j.path_spec, j.on_empty, j.on_error]
-                .into_iter()
-                .flatten()
-            {
+            for e in [j.formatted_expr, j.path_spec].into_iter().flatten() {
                 preprocess_aggrefs_walker(run, e)?;
             }
             for v in &j.passing_values {
                 preprocess_aggrefs_walker(run, v)?;
+            }
+            for e in [j.on_empty, j.on_error].into_iter().flatten() {
+                preprocess_aggrefs_walker(run, e)?;
             }
             Ok(())
         }

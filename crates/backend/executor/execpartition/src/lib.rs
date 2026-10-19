@@ -179,6 +179,7 @@ impl<'mcx> PartitionTupleRouting<'mcx> {
         slot: &mut SlotData<'mcx>,
         eval_mcx: Mcx<'_>,
         pdir: &mut Option<PartitionDirectory<'mcx>>,
+        modified_cols: Option<&types_nodes::Bitmapset<'mcx>>,
     ) -> PgResult<usize> {
         let mcx = self.mcx;
         // C ExecFindPartition's routing-root pre-check (execPartition.c:286-
@@ -188,7 +189,7 @@ impl<'mcx> PartitionTupleRouting<'mcx> {
             let PartitionTupleRouting { dispatches, root_check, .. } = &mut *self;
             let rel = &dispatches[0].rel;
             if !exec_partition_check_in(mcx, eval_mcx, root_check, rel, slot)? {
-                return Err(partition_constraint_violation(mcx, rel, slot, None, None));
+                return Err(partition_constraint_violation(mcx, rel, slot, modified_cols, None));
             }
         }
         let mut values = [Datum::null(); PARTITION_MAX_KEYS];
@@ -533,7 +534,7 @@ pub fn slot_value_description<'mcx>(
                 collist.push_str(", ");
             }
             write_comma_collist = true;
-            collist.push_str(core::str::from_utf8(att.attname.name_str()).expect("attname UTF-8"));
+            collist.push_str(&String::from_utf8_lossy(att.attname.name_str()));
         }
         if write_comma {
             buf.push_str(", ");
@@ -562,7 +563,10 @@ pub fn slot_value_description<'mcx>(
             core::ffi::CStr::from_ptr(out.as_usize() as *const core::ffi::c_char)
         }
         .to_bytes();
-        let s = core::str::from_utf8(s).expect("type output is UTF-8");
+        // execMain.c:2490 takes the output bytes unvalidated (a SQL_ASCII
+        // value need not be UTF-8); the detail is a String, so render lossily.
+        let s = String::from_utf8_lossy(s);
+        let s = s.as_ref();
         if s.len() <= MAX_FIELD_LEN {
             buf.push_str(s);
         } else {
@@ -876,23 +880,25 @@ fn no_partition_error(
     }
     // ExecFindPartition passes maxfieldlen = 64 (execPartition.c:328).
     const MAX_FIELD_LEN: usize = 64;
-    let mut keydesc = String::from("(");
+    // The detail is bytes: a type's text output need not be UTF-8 in a
+    // SQL_ASCII database and execPartition.c:1697 appends it as-is.
+    let mut keydesc = b"Partition key of the failing row contains (".to_vec();
     // pg_get_partkeydef_columns handles expression keys.
     let cols = ruleutils_seams::pg_get_partkeydef_columns::call(mcx, pd.rel.rd_id)
         .ok()
         .flatten()
         .unwrap_or_default();
-    keydesc.push_str(&cols);
-    keydesc.push_str(") = (");
+    keydesc.extend_from_slice(cols.as_bytes());
+    keydesc.extend_from_slice(b") = (");
     for i in 0..n {
         if i > 0 {
-            keydesc.push_str(", ");
+            keydesc.extend_from_slice(b", ");
         }
         if isnull[i] {
-            keydesc.push_str("null");
+            keydesc.extend_from_slice(b"null");
             continue;
         }
-        let out = (|| -> PgResult<String> {
+        let out = (|| -> PgResult<Vec<u8>> {
             let (foutoid, _) = lsyscache::typ::getTypeOutputInfo(pd.key.parttypid[i])?;
             let mut finfo = fmgr_core::fmgr_info(foutoid)?;
             let out = fmgr_core::function_call1_coll_in(&mut finfo, 0, mcx, values[i])?;
@@ -900,25 +906,29 @@ fn no_partition_error(
             let s = unsafe {
                 core::ffi::CStr::from_ptr(out.as_usize() as *const core::ffi::c_char)
             };
-            // Diagnostic detail (no-partition-found key); a type's text output
-            // may be non-UTF-8 in a SQL_ASCII database. Use lossy, not a panic.
-            Ok(String::from_utf8_lossy(s.to_bytes()).into_owned())
+            Ok(s.to_bytes().to_vec())
         })()
         .unwrap_or_default();
         // execPartition.c:1684-1693: clip at maxfieldlen bytes on a
         // character boundary (pg_mbcliplen) and append "...".
         if out.len() <= MAX_FIELD_LEN {
-            keydesc.push_str(&out);
+            keydesc.extend_from_slice(&out);
         } else {
-            let mut end = MAX_FIELD_LEN;
-            while !out.is_char_boundary(end) {
-                end -= 1;
-            }
-            keydesc.push_str(&out[..end]);
-            keydesc.push_str("...");
+            let end = if mbutils_seams::pg_mbcliplen::is_installed() {
+                mbutils_seams::pg_mbcliplen::call(&out, out.len() as i32, MAX_FIELD_LEN as i32)
+                    as usize
+            } else {
+                let mut end = MAX_FIELD_LEN;
+                while end > 0 && (out[end] & 0xC0) == 0x80 {
+                    end -= 1;
+                }
+                end
+            };
+            keydesc.extend_from_slice(&out[..end]);
+            keydesc.extend_from_slice(b"...");
         }
     }
-    keydesc.push(')');
+    keydesc.extend_from_slice(b").");
     Box::new(errtable(
         PgError::new(
             ERROR,
@@ -927,7 +937,7 @@ fn no_partition_error(
                 pd.rel.name()
             ),
         )
-        .with_detail(format!("Partition key of the failing row contains {keydesc}."))
+        .with_detail_raw(keydesc)
         .with_sqlstate(ERRCODE_CHECK_VIOLATION),
     ))
 }

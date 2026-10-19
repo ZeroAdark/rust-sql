@@ -30,6 +30,14 @@ pub struct EpqState<'mcx> {
     /// scan_params, subselect.c), so a recheck rescan can be driven through
     /// chgParam. `-1` = no planner-assigned param (unit fixtures only).
     pub epq_param: i32,
+    /// C `recheckestate->es_subplanstates` (EvalPlanQualStart,
+    /// execMain.c:3119): the recheck's subplan cells, swapped into the
+    /// parent estate for the recheck's span — fresh planstates, or the
+    /// parent's cell where the subplan owns estate-level state.
+    pub subplanstates: ::mcx::PgVec<'mcx, ::executils::SubplanStateCell>,
+    pub subplan_chg: ::mcx::PgVec<'mcx, ::types_nodes::bitmapset::Bitmapset<'mcx>>,
+    /// The fresh cells above, ended by `eval_plan_qual_end`.
+    pub fresh_subplanstates: ::mcx::PgVec<'mcx, ::executils::SubplanStateCell>,
 }
 
 /// `EvalPlanQual`: `Some` = new candidate tuple, `None` = skip the row.
@@ -49,12 +57,26 @@ pub fn eval_plan_qual<'mcx>(
         estate.epq_rtsize(),
         epq.result_rti,
     );
+    if epq.recheck.is_none() {
+        init_recheck_subplans(epq, estate)?;
+    }
     let saved_subs = core::mem::replace(&mut estate.es_epq, subs.take());
     let saved_active = estate.es_epq_active;
     let saved_param = estate.es_epq_param;
     estate.es_epq_active = true;
     estate.es_epq_param = epq.epq_param;
+    let mcx = estate.es_query_cxt;
+    let saved_subplans = core::mem::replace(
+        &mut estate.es_subplanstates,
+        core::mem::replace(&mut epq.subplanstates, ::mcx::PgVec::new_in(mcx)),
+    );
+    let saved_chg = core::mem::replace(
+        &mut estate.es_subplan_chg,
+        core::mem::replace(&mut epq.subplan_chg, ::mcx::PgVec::new_in(mcx)),
+    );
     let r = eval_plan_qual_guts(epq, estate, inputslot);
+    epq.subplanstates = core::mem::replace(&mut estate.es_subplanstates, saved_subplans);
+    epq.subplan_chg = core::mem::replace(&mut estate.es_subplan_chg, saved_chg);
     estate.es_epq_active = saved_active;
     estate.es_epq_param = saved_param;
     *subs = core::mem::replace(&mut estate.es_epq, saved_subs);
@@ -219,6 +241,74 @@ pub(crate) fn eval_plan_qual_start<'mcx>(
     Ok(())
 }
 
+// C EvalPlanQualStart (execMain.c:3119-3128): the recheck gets its own
+// subplan planstates (eflags 0), so a SubPlan re-runs under EPQ instead of
+// replaying what the main drive cached. A subplan rooted at a RecursiveUnion
+// (es_worktable_shared slot) or a ModifyTable (result-relation registration)
+// owns estate-level state a second init in the shared estate would collide
+// on; those keep the parent's cell (C does not re-run a data-modifying CTE
+// under EPQ either).
+fn init_recheck_subplans<'mcx>(
+    epq: &mut EpqState<'mcx>,
+    estate: &mut EStateData<'mcx>,
+) -> PgResult<()> {
+    let mcx = estate.es_query_cxt;
+    epq.subplanstates = ::mcx::PgVec::new_in(mcx);
+    epq.subplan_chg = ::mcx::PgVec::new_in(mcx);
+    epq.fresh_subplanstates = ::mcx::PgVec::new_in(mcx);
+    let saved_instrument = core::mem::replace(&mut estate.es_instrument, 0);
+    let r = init_recheck_subplans_guts(epq, estate);
+    estate.es_instrument = saved_instrument;
+    r
+}
+
+fn init_recheck_subplans_guts<'mcx>(
+    epq: &mut EpqState<'mcx>,
+    estate: &mut EStateData<'mcx>,
+) -> PgResult<()> {
+    let mcx = estate.es_query_cxt;
+    let pstmt = estate
+        .es_plannedstmt
+        .expect("EvalPlanQualStart under a planned statement");
+    for (i, subplan) in pstmt.subplans.iter().enumerate() {
+        let Some(&parent) = estate.es_subplanstates.get(i) else {
+            break;
+        };
+        let fresh = subplan.filter(|sp| {
+            !matches!(
+                sp.node_tag(),
+                NodeTag::T_RecursiveUnion | NodeTag::T_ModifyTable
+            )
+        });
+        let cell = match fresh {
+            Some(subplan) => {
+                let ps = exec_init_node(Some(subplan), estate, 0)?
+                    .expect("subplans cells are plan trees");
+                let mut cell = ::mcx::alloc_in(mcx, Some(ps))?;
+                let raw: *mut Option<PlanStateNode<'_>> = &mut *cell;
+                core::mem::forget(cell);
+                // SAFETY: raw comes from a live arena allocation.
+                let cell = ::executils::SubplanStateCell(
+                    unsafe { core::ptr::NonNull::new_unchecked(raw) }.cast(),
+                );
+                // The parent's list carries it too, so ExecutorEnd's walk and
+                // the abort-path drop reach it (C frees it with the child estate).
+                estate.es_subplanstates.push(cell);
+                estate
+                    .es_subplan_chg
+                    .push(::types_nodes::bitmapset::Bitmapset::empty());
+                epq.fresh_subplanstates.push(cell);
+                cell
+            }
+            None => parent,
+        };
+        epq.subplanstates.push(cell);
+        epq.subplan_chg
+            .push(::types_nodes::bitmapset::Bitmapset::empty());
+    }
+    Ok(())
+}
+
 // The recheck tree re-runs against the parent estate; every node in it must
 // have exercised EPQ rescan semantics. Scans substitute the test tuple via
 // ExecScanFetch; joins/sorts/materials rescan their children.
@@ -307,12 +397,9 @@ pub(crate) fn eval_plan_qual_start<'mcx>(
 //     WorkTableScan inside its recursive term) lives in a PlannedStmt
 //     SUBPLAN read through an admitted CteScan, and this walk never
 //     descends into subplans. Live-probed: WITH RECURSIVE joined under
-//     FOR UPDATE rechecks fine (epq-subq-recursive pins it). Divergence
-//     note vs C: EvalPlanQualStart re-inits es_subplanstates in its
-//     child estate (fresh CTE tuplestore per recheck); pgrust's shared
-//     parent estate reuses the already-populated CTE state — equal
-//     results at the recheck's snapshot for stable CTE bodies
-//     (lane-epq.md §9, completion-wave entry).
+//     FOR UPDATE rechecks fine (epq-subq-recursive pins it). As in C's
+//     EvalPlanQualStart, the recheck drives its own subplan planstates
+//     (init_recheck_subplans): a fresh CTE tuplestore per recheck.
 //   * T_CustomScan — UNREACHABLE UNTIL A FEATURE LANDS: pgrust has no
 //     custom-scan provider API (zero planner path-creation sites; the
 //     executor arm is in unported_nodes!), so no plan can contain one.
@@ -485,6 +572,17 @@ pub fn eval_plan_qual_end<'mcx>(
         exec_end_node(&mut recheck, estate)?;
     }
     let mcx = estate.es_query_cxt;
+    let cells = core::mem::replace(&mut epq.fresh_subplanstates, ::mcx::PgVec::new_in(mcx));
+    epq.subplanstates = ::mcx::PgVec::new_in(mcx);
+    epq.subplan_chg = ::mcx::PgVec::new_in(mcx);
+    for i in 0..cells.len() {
+        // SAFETY: init_recheck_subplans created this arena cell; exclusive
+        // here (the recheck is not mid-run at its owner's end).
+        let slot = unsafe { &mut *cells[i].0.cast::<Option<PlanStateNode<'mcx>>>().as_ptr() };
+        if let Some(mut ps) = slot.take() {
+            exec_end_node(&mut ps, estate)?;
+        }
+    }
     let n = subs.as_ref().map_or(0, |s| s.relsubs_slot.len());
     for i in 0..n {
         if let Some(id) = subs.as_ref().expect("checked").relsubs_slot[i] {
@@ -494,4 +592,12 @@ pub fn eval_plan_qual_end<'mcx>(
     Ok(())
 }
 
-::mcx::forget_safe_struct!(EpqState<'_> { plan, recheck, result_rti, epq_param });
+::mcx::forget_safe_struct!(EpqState<'_> {
+    plan,
+    recheck,
+    result_rti,
+    epq_param,
+    subplanstates,
+    subplan_chg,
+    fresh_subplanstates
+});

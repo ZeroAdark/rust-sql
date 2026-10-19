@@ -8,6 +8,7 @@ use types_error::{
     PgError, PgResult, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_INVALID_PARAMETER_VALUE,
     ERRCODE_UNDEFINED_OBJECT, ERROR, NOTICE,
 };
+use parser_small1::ParseState;
 use types_nodes::parsenodes::DefElem;
 use types_nodes::rawnodes::AlterExtensionStmt;
 use types_rel::{AccessShareLock, RowExclusiveLock};
@@ -16,7 +17,7 @@ use datum::Datum;
 use pg_depend::ObjectAddress;
 
 use crate::control::{read_extension_aux_control_file, read_extension_control_file, ExtensionControlFile};
-use crate::create::{conflicting_def_elem, get_required_extension};
+use crate::create::get_required_extension;
 use crate::graph::identify_update_path;
 use crate::script::execute_extension_script;
 use crate::{
@@ -40,6 +41,7 @@ pub(crate) fn oid_key(attno: i32, oid: Oid) -> types_scan::scankey::ScanKeyData 
 // ExecAlterExtensionStmt (extension.c:3408-3544).
 pub fn ExecAlterExtensionStmt<'mcx>(
     mcx: Mcx<'mcx>,
+    pstate: Option<&ParseState<'_, '_>>,
     stmt: &AlterExtensionStmt<'mcx>,
 ) -> PgResult<ObjectAddress> {
     let extname = stmt.extname.expect("grammar always supplies extname");
@@ -110,7 +112,7 @@ pub fn ExecAlterExtensionStmt<'mcx>(
         match defel.defname.unwrap_or("") {
             "new_version" => {
                 if d_new_version.is_some() {
-                    return Err(conflicting_def_elem(defel));
+                    return Err(commands_define::errorConflictingDefElem(defel, pstate));
                 }
                 d_new_version = Some(defel);
             }
@@ -285,7 +287,7 @@ pub(crate) fn ApplyExtensionUpdates(
                 pg_depend::DependencyType::Normal,
             )?;
         }
-        // InvokeObjectPostAlterHook: object-access hooks are elided repo-wide.
+        objectaccess::InvokeObjectPostAlterHook(EXTENSION_RELATION_ID, extension_oid, 0)?;
 
         execute_extension_script(
             mcx,
@@ -446,8 +448,8 @@ pub fn AlterExtensionNamespace<'mcx>(
             ));
         }
     }
-    genam::systable_endscan(mcx, dep_scan)?;
-    dep_rel.close(AccessShareLock)?;
+    // The scan (and its pg_depend / index locks) stays open across the
+    // moves like C's loop (extension.c:3382).
 
     let mut objs_moved: mcx::PgVec<'mcx, ObjectAddress> = mcx::PgVec::new_in(mcx);
     for &(classid, objid, objsubid, deptype) in &dep_rows {
@@ -512,6 +514,8 @@ pub fn AlterExtensionNamespace<'mcx>(
                 .into());
         }
     }
+    genam::systable_endscan(mcx, dep_scan)?;
+    dep_rel.close(AccessShareLock)?;
 
     // Now adjust pg_extension.extnamespace (fresh row fetch; C updates the
     // tuple copy it took before the member moves — same visible result).
@@ -548,7 +552,7 @@ pub fn AlterExtensionNamespace<'mcx>(
         ))
         .into());
     }
-    // InvokeObjectPostAlterHook: object-access hooks are elided repo-wide.
+    objectaccess::InvokeObjectPostAlterHook(EXTENSION_RELATION_ID, extension_oid, 0)?;
 
     Ok(ObjectAddress::set(EXTENSION_RELATION_ID, extension_oid))
 }

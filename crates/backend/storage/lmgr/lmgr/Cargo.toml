@@ -26,8 +26,10 @@ lock_seams = { path = "../lock_seams" }
 procarray_seams = { path = "../../ipc/procarray_seams" }
 subtrans_seams = { path = "../../../access/transam/subtrans_seams" }
 postgres_seams = { path = "../../../tcop/postgres_seams" }
+elog = { path = "../../../utils/error/elog" }
 
 [dev-dependencies]
+guc_tables = { path = "../../../utils/misc/guc_tables" }
 backend_progress = { path = "../../../utils/activity/backend_progress" }
 backend_status = { path = "../../../utils/activity/backend_status" }
 ipc_seams = { path = "../../ipc/ipc_seams" }

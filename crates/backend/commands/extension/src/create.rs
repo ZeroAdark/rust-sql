@@ -8,13 +8,13 @@ use types_error::{
     ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE, ERRCODE_UNDEFINED_OBJECT, ERRCODE_UNDEFINED_SCHEMA,
     ERROR, NOTICE,
 };
+use parser_small1::ParseState;
 use types_nodes::parsenodes::{CreateSchemaStmt, DefElem};
 use types_nodes::rawnodes::CreateExtensionStmt;
 use types_rel::RowExclusiveLock;
 
 use datum::Datum;
 use pg_depend::ObjectAddress;
-use types_tuple::NameData;
 
 use crate::control::{
     get_extension_script_filename, read_extension_aux_control_file, read_extension_control_file,
@@ -290,6 +290,7 @@ pub(crate) fn get_required_extension(
 // CreateExtension (extension.c:2094-2176).
 pub fn CreateExtension<'mcx>(
     mcx: Mcx<'mcx>,
+    pstate: Option<&ParseState<'_, '_>>,
     stmt: &CreateExtensionStmt<'mcx>,
 ) -> PgResult<ObjectAddress> {
     let extname = stmt.extname.expect("grammar always supplies extname");
@@ -330,21 +331,21 @@ pub fn CreateExtension<'mcx>(
         match defel.defname.unwrap_or("") {
             "schema" => {
                 if d_schema.is_some() {
-                    return Err(conflicting_def_elem(defel));
+                    return Err(commands_define::errorConflictingDefElem(defel, pstate));
                 }
                 d_schema = Some(defel);
                 schema_name = Some(explain::defGetString(mcx, defel)?);
             }
             "new_version" => {
                 if d_new_version.is_some() {
-                    return Err(conflicting_def_elem(defel));
+                    return Err(commands_define::errorConflictingDefElem(defel, pstate));
                 }
                 d_new_version = Some(defel);
                 version_name = Some(explain::defGetString(mcx, defel)?);
             }
             "cascade" => {
                 if d_cascade.is_some() {
-                    return Err(conflicting_def_elem(defel));
+                    return Err(commands_define::errorConflictingDefElem(defel, pstate));
                 }
                 d_cascade = Some(defel);
                 cascade = explain::defGetBoolean(defel)?;
@@ -354,17 +355,6 @@ pub fn CreateExtension<'mcx>(
     }
 
     CreateExtensionInternal(mcx, extname, schema_name, version_name, cascade, &[], true)
-}
-
-pub(crate) fn conflicting_def_elem(defel: &DefElem<'_>) -> Box<types_error::PgError> {
-    let mut e = ereport(ERROR)
-        .errcode(types_error::ERRCODE_SYNTAX_ERROR)
-        .errmsg("conflicting or redundant options")
-        .into_error();
-    if defel.location >= 0 {
-        e.cursor_position = Some(defel.location + 1);
-    }
-    Box::new(e)
 }
 
 // InsertExtensionTuple (extension.c:2192-2271). extConfig/extCondition are
@@ -390,8 +380,7 @@ pub fn InsertExtensionTuple(
         Anum_pg_extension_oid as types_core::AttrNumber,
     )?;
 
-    let mut name = NameData::default();
-    name.namestrcpy_bytes(ext_name);
+    let name = crate::namein_bytes(ext_name);
     let version_text = varlena::cstring_to_text(mcx, ext_version)?;
 
     let mut values = [Datum::null(); Natts_pg_extension];

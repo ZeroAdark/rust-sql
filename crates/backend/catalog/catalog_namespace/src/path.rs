@@ -480,6 +480,11 @@ pub fn fetch_search_path<'mcx>(
     Ok(result)
 }
 
+pub fn active_search_path<'mcx>(mcx: Mcx<'mcx>) -> PgResult<PgVec<'mcx, Oid>> {
+    recomputeNamespacePath()?;
+    with_path(|path| slice_in(mcx, path))
+}
+
 /// C `fetch_search_path_array`: fills `sarray` (temp namespace excluded) and
 /// returns the would-be count, which may exceed `sarray.len()`.
 pub fn fetch_search_path_array(sarray: &mut [Oid]) -> PgResult<usize> {

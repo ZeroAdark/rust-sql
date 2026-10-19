@@ -22,7 +22,14 @@ fn loc(func: &'static str) -> ErrorLocation {
     ErrorLocation::new(site.file(), site.line() as i32, func)
 }
 
+// xlog.c:6374 LocalRecoveryInProgress is a per-PROCESS static (true in every
+// fresh child); a pooled thread outlives a crash-restart's shmem reset, so
+// its copy is keyed to the reset generation XLOGShmemResetAfterCrash bumps.
+static RECOVERY_LOCAL_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 thread_local! {
+    static LOCAL_RECOVERY_GENERATION: Cell<u64> = const { Cell::new(0) };
     static LOCAL_RECOVERY_IN_PROGRESS: Cell<bool> = const { Cell::new(true) };
     static LOCAL_XLOG_INSERT_ALLOWED: Cell<i8> = const { Cell::new(-1) };
     static REDO_REC_PTR: Cell<XLogRecPtr> = const { Cell::new(0) };
@@ -34,7 +41,23 @@ thread_local! {
     static CACHED_POS: Cell<*mut u8> = const { Cell::new(std::ptr::null_mut()) };
 }
 
+pub(crate) fn bump_recovery_local_generation() {
+    RECOVERY_LOCAL_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Release);
+}
+
+fn refresh_recovery_local_generation() -> bool {
+    let current = RECOVERY_LOCAL_GENERATION.load(std::sync::atomic::Ordering::Acquire);
+    if LOCAL_RECOVERY_GENERATION.get() == current {
+        return false;
+    }
+    LOCAL_RECOVERY_GENERATION.set(current);
+    LOCAL_RECOVERY_IN_PROGRESS.set(true);
+    LOCAL_XLOG_INSERT_ALLOWED.set(-1);
+    true
+}
+
 pub fn RecoveryInProgress() -> bool {
+    refresh_recovery_local_generation();
     if !LOCAL_RECOVERY_IN_PROGRESS.get() {
         false
     } else {
@@ -45,6 +68,7 @@ pub fn RecoveryInProgress() -> bool {
 }
 
 pub fn XLogInsertAllowed() -> bool {
+    refresh_recovery_local_generation();
     let v = LOCAL_XLOG_INSERT_ALLOWED.get();
     if v >= 0 {
         return v != 0;
@@ -839,5 +863,26 @@ mod elog_helpers {
 
     pub fn error_result(msg: &str) -> Box<PgError> {
         Box::new(PgError::new(ERROR, msg.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod recovery_generation_tests {
+    use super::*;
+
+    #[test]
+    fn shmem_reset_generation_resets_the_local_copies() {
+        refresh_recovery_local_generation();
+        LOCAL_RECOVERY_IN_PROGRESS.set(false);
+        LOCAL_XLOG_INSERT_ALLOWED.set(1);
+        assert!(!refresh_recovery_local_generation(), "same generation must keep the cells");
+        assert!(!LOCAL_RECOVERY_IN_PROGRESS.get());
+        assert_eq!(LOCAL_XLOG_INSERT_ALLOWED.get(), 1);
+
+        bump_recovery_local_generation();
+        assert!(refresh_recovery_local_generation(), "a reset generation must be noticed");
+        assert!(LOCAL_RECOVERY_IN_PROGRESS.get(), "recovery flag must start true again");
+        assert_eq!(LOCAL_XLOG_INSERT_ALLOWED.get(), -1, "insert-allowed cache must be cleared");
+        assert!(!refresh_recovery_local_generation(), "one reset per generation");
     }
 }

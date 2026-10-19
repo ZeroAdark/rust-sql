@@ -313,6 +313,9 @@ fn report_missing_or_gen_attrs(
         unreachable!();
     }
     if !generated.is_empty() {
+        // C collects these in a Bitmapset: ascending remote attnum order.
+        let mut generated = generated.to_vec();
+        generated.sort_unstable();
         let column = if generated.len() == 1 { "column" } else { "columns" };
         ereport(ERROR)
             .errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE)
@@ -320,7 +323,7 @@ fn report_missing_or_gen_attrs(
                 "logical replication target relation \"{}.{}\" has incompatible generated {column}: {}",
                 remoterel.nspname,
                 remoterel.relname,
-                get_attrs_str(remoterel, generated)
+                get_attrs_str(remoterel, &generated)
             ))
             .finish(loc("logicalrep_report_missing_or_gen_attrs"))?;
         unreachable!();
@@ -649,6 +652,12 @@ mod tests {
             "logical replication target relation \"public.t\" has incompatible generated column: \"a\""
         );
         let err = report_missing_or_gen_attrs(&r, &[], &[0, 1]).unwrap_err();
+        assert_eq!(
+            err.message(),
+            "logical replication target relation \"public.t\" has incompatible generated columns: \"a\", \"b\""
+        );
+        // Subscriber column order (b, a) still reports in remote attnum order.
+        let err = report_missing_or_gen_attrs(&r, &[], &[1, 0]).unwrap_err();
         assert_eq!(
             err.message(),
             "logical replication target relation \"public.t\" has incompatible generated columns: \"a\", \"b\""

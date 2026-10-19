@@ -847,7 +847,7 @@ fn ReindexRelationConcurrently<'mcx>(
             &heapRel,
             idx_index_id,
             tablespaceid,
-            concurrent_name.as_str(),
+            &concurrent_name[..],
         )?;
 
         let newIndexRel = indexam::index_open(mcx, new_index_id, ShareUpdateExclusiveLock)?;
@@ -991,7 +991,7 @@ fn ReindexRelationConcurrently<'mcx>(
         let snap = snapmgr::GetTransactionSnapshot()?;
         snapmgr::PushActiveSnapshot(&snap)?;
 
-        catalog_index::index_concurrently_swap(mcx, newidx.index_id, oldidx.index_id, old_name.as_str())?;
+        catalog_index::index_concurrently_swap(mcx, newidx.index_id, oldidx.index_id, &old_name[..])?;
 
         snapmgr::PopActiveSnapshot()?;
 

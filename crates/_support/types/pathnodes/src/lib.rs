@@ -1473,7 +1473,7 @@ pub struct RelOptInfo<'mcx> {
     // pgrcolumnar v7 per-column part-global stitch dict sizes (1-based attno
     // = index + 1, 0 = no stitch) for the SE-TOPNNI text sort-key plan-time
     // answerability probe; populated only while PGRUST_LANE_V2_TOPN_NONINT
-    // is armed (default ON since the GL-TOPNNI-1 flip; empty for every
+    // is armed (default ON since the regression flip; empty for every
     // other relation, footer-less parts, and under the kill spelling).
     pub pgrcolumnar_stitch_gndv: PgVec<'mcx, u64>,
     pub fdwroutine: Option<types_nodes::FdwKind>,
@@ -1851,7 +1851,7 @@ pub struct PlannerInfo<'mcx> {
     pub cte_list: ::types_nodes::list::NodeList<'mcx>,
     /// Not in C: (rti, plan_id, cte_param) resolved at set_cte_pathlist time,
     /// because the C parent_root chain is unavailable at createplan time
-    /// (same reason as self_ref_wt_param).
+    /// (same reason as self_ref_wt_params).
     pub cte_scan_params: PgVec<'mcx, CteScanParam>,
     pub multiexpr_params: PgVec<'mcx, PgVec<'mcx, NodeId>>,
     pub join_domains: PgVec<'mcx, JoinDomain<'mcx>>,
@@ -1909,10 +1909,11 @@ pub struct PlannerInfo<'mcx> {
     pub wt_param_id: i32,
     pub non_recursive_path: Option<PathId>,
     pub non_recursive_rows: Option<f64>,
-    /// Not in C: cteroot->wt_param_id resolved at set_worktable_pathlist time
-    /// for this level's self-reference RTEs, because the C parent_root chain
-    /// is unavailable at createplan time (rel_subroots swap detaches it).
-    pub self_ref_wt_param: i32,
+    /// Not in C: (rti, cteroot->wt_param_id) resolved at set_worktable_pathlist
+    /// time for each of this level's self-reference RTEs, because the C
+    /// parent_root chain is unavailable at createplan time (rel_subroots swap
+    /// detaches it).
+    pub self_ref_wt_params: PgVec<'mcx, (u32, i32)>,
     pub curOuterRels: Relids<'mcx>,
     pub curOuterParams: PgVec<'mcx, NodeId>,
     pub partColsUpdated: bool,
@@ -2012,7 +2013,7 @@ impl<'mcx> PlannerInfo<'mcx> {
             hasNonSerialAggs: false,
             wt_param_id: 0,
             non_recursive_path: None,
-            self_ref_wt_param: -1,
+            self_ref_wt_params: PgVec::new_in(mcx),
             non_recursive_rows: None,
             curOuterRels: relids::relids_empty(),
             curOuterParams: PgVec::new_in(mcx),
@@ -2452,7 +2453,7 @@ mcx::forget_safe_struct!(
     AggInfo<'_> { aggrefs, transno, shareable, finalfn_oid },
     AggTransInfo<'_> { args, aggfilter, transfn_oid, serialfn_oid, deserialfn_oid, combinefn_oid, aggtranstype, aggtranstypmod, transtypeLen, transtypeByVal, aggtransspace, initValue, initValueIsNull, initValueImage },
     TargetEntryNode<'_> { expr, resno, resname, ressortgroupref, resorigtbl, resorigcol, resjunk },
-    PlannerInfo<'_> { mcx, parse, command_type, glob, query_level, parent_root, plan_params, outer_params, simple_rel_array, simple_rel_array_size, simple_rte_array, append_rel_array, all_baserels, outer_join_rels, all_query_rels, join_rel_list, join_rel_hash, join_rel_level, join_cur_level, init_plans, cte_plan_ids, cte_list, cte_scan_params, multiexpr_params, join_domains, eq_classes, ec_merging_done, canon_pathkeys, left_join_clauses, right_join_clauses, full_join_clauses, join_info_list, last_rinfo_serial, all_result_relids, leaf_result_relids, append_rel_list, row_identity_vars, rowMarks, placeholder_list, placeholder_array, placeholder_array_size, fkey_list, query_pathkeys, group_pathkeys, num_groupby_pathkeys, window_pathkeys, distinct_pathkeys, sort_pathkeys, setop_pathkeys, part_schemes, initial_rels, upper_rels, upper_targets, processed_groupClause, processed_distinctClause, processed_tlist, update_colnos, grouping_map, minmax_aggs, total_table_pages, tuple_fraction, limit_tuples, qual_security_level, hasJoinRTEs, hasLateralRTEs, hasHavingQual, hasPseudoConstantQuals, hasAlternativeSubPlans, placeholdersFrozen, hasRecursion, group_rtindex, agginfos, aggtransinfos, numOrderedAggs, hasNonPartialAggs, hasNonSerialAggs, wt_param_id, non_recursive_path, non_recursive_rows, self_ref_wt_param, curOuterRels, curOuterParams, partColsUpdated, join_search_private, isAltSubplan, isUsedSubplan, rel_arena, path_arena, rinfo_arena, em_arena, ph_info_arena, node_arena, pathtarget_arena },
+    PlannerInfo<'_> { mcx, parse, command_type, glob, query_level, parent_root, plan_params, outer_params, simple_rel_array, simple_rel_array_size, simple_rte_array, append_rel_array, all_baserels, outer_join_rels, all_query_rels, join_rel_list, join_rel_hash, join_rel_level, join_cur_level, init_plans, cte_plan_ids, cte_list, cte_scan_params, multiexpr_params, join_domains, eq_classes, ec_merging_done, canon_pathkeys, left_join_clauses, right_join_clauses, full_join_clauses, join_info_list, last_rinfo_serial, all_result_relids, leaf_result_relids, append_rel_list, row_identity_vars, rowMarks, placeholder_list, placeholder_array, placeholder_array_size, fkey_list, query_pathkeys, group_pathkeys, num_groupby_pathkeys, window_pathkeys, distinct_pathkeys, sort_pathkeys, setop_pathkeys, part_schemes, initial_rels, upper_rels, upper_targets, processed_groupClause, processed_distinctClause, processed_tlist, update_colnos, grouping_map, minmax_aggs, total_table_pages, tuple_fraction, limit_tuples, qual_security_level, hasJoinRTEs, hasLateralRTEs, hasHavingQual, hasPseudoConstantQuals, hasAlternativeSubPlans, placeholdersFrozen, hasRecursion, group_rtindex, agginfos, aggtransinfos, numOrderedAggs, hasNonPartialAggs, hasNonSerialAggs, wt_param_id, non_recursive_path, non_recursive_rows, self_ref_wt_params, curOuterRels, curOuterParams, partColsUpdated, join_search_private, isAltSubplan, isUsedSubplan, rel_arena, path_arena, rinfo_arena, em_arena, ph_info_arena, node_arena, pathtarget_arena },
 );
 
 // partsupfunc exempt: plain fmgr_info resolutions, fn_expr never set on the

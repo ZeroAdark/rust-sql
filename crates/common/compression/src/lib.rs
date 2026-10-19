@@ -117,34 +117,48 @@ pub fn parse_compress_options(option: &str) -> (String, Option<String>) {
     }
 }
 
-/// C's `strtol(s, &endp, 10)` subset used here: optional leading whitespace,
-/// optional sign, then digits; returns the parsed value and the number of
-/// bytes consumed (0 when no digits were found).
+/// C's `strtol(s, &endp, 10)` subset used here: optional leading C-locale
+/// whitespace (isspace: space, \t, \n, \v, \f, \r), optional sign, then
+/// digits; returns the parsed value and the number of bytes consumed (0 when
+/// no digits were found). Overflow clamps to LONG_MIN/LONG_MAX like glibc.
 fn strtol10(s: &str) -> (i64, usize) {
     let b = s.as_bytes();
     let mut i = 0;
-    while i < b.len() && (b[i] == b' ' || b[i] == b'\t' || b[i] == b'\n' || b[i] == b'\r') {
+    while i < b.len() && matches!(b[i], b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
         i += 1;
     }
-    let mut sign: i64 = 1;
+    let mut neg = false;
     let mut j = i;
     if j < b.len() && (b[j] == b'+' || b[j] == b'-') {
-        if b[j] == b'-' {
-            sign = -1;
-        }
+        neg = b[j] == b'-';
         j += 1;
     }
     let digits_start = j;
     let mut val: i64 = 0;
+    let mut overflow = false;
     while j < b.len() && b[j].is_ascii_digit() {
-        val = val.saturating_mul(10).saturating_add((b[j] - b'0') as i64);
+        let d = (b[j] - b'0') as i64;
+        if !overflow {
+            let step = if neg {
+                val.checked_mul(10).and_then(|v| v.checked_sub(d))
+            } else {
+                val.checked_mul(10).and_then(|v| v.checked_add(d))
+            };
+            match step {
+                Some(v) => val = v,
+                None => overflow = true,
+            }
+        }
         j += 1;
     }
     if j == digits_start {
         // No digits: strtol returns 0 with endp == nptr.
         return (0, 0);
     }
-    (sign.saturating_mul(val), j)
+    if overflow {
+        val = if neg { i64::MIN } else { i64::MAX };
+    }
+    (val, j)
 }
 
 /// C `expect_integer_value`. On failure sets `parse_error` and returns -1.

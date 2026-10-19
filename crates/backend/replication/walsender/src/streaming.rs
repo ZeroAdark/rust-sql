@@ -14,7 +14,8 @@ use elog::ereport;
 use repl_gram::{ReplicationKind, StartReplicationCmd};
 use types_core::{InvalidXLogRecPtr, TimeLineID, TimestampTz, XLogRecPtr, XLogSegNo};
 use types_error::{
-    ErrorLocation, PgResult, COMMERROR, DEBUG1, ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE, ERROR,
+    ErrorLocation, PgResult, COMMERROR, DEBUG1, DEBUG2, ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+    ERROR,
 };
 use types_storage::waiteventset::{WL_POSTMASTER_DEATH, WL_SOCKET_READABLE, WL_SOCKET_WRITEABLE};
 use xlogreader::{XLogReaderState, XLogSegmentRoutine};
@@ -80,11 +81,17 @@ pub(crate) fn proc_exit(code: i32) -> ! {
     ipc_seams::proc_exit::call(code, init_small::globals::MyProcPid())
 }
 
-// static void WalSndShutdown(void). Terminate the backend; C also resets
-// whereToSendOutput to suppress further client writes (a tcop concern not yet
-// threaded through this crate).
+// static void WalSndShutdown(void): reset whereToSendOutput so no ereport
+// from the exit callbacks reaches the standby (walsender.c:386), then exit.
 pub(crate) fn WalSndShutdown() -> ! {
+    suppress_frontend_output();
     proc_exit(0)
+}
+
+pub(crate) fn suppress_frontend_output() {
+    if elog::config::where_to_send_output() == types_dest::CommandDest::Remote {
+        elog::config::set_where_to_send_output(types_dest::CommandDest::None);
+    }
 }
 
 // static void StartReplication(StartReplicationCmd *cmd) — PHYSICAL branch.
@@ -759,6 +766,8 @@ pub(crate) fn WalSndWait(socket_events: u32, timeout: c_long, wait_event: u32) -
 
 // static void WalSndKeepalive(bool requestReply, XLogRecPtr writePtr).
 pub(crate) fn WalSndKeepalive(request_reply: bool, write_ptr: XLogRecPtr) -> PgResult<()> {
+    let _ = elog::elog(DEBUG2, "sending replication keepalive");
+
     let sent = sent_ptr();
     let now = get_ts();
 
@@ -811,6 +820,21 @@ pub(crate) fn reset_my_latch() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // WalSndShutdown (walsender.c:386): a Remote destination becomes None so
+    // no report from the exit callbacks reaches the standby; other
+    // destinations are left alone.
+    #[test]
+    fn shutdown_suppresses_frontend_output_only_for_remote() {
+        let prev = elog::config::where_to_send_output();
+        elog::config::set_where_to_send_output(types_dest::CommandDest::Remote);
+        suppress_frontend_output();
+        assert_eq!(elog::config::where_to_send_output(), types_dest::CommandDest::None);
+        elog::config::set_where_to_send_output(types_dest::CommandDest::Debug);
+        suppress_frontend_output();
+        assert_eq!(elog::config::where_to_send_output(), types_dest::CommandDest::Debug);
+        elog::config::set_where_to_send_output(prev);
+    }
 
     // WalSndErrorCleanup (walsender.c:351): the WAL segment the physical
     // reader holds open is closed when streaming ends in an error.

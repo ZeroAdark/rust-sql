@@ -84,9 +84,9 @@ fn int2_scankey(attno: usize, v: i16) -> types_scan::scankey::ScanKeyData {
     key
 }
 
-fn name_datum<'mcx>(mcx: Mcx<'mcx>, s: &str) -> PgResult<mcx::PgVec<'mcx, u8>> {
+fn name_datum<'mcx>(mcx: Mcx<'mcx>, s: &[u8]) -> PgResult<mcx::PgVec<'mcx, u8>> {
     let mut buf: mcx::PgVec<'mcx, u8> = mcx::vec_with_capacity_in(mcx, types_core::NAMEDATALEN as usize)?;
-    buf.extend_from_slice(s.as_bytes());
+    buf.extend_from_slice(s);
     buf.resize(types_core::NAMEDATALEN as usize, 0);
     Ok(buf)
 }
@@ -154,7 +154,7 @@ pub fn index_concurrently_create_copy<'mcx>(
     heapRelation: &Relation<'mcx>,
     oldIndexId: Oid,
     tablespaceOid: Oid,
-    newName: &str,
+    newName: &[u8],
 ) -> PgResult<Oid> {
     let indexRelation = indexam::index_open(mcx, oldIndexId, RowExclusiveLock)?;
 
@@ -238,12 +238,12 @@ pub fn index_concurrently_create_copy<'mcx>(
     newInfo.ii_Concurrent = true;
     newInfo.ii_BrokenHotChain = false;
 
-    let mut colnames: mcx::PgVec<'mcx, &str> = mcx::vec_with_capacity_in(mcx, nattrs)?;
+    let mut colnames: mcx::PgVec<'mcx, &[u8]> = mcx::vec_with_capacity_in(mcx, nattrs)?;
     let index_desc = indexRelation.descr();
     for i in 0..nattrs {
         let att = &index_desc.attrs[i];
-        let name = core::str::from_utf8(att.attname.name_str()).expect("non-UTF-8 attname");
-        colnames.push(core::str::from_utf8(mcx::slice_borrow_in(mcx, name.as_bytes())?).expect("utf8"));
+        // Bytes: an index column name may be byte-clipped (SQL_ASCII).
+        colnames.push(mcx::slice_borrow_in(mcx, att.attname.name_str())?);
     }
 
     let mut opclassOptions: mcx::PgVec<'mcx, Datum> = mcx::vec_with_capacity_in(mcx, nattrs)?;
@@ -439,7 +439,7 @@ pub fn index_concurrently_swap<'mcx>(
     mcx: Mcx<'mcx>,
     newIndexId: Oid,
     oldIndexId: Oid,
-    oldName: &str,
+    oldName: &[u8],
 ) -> PgResult<()> {
     let oldClassRel = indexam::index_open(mcx, oldIndexId, ShareUpdateExclusiveLock)?;
     let newClassRel = indexam::index_open(mcx, newIndexId, ShareUpdateExclusiveLock)?;

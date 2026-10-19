@@ -148,10 +148,7 @@ pub fn fc_gseg_picksplit(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
         let center = seg.lower * 0.5f32 + seg.upper * 0.5f32;
         sort_items.push((center, i as u16, seg));
     }
-    // C uses qsort with a <,==,> comparator; total_cmp is the deterministic
-    // stand-in (only NaN centers order differently, and only page layout —
-    // never query results — depends on it).
-    sort_items.sort_by(|a, b| a.0.total_cmp(&b.0));
+    sort_by_center(&mut sort_items);
 
     // sort items below "firstright" go into the left side
     let firstright = maxoff / 2;
@@ -180,6 +177,20 @@ pub fn fc_gseg_picksplit(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRe
     Ok(fcinfo.arg(1))
 }
 
+// gseg_picksplit_item_cmp under C's pg_qsort: -0 and +0 compare equal, so
+// their relative order is the sort's, not total_cmp's.
+fn sort_by_center<T: Copy>(items: &mut [(f32, u16, T)]) {
+    pg_qsort::pg_qsort(items, |a, b| {
+        if a.0 < b.0 {
+            -1
+        } else if a.0 == b.0 {
+            0
+        } else {
+            1
+        }
+    });
+}
+
 /// `gseg_same`.
 pub fn fc_gseg_same(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: non-null seg datums per the catalog signature.
@@ -190,4 +201,22 @@ pub fn fc_gseg_same(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<
     // SAFETY: result out-param live in the caller frame.
     unsafe { *result = same };
     Ok(fcinfo.arg(2))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sort_by_center;
+
+    #[test]
+    fn picksplit_sort_keeps_signed_zero_input_order() {
+        let mut items =
+            [(0.0f32, 1u16, ()), (-0.0, 2, ()), (0.0, 3, ()), (-0.0, 4, ()), (0.0, 5, ())];
+        sort_by_center(&mut items);
+        let order: Vec<u16> = items.iter().map(|i| i.1).collect();
+        assert_eq!(order, [1, 2, 3, 4, 5]);
+        let mut items = [(2.0f32, 1u16, ()), (-0.0, 2, ()), (0.0, 3, ()), (1.0, 4, ())];
+        sort_by_center(&mut items);
+        let order: Vec<u16> = items.iter().map(|i| i.1).collect();
+        assert_eq!(order, [2, 3, 4, 1]);
+    }
 }

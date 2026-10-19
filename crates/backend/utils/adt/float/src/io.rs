@@ -314,11 +314,19 @@ fn round_to_float(token: &[u8], mantissa_bits: u32, exp_bits: u32) -> f64 {
 
 #[cold]
 #[inline(never)]
-fn invalid_input(type_name: &str, orig_string: &str) -> PgError {
-    PgError::error(format!(
-        "invalid input syntax for type {type_name}: \"{orig_string}\""
-    ))
-    .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
+pub fn invalid_input(type_name: &str, orig_string: &[u8]) -> PgError {
+    let e = match core::str::from_utf8(orig_string) {
+        Ok(orig) => PgError::error(format!(
+            "invalid input syntax for type {type_name}: \"{orig}\""
+        )),
+        Err(_) => {
+            let mut msg = format!("invalid input syntax for type {type_name}: \"").into_bytes();
+            msg.extend_from_slice(orig_string);
+            msg.push(b'"');
+            PgError::error_raw_message(msg)
+        }
+    };
+    e.with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
 }
 
 // C truncates the reported number at endptr; the type name is fixed.
@@ -718,7 +726,7 @@ pub fn float8in_internal(
     num: &str,
     endptr_consumed: Option<&mut usize>,
     type_name: &str,
-    orig_string: &str,
+    orig_string: &[u8],
     mut escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<f64> {
     let bytes = num.as_bytes();
@@ -792,7 +800,7 @@ pub fn float4in_internal(
     num: &str,
     endptr_consumed: Option<&mut usize>,
     type_name: &str,
-    orig_string: &str,
+    orig_string: &[u8],
     mut escontext: Option<&mut SoftErrorContext>,
 ) -> PgResult<f32> {
     let bytes = num.as_bytes();
@@ -960,11 +968,11 @@ fn special_float4(s: &[u8]) -> Option<(f32, usize)> {
 }
 
 pub fn float8in(num: &str, escontext: Option<&mut SoftErrorContext>) -> PgResult<f64> {
-    float8in_internal(num, None, "double precision", num, escontext)
+    float8in_internal(num, None, "double precision", num.as_bytes(), escontext)
 }
 
 pub fn float4in(num: &str, escontext: Option<&mut SoftErrorContext>) -> PgResult<f32> {
-    float4in_internal(num, None, "real", num, escontext)
+    float4in_internal(num, None, "real", num.as_bytes(), escontext)
 }
 
 // Out functions write into a caller buffer (>= MAXDOUBLEWIDTH) and return the

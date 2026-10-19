@@ -9,6 +9,7 @@ name = "pg_walinspect"
 path = "src/lib.rs"
 
 [dependencies]
+types_tuple = { path = "../../_support/types/types_tuple" }
 datum = { path = "../../_support/types/datum" }
 mcx = { path = "../../_support/mcx" }
 stringinfo = { path = "../../_support/types/stringinfo" }

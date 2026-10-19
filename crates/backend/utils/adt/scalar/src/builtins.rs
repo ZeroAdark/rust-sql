@@ -280,21 +280,29 @@ fn tid_result(fcinfo: &mut Fcinfo, tid: Tid) -> PgResult<Datum> {
 }
 
 #[cold]
-fn tid_syntax(s: &str) -> ::types_error::PgError {
-    ::types_error::PgError::error(format!("invalid input syntax for type {}: \"{s}\"", "tid"))
-        .with_sqlstate(::types_error::ERRCODE_INVALID_TEXT_REPRESENTATION)
+pub(crate) fn tid_syntax(s: &[u8]) -> ::types_error::PgError {
+    // tid.c:72 "%s": the input bytes verbatim (SQL_ASCII high bytes).
+    let err = match core::str::from_utf8(s) {
+        Ok(s) => ::types_error::PgError::error(format!("invalid input syntax for type tid: \"{s}\"")),
+        Err(_) => {
+            let mut msg = b"invalid input syntax for type tid: \"".to_vec();
+            msg.extend_from_slice(s);
+            msg.push(b'"');
+            ::types_error::PgError::error_raw_message(msg)
+        }
+    };
+    err.with_sqlstate(::types_error::ERRCODE_INVALID_TEXT_REPRESENTATION)
 }
 
 pub fn fc_tidin(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 of tidin is cstring (typlen -2).
-    let s = unsafe { fcinfo.arg_cstring(0) };
-    let s = String::from_utf8_lossy(s.to_bytes());
-    match crate::tidin(s.as_bytes()) {
+    let s = unsafe { fcinfo.arg_cstring(0) }.to_bytes();
+    match crate::tidin(s) {
         Some(tid) => tid_result(fcinfo, tid),
         None => {
             // SAFETY: context, if set, rides per the ErrorSaveNode contract.
             let esc = unsafe { fcinfo.soft_error_context() };
-            ::types_error::ereturn(esc, Datum::null(), tid_syntax(&s))
+            ::types_error::ereturn(esc, Datum::null(), tid_syntax(s))
         }
     }
 }

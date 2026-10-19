@@ -1732,16 +1732,19 @@ pub fn spgdoinsert<'m>(
                     )
                 };
 
-                let mut out = spgChooseOut::None;
-                if !isnull {
-                    state.call_choose(mcx, &in_choose, &mut out)?;
+                let mut out = if !isnull {
+                    let mut slot = core::mem::MaybeUninit::new(spgChooseOut::None);
+                    // SAFETY: seeded with a valid variant; the proc's write is
+                    // validated by choose_result before the slot is read as an enum.
+                    state.call_choose(mcx, &in_choose, unsafe { slot.assume_init_mut() })?;
+                    choose_result(slot)?
                 } else {
-                    out = spgChooseOut::MatchNode {
+                    spgChooseOut::MatchNode {
                         nodeN: 0,
                         levelAdd: 0,
                         restDatum: Datum::null(),
-                    };
-                }
+                    }
+                };
 
                 if all_the_same {
                     resolve_all_the_same_choice(&mut out, n_nodes)?;
@@ -1795,9 +1798,7 @@ pub fn spgdoinsert<'m>(
                         spgSplitNodeAction(mcx, index, state, &mut current, &out)?;
                         continue;
                     }
-                    spgChooseOut::None => {
-                        panic!("unrecognized SPGiST choose result")
-                    }
+                    spgChooseOut::None => return Err(unrecognized_choose_result(0)),
                 }
             }
         }
@@ -1930,6 +1931,22 @@ fn check_split_tuple_output(prefixNNodes: i32, childNodeN: i32) -> PgResult<()> 
 
 /// spgdoinsert.c:2205-2218 — an allTheSame inner tuple admits no AddNode;
 /// a MatchNode descends into a random one of its nodes.
+// C (spgdoinsert.c:2317): elog(ERROR) on a resultType outside the enum.
+fn unrecognized_choose_result(result_type: i32) -> Box<PgError> {
+    Box::new(PgError::error(format!(
+        "unrecognized SPGiST choose result: {result_type}"
+    )))
+}
+
+fn choose_result(slot: core::mem::MaybeUninit<spgChooseOut>) -> PgResult<spgChooseOut> {
+    let tag = spgChooseOut::raw_result_type(&slot);
+    if !(1..=3).contains(&tag) {
+        return Err(unrecognized_choose_result(tag));
+    }
+    // SAFETY: the tag names a variant; every payload field is plain data.
+    Ok(unsafe { slot.assume_init() })
+}
+
 fn resolve_all_the_same_choice(out: &mut spgChooseOut, n_nodes: i32) -> PgResult<()> {
     match out {
         spgChooseOut::AddNode { .. } => {
@@ -1977,6 +1994,32 @@ mod opclass_output_guard_tests {
             picksplit_node_index(-1, 3),
             "inconsistent result of SPGiST picksplit function",
         );
+    }
+
+    // spgdoinsert.c:2317: a config proc installed as FUNCTION 2 (spgvalidate
+    // accepts the signature) writes its spgConfigOut through the choose out
+    // pointer; C reads resultType = prefixType (25) and raises elog(ERROR).
+    #[test]
+    fn foreign_write_through_choose_out_is_c_error() {
+        let mut slot = core::mem::MaybeUninit::new(spgChooseOut::None);
+        // SAFETY: a 16-byte spgConfigOut-shaped write inside the slot.
+        unsafe {
+            let p = slot.as_mut_ptr().cast::<u32>();
+            p.write(25);
+            p.add(1).write(25);
+            p.add(2).write(25);
+        }
+        assert_c_error(choose_result(slot).map(|_| ()), "unrecognized SPGiST choose result: 25");
+        assert_c_error(
+            choose_result(core::mem::MaybeUninit::new(spgChooseOut::None)).map(|_| ()),
+            "unrecognized SPGiST choose result: 0",
+        );
+        let out = spgChooseOut::AddNode { nodeLabel: Datum::null(), nodeN: 4 };
+        assert_eq!(spgChooseOut::raw_result_type(&core::mem::MaybeUninit::new(out)), 2);
+        match choose_result(core::mem::MaybeUninit::new(out)).unwrap() {
+            spgChooseOut::AddNode { nodeN: 4, .. } => {}
+            _ => panic!("valid variant must survive the tag check"),
+        }
     }
 
     // spgdoinsert.c:1100-1113

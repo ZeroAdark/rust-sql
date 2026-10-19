@@ -710,7 +710,7 @@ fn eval_dict_lane_lazy(
 /// readability (`contig` — SoaDictTable's whole-span witness; ascending
 /// pointers alone never establish one allocation: separate allocations
 /// ascend by accident and the sweep then reads the foreign gap between
-/// them — GL-TESTFIX-1 F-R1-1, ASan heap-buffer-overflow), and the dict's
+/// them — regression F-R1-1, ASan heap-buffer-overflow), and the dict's
 /// images prove (a) strictly ascending pointers — writer layout order —
 /// and (b) all inline (1B-short / 4B-U): the per-entry loop raises
 /// `non_inline_lane_datum` on ANY non-inline entry (eager fill), so the

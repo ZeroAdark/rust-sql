@@ -187,12 +187,26 @@ pub struct TidStore {
     tree: RadixTree<BlocktableEntry>,
 }
 
+const ALLOCSET_DEFAULT_INITSIZE: usize = 8 * 1024;
+const ALLOCSET_DEFAULT_MAXSIZE: usize = 8 * 1024 * 1024;
+
+fn local_max_block_size(max_bytes: usize) -> usize {
+    let mut max_block_size = ALLOCSET_DEFAULT_MAXSIZE;
+    while 16 * max_block_size > max_bytes && max_block_size > ALLOCSET_DEFAULT_INITSIZE {
+        max_block_size >>= 1;
+    }
+    max_block_size
+}
+
 impl TidStore {
-    /// `max_bytes` is a sizing hint only; drop is TidStoreDestroy. C caps the
-    /// context maxBlockSize at max_bytes/16 — mcx arenas grow on their own ladder.
-    pub fn create_local(parent: Mcx<'_>, _max_bytes: usize, insert_only: bool) -> PgResult<TidStore> {
+    /// Drop is TidStoreDestroy. tidstore.c:172: the context maxBlockSize is
+    /// the largest power of two no larger than max_bytes/16 (8 KiB floor), so
+    /// memory_usage grows in bounded steps against the VACUUM budget.
+    pub fn create_local(parent: Mcx<'_>, max_bytes: usize, insert_only: bool) -> PgResult<TidStore> {
         let rt_context = if insert_only {
-            parent.context().new_child_bump("TID storage")
+            parent
+                .context()
+                .new_child_bump_with_max_block_size("TID storage", local_max_block_size(max_bytes))
         } else {
             parent.context().new_child("TID storage")
         };

@@ -232,6 +232,21 @@ fn create_lwlocks_and_named_tranche() {
     let lock = &named[0].lock;
     assert!(LWLockAcquire(lock, LW_EXCLUSIVE, 0).unwrap());
     LWLockRelease(lock).unwrap();
+
+    // A backend thread starts with no tranche names; InitLWLockAccess
+    // (InitProcess) registers the named tranches as C's fork image would.
+    let tranche_id = table.named_tranches()[0].tranche_id as u16;
+    std::thread::spawn(move || {
+        assert_eq!(GetLWTrancheName(tranche_id), "extension");
+        InitLWLockAccess();
+        assert_eq!(GetLWTrancheName(tranche_id), "test_tranche");
+        assert_eq!(
+            GetLWLockIdentifier(waitevent::PG_WAIT_LWLOCK, tranche_id),
+            "test_tranche"
+        );
+    })
+    .join()
+    .unwrap();
 }
 
 #[test]

@@ -1,11 +1,22 @@
 use datum::array_build::ArrayBuildState;
 use datum::Datum;
-use types_core::{InvalidOid, Oid, TEXTOID, PG_CATALOG_NAMESPACE, RELATION_RELATION_ID};
-use types_error::{PgError, PgResult, ERRCODE_INVALID_PARAMETER_VALUE};
+use types_core::{
+    InvalidOid, Oid, BOOLOID, INT4OID, OIDOID, PG_CATALOG_NAMESPACE, RECORDOID,
+    RELATION_RELATION_ID, TEXTARRAYOID, TEXTOID,
+};
+use types_error::{
+    PgError, PgResult, ERRCODE_DATATYPE_MISMATCH, ERRCODE_INVALID_PARAMETER_VALUE,
+};
+use types_tuple::TupleDescData;
 use types_fmgr::{
     byref_result, cstring_result, varlena_result, FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo,
     PGFunction,
 };
+
+// text_to_cstring: the text payload up to its first NUL byte.
+fn cstring_prefix(b: &[u8]) -> &[u8] {
+    &b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())]
+}
 
 fn is_ident_start(c: u8) -> bool {
     c == b'_' || c.is_ascii_alphabetic() || c >= 0x80
@@ -34,7 +45,7 @@ fn invalid_ident_err(qualname: &[u8], detail: Option<&str>) -> Box<PgError> {
 pub fn fc_parse_ident(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let mcx = fcinfo.result_mcx();
     // SAFETY: arg 0 is a non-null text datum (strict function).
-    let qualname: Vec<u8> = unsafe { fcinfo.arg_varlena_packed(0)? }.data().to_vec();
+    let qualname: Vec<u8> = cstring_prefix(unsafe { fcinfo.arg_varlena_packed(0)? }.data()).to_vec();
     let strict = fcinfo.arg_bool(1);
     let encoding = mbutils::GetDatabaseEncoding();
 
@@ -300,12 +311,9 @@ fn composite_result(
     values: &[Datum],
     isnull: &[bool],
 ) -> PgResult<Datum> {
+    let expected = expected_desc(fcinfo);
     let mcx = fcinfo.result_mcx();
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
-    if resolved.class != funcapi::TypeFuncClass::Composite {
-        return Err(crate::not_row_type());
-    }
-    let tupdesc = resolved.result_tuple_desc.expect("composite result has tupdesc");
+    let tupdesc = call_result_desc(mcx, flinfo, expected)?;
     let tup = heaptuple::heap_form_tuple(mcx, &tupdesc, values, isnull)?;
     let d = Datum::from_usize(tup.header_ptr() as usize);
     core::mem::forget(tup); // leak into the arming context (C palloc ownership)
@@ -313,21 +321,51 @@ fn composite_result(
 }
 
 pub fn fc_pg_walfile_name_offset(
-    flinfo: Option<&mut FmgrInfo>,
+    _flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    let flinfo = flinfo.expect("pg_walfile_name_offset: NULL flinfo");
     let lsn = fcinfo.arg(0).as_u64();
     if transam_xlog::RecoveryInProgress() {
         return Err(recovery_in_progress_err("pg_walfile_name_offset()"));
     }
+    let mcx = fcinfo.result_mcx();
+    let mut desc = ::tupdesc::CreateTemplateTupleDesc(mcx, 2)?;
+    ::tupdesc::TupleDescInitEntry(&mut desc, 1, Some("file_name"), TEXTOID, -1, 0)?;
+    ::tupdesc::TupleDescInitEntry(&mut desc, 2, Some("file_offset"), INT4OID, -1, 0)?;
+    desc.tdtypeid = RECORDOID;
+    desc.tdtypmod = -1;
+    ::typcache_seams::assign_record_type_typmod::call(&mut desc)?;
     let seg_size = transam_xlog::wal_segment_size() as u64;
     let name = xlog_file_name(transam_xlog::ctl::GetWALInsertionTimeLine(), lsn / seg_size, seg_size);
-    let values = [
-        crate::text_datum(fcinfo.result_mcx(), &name)?,
-        Datum::from_u32((lsn % seg_size) as u32),
-    ];
-    composite_result(flinfo, fcinfo, &values, &[false, false])
+    let values = [crate::text_datum(mcx, &name)?, Datum::from_u32((lsn % seg_size) as u32)];
+    let tup = heaptuple::heap_form_tuple(mcx, &desc, &values, &[false, false])?;
+    let d = Datum::from_usize(tup.header_ptr() as usize);
+    core::mem::forget(tup); // leak into the arming context (C palloc ownership)
+    Ok(d)
+}
+
+// xlogfuncs.c:487 "%s": the name bytes verbatim (SQL_ASCII high bytes).
+#[cold]
+pub(crate) fn invalid_walfile_name(name: &[u8]) -> types_error::PgError {
+    match core::str::from_utf8(name) {
+        Ok(s) => types_error::PgError::error(format!("invalid WAL file name \"{s}\"")),
+        Err(_) => {
+            let mut msg = b"invalid WAL file name \"".to_vec();
+            msg.extend_from_slice(name);
+            msg.push(b'"');
+            types_error::PgError::error_raw_message(msg)
+        }
+    }
+}
+
+// xlog.c:8138 LOG line; the name bytes verbatim.
+pub(crate) fn restore_point_log(name: &[u8], recptr: u64) -> Vec<u8> {
+    let mut msg = b"restore point \"".to_vec();
+    msg.extend_from_slice(name);
+    msg.extend_from_slice(
+        format!("\" created at {:X}/{:X}", (recptr >> 32) as u32, recptr as u32).as_bytes(),
+    );
+    msg
 }
 
 pub fn fc_pg_split_walfile_name(
@@ -338,6 +376,7 @@ pub fn fc_pg_split_walfile_name(
     // SAFETY: catalog arg 0 is a non-null text varlena (strict fn).
     let fname = unsafe { fcinfo.arg_varlena_packed(0)? };
     let data = fname.data();
+    let data = &data[..data.iter().position(|&b| b == 0).unwrap_or(data.len())];
     let mut upper = [0u8; XLOG_FNAME_LEN];
     let sized = data.len() == XLOG_FNAME_LEN;
     if sized {
@@ -347,11 +386,7 @@ pub fn fc_pg_split_walfile_name(
     }
     if !sized || !is_xlog_file_name(&upper) {
         return Err(Box::new(
-            types_error::PgError::error(format!(
-                "invalid WAL file name \"{}\"",
-                String::from_utf8_lossy(data)
-            ))
-            .with_sqlstate(types_error::ERRCODE_INVALID_PARAMETER_VALUE),
+            invalid_walfile_name(data).with_sqlstate(types_error::ERRCODE_INVALID_PARAMETER_VALUE),
         ));
     }
     let seg_size = transam_xlog::wal_segment_size() as u64;
@@ -550,15 +585,13 @@ pub fn fc_pg_create_restore_point(
         transam_xlog::XLOG_RESTORE_POINT,
         &[&body],
     )?;
-    let _ = elog::elog(
-        types_error::LOG,
-        format!(
-            "restore point \"{}\" created at {:X}/{:X}",
-            String::from_utf8_lossy(&name[..cstr_len]),
-            (recptr >> 32) as u32,
-            recptr as u32
-        ),
-    );
+    let _ = elog::ereport(types_error::LOG)
+        .errmsg_raw(restore_point_log(&name[..cstr_len], recptr))
+        .finish(types_error::ErrorLocation::new(
+            file!(),
+            line!() as i32,
+            "pg_create_restore_point",
+        ));
     Ok(Datum::from_i64(recptr as i64))
 }
 
@@ -719,12 +752,8 @@ pub fn fc_pg_backup_stop(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
 
     // C resolves the result type before checking the backup status.
     {
-        let mcx = fcinfo.result_mcx();
-        if funcapi::get_call_result_type(mcx, flinfo, None)?.class
-            != funcapi::TypeFuncClass::Composite
-        {
-            return Err(crate::not_row_type());
-        }
+        let expected = expected_desc(fcinfo);
+        call_result_desc(fcinfo.result_mcx(), flinfo, expected)?;
     }
 
     if transam_xlog::get_backup_status() != transam_xlog::SessionBackupState::Running {
@@ -766,9 +795,9 @@ pub fn fc_pg_nextoid(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
     // SAFETY: catalog arg type name — 64-byte NameData (strict function).
     let attname_bytes = unsafe { fcinfo.arg_name(1) };
     let len = attname_bytes.iter().position(|&b| b == 0).unwrap_or(attname_bytes.len());
-    let attname = core::str::from_utf8(&attname_bytes[..len])
-        .map_err(|_| PgError::error("invalid UTF-8 in name argument"))?
-        .to_owned();
+    let attname_raw = attname_bytes[..len].to_vec();
+    // Catalog names are UTF-8, so a non-UTF-8 name matches no column.
+    let attname = core::str::from_utf8(&attname_raw).ok().map(str::to_owned);
     let idxoid = fcinfo.arg(2).as_oid();
 
     if !superuser_seams::superuser::call()? {
@@ -802,16 +831,21 @@ pub fn fc_pg_nextoid(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
         ));
     }
 
-    let attno: AttrNumber = lsyscache::get_attnum(reloid, &attname)?;
+    let attno: AttrNumber = match &attname {
+        Some(attname) => lsyscache::get_attnum(reloid, attname)?,
+        None => InvalidAttrNumber,
+    };
     if attno == InvalidAttrNumber {
+        let mut raw = b"column \"".to_vec();
+        raw.extend_from_slice(&attname_raw);
+        raw.extend_from_slice(b"\" of relation \"");
+        raw.extend_from_slice(rel.data_rc().name().as_bytes());
+        raw.extend_from_slice(b"\" does not exist");
         return Err(Box::new(
-            PgError::error(format!(
-                "column \"{attname}\" of relation \"{}\" does not exist",
-                rel.data_rc().name()
-            ))
-            .with_sqlstate(ERRCODE_UNDEFINED_COLUMN),
+            PgError::error_raw_message(raw).with_sqlstate(ERRCODE_UNDEFINED_COLUMN),
         ));
     }
+    let attname = attname.expect("a resolved column name is UTF-8");
 
     if lsyscache::get_atttype(reloid, attno)? != OIDOID {
         return Err(Box::new(
@@ -988,10 +1022,13 @@ pub(crate) fn current_logfiles_entry<'a>(
 }
 
 pub fn fc_pg_current_logfile(
-    _flinfo: Option<&mut FmgrInfo>,
+    flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
 ) -> PgResult<Datum> {
-    current_logfile(fcinfo, None)
+    if fcinfo.nargs() == 0 {
+        return current_logfile(fcinfo, None);
+    }
+    fc_pg_current_logfile_1arg(flinfo, fcinfo)
 }
 
 pub fn fc_pg_current_logfile_1arg(
@@ -1004,7 +1041,7 @@ pub fn fc_pg_current_logfile_1arg(
     }
     // SAFETY: null-checked text arg of a non-strict fn.
     let fmt = unsafe { fcinfo.arg_varlena_packed(0)? };
-    let fmt: Vec<u8> = fmt.data().to_vec();
+    let fmt: Vec<u8> = cstring_prefix(fmt.data()).to_vec();
     current_logfile(fcinfo, Some(&fmt))
 }
 
@@ -1178,40 +1215,73 @@ struct KeywordRows {
     tuples: Vec<Vec<u8>>,
 }
 
-fn collect_keyword_rows(flinfo: &FmgrInfo, fcinfo: &Fcinfo) -> PgResult<KeywordRows> {
-    let mcx = fcinfo.result_mcx();
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
+fn tupledesc_mismatch(detail: String) -> Box<PgError> {
+    Box::new(
+        PgError::error("function return row and query-specified return row do not match")
+            .with_sqlstate(ERRCODE_DATATYPE_MISMATCH)
+            .with_detail(detail),
+    )
+}
+
+// rsinfo->expectedDesc: the caller's column definition list, if any.
+pub(crate) fn expected_desc<'a>(fcinfo: &mut Fcinfo) -> Option<&'a TupleDescData<'a>> {
+    let expected_desc = fcinfo.rsinfo_mut().and_then(|rsi| rsi.expectedDesc);
+    // SAFETY: expectedDesc contract — the executor armed it with the scan
+    // tupdesc, live for the duration of this call.
+    expected_desc.map(|p| unsafe { p.cast::<TupleDescData<'_>>().as_ref() })
+}
+
+// C get_call_result_type(fcinfo, NULL, &tupdesc): an anonymous RECORD result
+// resolves through rsinfo->expectedDesc.
+pub(crate) fn call_result_desc<'mcx>(
+    mcx: mcx::Mcx<'mcx>,
+    flinfo: &FmgrInfo,
+    expected: Option<&TupleDescData<'_>>,
+) -> PgResult<TupleDescData<'mcx>> {
+    let resolved = funcapi::get_call_result_type(mcx, flinfo, expected)?;
     if resolved.class != funcapi::TypeFuncClass::Composite {
-        return Err(Box::new(types_error::PgError::error(
-            "return type must be a row type",
+        return Err(crate::not_row_type());
+    }
+    Ok(resolved.result_tuple_desc.expect("composite result carries a tupdesc"))
+}
+
+fn collect_keyword_rows(flinfo: &FmgrInfo, fcinfo: &mut Fcinfo) -> PgResult<KeywordRows> {
+    let expected = expected_desc(fcinfo);
+    let mcx = fcinfo.result_mcx();
+    let desc = call_result_desc(mcx, flinfo, expected)?;
+    let natts = desc.natts as usize;
+    // DIVERGENCE (misc.c:485): C's BuildTupleFromCStrings reads past its
+    // five-entry values[] for a wider column definition list and crashes the
+    // backend; refuse with the executor's tupledesc_match text.
+    if natts > 5 {
+        return Err(tupledesc_mismatch(format!(
+            "Returned row contains 5 attributes, but query expects {natts}."
         )));
     }
-    let desc = resolved.result_tuple_desc.expect("composite result carries a tupdesc");
+    let mut attinmeta = funcapi::AttInMetadata::new(&desc)?;
 
     let n = keywords::ScanKeywords.num_keywords as usize;
     let mut tuples = Vec::with_capacity(n);
     for i in 0..n {
         let word = keywords::GetScanKeyword(i, &keywords::ScanKeywords).expect("index < n");
-        let (catcode, catdesc): (u8, &str) = match keywords::ScanKeywordCategories[i] {
-            keywords::KeywordCategory::Unreserved => (b'U', "unreserved"),
+        let (catcode, catdesc): (&[u8], &[u8]) = match keywords::ScanKeywordCategories[i] {
+            keywords::KeywordCategory::Unreserved => (b"U", b"unreserved"),
             keywords::KeywordCategory::ColName => {
-                (b'C', "unreserved (cannot be function or type name)")
+                (b"C", b"unreserved (cannot be function or type name)")
             }
             keywords::KeywordCategory::TypeFuncName => {
-                (b'T', "reserved (can be function or type name)")
+                (b"T", b"reserved (can be function or type name)")
             }
-            keywords::KeywordCategory::Reserved => (b'R', "reserved"),
+            keywords::KeywordCategory::Reserved => (b"R", b"reserved"),
         };
-        let barelabel = keywords::ScanKeywordBareLabel[i];
-        let baredesc = if barelabel { "can be bare label" } else { "requires AS" };
-        let values = [
-            varlena_result(varlena::cstring_to_text(mcx, word)?),
-            Datum::from_char(catcode as i8),
-            Datum::from_bool(barelabel),
-            varlena_result(varlena::cstring_to_text(mcx, catdesc.as_bytes())?),
-            varlena_result(varlena::cstring_to_text(mcx, baredesc.as_bytes())?),
-        ];
-        let tuple = heaptuple::heap_form_tuple(mcx, &desc, &values, &[false; 5])?;
+        let (barelabel, baredesc): (&[u8], &[u8]) = if keywords::ScanKeywordBareLabel[i] {
+            (b"true", b"can be bare label")
+        } else {
+            (b"false", b"requires AS")
+        };
+        let cstrings = [Some(word), Some(catcode), Some(barelabel), Some(catdesc), Some(baredesc)];
+        let (values, isnull) = attinmeta.build(mcx, &cstrings[..natts])?;
+        let tuple = heaptuple::heap_form_tuple(mcx, &desc, &values, &isnull)?;
         tuples.push(tuple.image().to_vec());
     }
     Ok(KeywordRows { tuples })
@@ -1220,9 +1290,16 @@ fn collect_keyword_rows(flinfo: &FmgrInfo, fcinfo: &Fcinfo) -> PgResult<KeywordR
 pub fn fc_pg_get_keywords(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let flinfo = flinfo.expect("pg_get_keywords: NULL flinfo");
     if !flinfo.has_fn_extra() {
-        let rows = collect_keyword_rows(flinfo, fcinfo)?;
-        let fctx = funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
-        fctx.user_fctx = Some(Box::new(rows));
+        // misc.c:427: SRF_FIRSTCALL_INIT precedes the result-type resolution.
+        funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
+        let rows = match collect_keyword_rows(flinfo, fcinfo) {
+            Ok(rows) => rows,
+            Err(e) => {
+                funcapi::end_MultiFuncCall(flinfo);
+                return Err(e);
+            }
+        };
+        funcapi::per_MultiFuncCall(flinfo).user_fctx = Some(Box::new(rows));
     }
     let fctx = funcapi::per_MultiFuncCall(flinfo);
     let idx = fctx.call_cntr as usize;
@@ -1263,13 +1340,35 @@ struct CatalogFkRows {
     tuples: Vec<Vec<u8>>,
 }
 
-fn collect_catalog_fk_rows(flinfo: &FmgrInfo, fcinfo: &Fcinfo) -> PgResult<CatalogFkRows> {
+const CATALOG_FK_COLUMN_TYPES: [Oid; 6] =
+    [OIDOID, TEXTARRAYOID, OIDOID, TEXTARRAYOID, BOOLOID, BOOLOID];
+
+fn collect_catalog_fk_rows(flinfo: &FmgrInfo, fcinfo: &mut Fcinfo) -> PgResult<CatalogFkRows> {
+    let expected = expected_desc(fcinfo);
     let mcx = fcinfo.result_mcx();
-    let resolved = funcapi::get_call_result_type(mcx, flinfo, None)?;
-    if resolved.class != funcapi::TypeFuncClass::Composite {
-        return Err(crate::not_row_type());
+    let desc = call_result_desc(mcx, flinfo, expected)?;
+    let natts = desc.natts as usize;
+    // DIVERGENCE (misc.c:551): C forms its six hardcoded datums against the
+    // caller's descriptor unchecked (a wider or retyped column definition list
+    // reads past values[] or dereferences an OID as a pointer and crashes the
+    // backend); refuse with the executor's tupledesc_match rule and text. A
+    // narrower list keeps C's leading columns.
+    if natts > 6 {
+        return Err(tupledesc_mismatch(format!(
+            "Returned row contains 6 attributes, but query expects {natts}."
+        )));
     }
-    let desc = resolved.result_tuple_desc.expect("composite result carries a tupdesc");
+    for (i, want) in CATALOG_FK_COLUMN_TYPES[..natts].iter().enumerate() {
+        let got = desc.attrs[i].atttypid;
+        if !coerce::IsBinaryCoercible(*want, got)? {
+            return Err(tupledesc_mismatch(format!(
+                "Returned type {} at ordinal position {}, but query expects {}.",
+                format_type::format_type_be(*want)?,
+                i + 1,
+                format_type::format_type_be(got)?,
+            )));
+        }
+    }
 
     let rows = crate::catalog_fk::SYS_FK_RELATIONSHIPS;
     let mut tuples = Vec::with_capacity(rows.len());
@@ -1282,7 +1381,8 @@ fn collect_catalog_fk_rows(flinfo: &FmgrInfo, fcinfo: &Fcinfo) -> PgResult<Catal
             Datum::from_bool(*is_array),
             Datum::from_bool(*is_opt),
         ];
-        let tuple = heaptuple::heap_form_tuple(mcx, &desc, &values, &[false; 6])?;
+        let tuple =
+            heaptuple::heap_form_tuple(mcx, &desc, &values[..natts], &[false; 6][..natts])?;
         tuples.push(tuple.image().to_vec());
     }
     Ok(CatalogFkRows { tuples })
@@ -1294,9 +1394,16 @@ pub fn fc_pg_get_catalog_foreign_keys(
 ) -> PgResult<Datum> {
     let flinfo = flinfo.expect("pg_get_catalog_foreign_keys: NULL flinfo");
     if !flinfo.has_fn_extra() {
-        let rows = collect_catalog_fk_rows(flinfo, fcinfo)?;
-        let fctx = funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
-        fctx.user_fctx = Some(Box::new(rows));
+        // misc.c:512: SRF_FIRSTCALL_INIT precedes the result-type resolution.
+        funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
+        let rows = match collect_catalog_fk_rows(flinfo, fcinfo) {
+            Ok(rows) => rows,
+            Err(e) => {
+                funcapi::end_MultiFuncCall(flinfo);
+                return Err(e);
+            }
+        };
+        funcapi::per_MultiFuncCall(flinfo).user_fctx = Some(Box::new(rows));
     }
     let fctx = funcapi::per_MultiFuncCall(flinfo);
     let idx = fctx.call_cntr as usize;

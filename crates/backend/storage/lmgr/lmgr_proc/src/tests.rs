@@ -38,7 +38,7 @@ impl WaitOutcome for PgResult<()> {
     }
 }
 
-// GL-CONNSLOT-1 injection flags: arm to make the corresponding seam panic
+// regression injection flags: arm to make the corresponding seam panic
 // ONCE (swap-consumed) inside a PGPROC-release path.
 static SYNCREP_PANIC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static LOCKRELEASE_PANIC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -465,7 +465,7 @@ fn guc_storage_and_installed_seams() {
 
 #[test]
 fn prockill_releases_slot_despite_cleanup_panic() {
-    // GL-CONNSLOT-1 regression (round-10 Antithesis DL-connslot-exhaustion):
+    // regression regression (round-10 Antithesis DL-connslot-exhaustion):
     // ProcKill runs inside the guarded exit-callback drain, which swallows
     // panics — before the fix, a panic in any pre-release cleanup step
     // unwound past the freelist push and permanently leaked the Regular
@@ -493,7 +493,7 @@ fn prockill_releases_slot_despite_cleanup_panic() {
 
 #[test]
 fn deferred_leader_return_survives_member_cleanup_panic() {
-    // GL-CONNSLOT-1 regression, the round-10 signature shape: a leader dies
+    // regression regression, the round-10 signature shape: a leader dies
     // FIRST with a lock-group member still attached (its Regular PGPROC is
     // deferred to the last member out), and the member's own release path
     // then hits a cleanup panic. Before the fix the member's exit unwound
@@ -628,4 +628,21 @@ fn proc_wait_for_signal_checks_for_interrupts() {
     let interrupted = ProcWaitForSignal(0).interrupted();
     CANCEL_PENDING.with(|c| c.set(false));
     assert!(interrupted, "a pending query cancel must surface from ProcWaitForSignal");
+}
+
+// proc.c:221-380 ShmemInitStruct sizes at C 18.6 LP64: TotalProcs =
+// MaxBackends + NUM_AUXILIARY_PROCS + max_prepared_xacts, sizeof(PGPROC) 832 +
+// xid 4 + XidCacheStatus 2 + statusFlags 1, one fast-path group = 8 + 64.
+#[test]
+fn shmem_block_sizes_match_c_18_6() {
+    setup();
+    thread_globals(130);
+    let total = (MAX_BACKENDS + NUM_AUXILIARY_PROCS + CFG.max_prepared_xacts) as usize;
+    assert_eq!(PGProcShmemSize(&CFG).unwrap(), total * 839);
+    assert_eq!(FastPathLockShmemSize(&CFG).unwrap(), total * 72);
+    assert_eq!(C_SIZEOF_PROC_HDR, 128);
+    assert_eq!(
+        ProcGlobalShmemSize(&CFG).unwrap(),
+        C_SIZEOF_PROC_HDR + C_SIZEOF_SLOCK_T + total * 839 + total * 72
+    );
 }

@@ -196,8 +196,17 @@ fn create_drop_transactional_internal(kind: PgStat_Kind, dboid: Oid, objid: u64,
 }
 
 pub fn pgstat_create_transactional(kind: PgStat_Kind, dboid: Oid, objid: u64) {
-    // C warns + resets when a shared entry already exists: phase 2 (needs the
-    // shared hash).
+    // pgstat_xact.c:363-370
+    if crate::shmem::entry_exists(PgStat_HashKey { kind, dboid, objid }) {
+        let _ = elog::elog(
+            types_error::WARNING,
+            format!(
+                "resetting existing statistics for kind {}, db={dboid}, oid={objid}",
+                crate::pgstat_get_kind_name(kind)
+            ),
+        );
+        crate::shmem::pgstat_reset(kind, dboid, objid);
+    }
     create_drop_transactional_internal(kind, dboid, objid, true);
 }
 

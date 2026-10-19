@@ -349,6 +349,7 @@ fn do_connect_meta(st: &mut PsqlState, opts: &[String]) {
         host: pick(2, &cur.host),
         port: pick(3, &cur.port),
         password: cur.password.clone(),
+        progname: cur.progname.clone(),
     };
     let host_changed = newp.host != cur.host || newp.port != cur.port;
     // Raw-fd (wasm) transport: there is only ONE pipe pair to the server, so
@@ -411,6 +412,7 @@ fn do_connect_meta(st: &mut PsqlState, opts: &[String]) {
                     user: st.cparams.user.clone(),
                     dbname: st.cparams.dbname.clone(),
                     password: st.cparams.password.clone(),
+                    progname: st.cparams.progname.clone(),
                 };
                 match do_connect(st, &orig) {
                     Ok(conn) => {

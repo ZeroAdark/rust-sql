@@ -383,13 +383,13 @@ pub fn ltree_picksplit(
 
     // RIX array: array[j].index = j, array[j].r = LTG_GETLNODE(entry j).
     // Sort array[FirstOffsetNumber..=maxoff] by ltree_compare on the L node.
-    let mut array: Vec<(usize, Vec<u8>)> = (1..=maxoff)
-        .map(|j| (j, keys[j].as_ref().unwrap().get_lnode().to_vec()))
+    let lnodes: Vec<&[u8]> = (0..=maxoff)
+        .map(|j| keys[j].as_ref().map_or(&[][..], |k| k.get_lnode()))
         .collect();
-    array.sort_by(|a, b| {
-        let c = op::ltree_compare(&a.1, &b.1);
-        c.cmp(&0)
-    });
+    // qsort(&array[FirstOffsetNumber], ..., treekey_cmp): the equal-key
+    // order pg_qsort produces decides which half each entry lands in.
+    let mut array: Vec<usize> = (1..=maxoff).collect();
+    ::pg_qsort::pg_qsort(&mut array, |a, b| op::ltree_compare(lnodes[*a], lnodes[*b]));
 
     let mut spl_left: Vec<u16> = Vec::new();
     let mut spl_right: Vec<u16> = Vec::new();
@@ -404,7 +404,7 @@ pub fn ltree_picksplit(
     // C: half = (maxoff - FirstOffsetNumber + 1) / 2; loop j over 1..=maxoff in
     // the SORTED order; j is the 1-based loop counter, the entry is array[j-1].
     let half = (maxoff as i32 - 1 + 1) / 2; // (maxoff - FirstOffsetNumber + 1)/2
-    for (jcounter, (index, _r)) in array.iter().enumerate() {
+    for (jcounter, index) in array.iter().enumerate() {
         let j = (jcounter + 1) as i32; // FirstOffsetNumber == 1.
         let lu = keys[*index].as_ref().unwrap();
         if j <= half {
@@ -448,11 +448,11 @@ pub fn ltree_picksplit(
     }
 
     // lu_l = LTG_GETLNODE(entry array[FirstOffsetNumber].index)
-    let lu_l = array[0].1.clone();
+    let lu_l = lnodes[array[0]].to_vec();
     let lu = ltree_gist_alloc(lisat, Some(&ls), siglen, Some(&lu_l), lu_r.as_deref());
 
     // ru_l = LTG_GETLNODE(entry array[1 + half].index)
-    let ru_l_index = array[(1 + half) as usize - 1].0;
+    let ru_l_index = array[(1 + half) as usize - 1];
     let ru_l = keys[ru_l_index].as_ref().unwrap().get_lnode().to_vec();
     let ru = ltree_gist_alloc(risat, Some(&rs), siglen, Some(&ru_l), ru_r.as_deref());
 
@@ -881,7 +881,9 @@ pub fn array_picksplit(
         let beta = ahemdist(&seed_r, kj, siglen);
         costvector.push((j, (alpha - beta).abs()));
     }
-    costvector.sort_by(|a, b| a.1.cmp(&b.1));
+    // qsort(costvector, maxoff, sizeof(SPLITCOST), comparecost): the
+    // equal-cost order pg_qsort produces decides page membership.
+    ::pg_qsort::pg_qsort(&mut costvector, |a, b| a.1 - b.1);
 
     let mut spl_left: Vec<u16> = Vec::new();
     let mut spl_right: Vec<u16> = Vec::new();

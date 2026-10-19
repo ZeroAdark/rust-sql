@@ -807,8 +807,9 @@ pub(crate) fn CloneRowTriggersToPartition<'mcx>(
         TRIGGER_TYPE_AFTER, TRIGGER_TYPE_BEFORE, TRIGGER_TYPE_EVENT_MASK, TRIGGER_TYPE_ROW,
         TRIGGER_TYPE_TIMING_MASK,
     };
+    let pg_trigger = table::table_open(mcx, types_core::TRIGGER_RELATION_ID, RowExclusiveLock)?;
     let Some(trigdesc) = relcache::RelationGetTriggerDesc(parent.rd_id)? else {
-        return Ok(());
+        return pg_trigger.close(RowExclusiveLock);
     };
     for trig in trigdesc.triggers.iter() {
         if trig.tgtype & TRIGGER_TYPE_ROW == 0 {
@@ -871,7 +872,7 @@ pub(crate) fn CloneRowTriggersToPartition<'mcx>(
             trig.tgenabled,
         )?;
     }
-    Ok(())
+    pg_trigger.close(RowExclusiveLock)
 }
 
 // has_partition_attrs (catalog/partition.c): attnums is offset by

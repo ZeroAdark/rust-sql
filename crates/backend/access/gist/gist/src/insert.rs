@@ -38,6 +38,18 @@ const GIST_UNLOCK: i32 = bufmgr::BUFFER_LOCK_UNLOCK;
 #[track_caller]
 #[cold]
 #[inline(never)]
+// gist.c:480 XLogEnsureRecordSpace(npage, ..) before the critical section
+// (xloginsert.c:192): a split past XLR_MAX_BLOCK_ID references is a plain
+// ERROR, never a PANIC from inside gistXLogSplit.
+fn ensure_split_record_space(npage: usize) -> PgResult<()> {
+    if npage > ::xloginsert::XLR_MAX_BLOCK_ID {
+        return gist_internal_error(
+            "maximum number of WAL record block references exceeded".to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn gist_internal_error<T>(msg: String) -> PgResult<T> {
     Err(Box::new(
         ::types_error::PgError::error(msg)
@@ -362,6 +374,8 @@ pub fn gistplacetopage<'mcx>(
                 fill(&mut pm)?;
             }
         }
+
+        ensure_split_record_space(npage)?;
 
         // No ereport(ERROR) until the changes are logged (gist.c:466): an Err
         // below escapes with CritSectionCount raised, so the recovery frame
@@ -1423,6 +1437,19 @@ const _: () = {
     let _ = itup_get_tid;
     let _ = ItemPointerData::invalid;
 };
+
+#[cfg(test)]
+mod split_record_space_tests {
+    use super::ensure_split_record_space;
+
+    #[test]
+    fn block_reference_ceiling_is_a_catchable_error() {
+        assert!(ensure_split_record_space(::xloginsert::XLR_MAX_BLOCK_ID).is_ok());
+        let err = ensure_split_record_space(::xloginsert::XLR_MAX_BLOCK_ID + 1).unwrap_err();
+        assert_eq!(err.sqlstate(), ::types_error::ERRCODE_INTERNAL_ERROR);
+        assert_eq!(err.message(), "maximum number of WAL record block references exceeded");
+    }
+}
 
 #[cfg(test)]
 mod insert_loop_bounds_tests {

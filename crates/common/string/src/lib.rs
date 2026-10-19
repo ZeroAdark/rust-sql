@@ -1,14 +1,21 @@
 // MCXT_ALLOC_NO_OOM would return None in C; Rust allocation aborts instead.
 pub fn pg_clean_ascii(s: &str, _alloc_flags: i32) -> Option<String> {
+    Some(pg_clean_ascii_bytes(s.as_bytes()))
+}
+
+/// The byte form: C escapes each original byte, so callers holding raw
+/// (possibly non-UTF-8) input must clean before any lossy decode.
+pub fn pg_clean_ascii_bytes(s: &[u8]) -> String {
+    let s = c_str(s);
     let mut dst = String::with_capacity(s.len());
-    for &b in s.as_bytes() {
+    for &b in s {
         if !(32..=126).contains(&b) {
             dst.push_str(&format!("\\x{b:02x}"));
         } else {
             dst.push(b as char);
         }
     }
-    Some(dst)
+    dst
 }
 
 /// C: `pg_is_ascii(str)` (src/common/string.c:132): true when no byte up to
@@ -469,6 +476,15 @@ mod tests {
     fn passthrough_clean_ascii() {
         assert_eq!(pg_clean_ascii("psql", 0).unwrap(), "psql");
         assert_eq!(pg_clean_ascii("", 0).unwrap(), "");
+    }
+
+    // string.c:104: the loop ends at the first NUL, so bytes after it are
+    // never escaped into the result.
+    #[test]
+    fn clean_ascii_stops_at_the_first_nul() {
+        assert_eq!(pg_clean_ascii_bytes(b"a\0b"), "a");
+        assert_eq!(pg_clean_ascii_bytes(b"x\x01y\0\x02"), "x\\x01y");
+        assert_eq!(pg_clean_ascii("a\0b", 0).unwrap(), "a");
     }
 
     /// Every expectation is the executed output of the real C

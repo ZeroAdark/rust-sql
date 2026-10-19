@@ -511,6 +511,36 @@ fn walk_partition(
         }
     };
 
+    // WinGetFuncArgInFrame's EXCLUDE TIES seek (nodeWindowAgg.c:3607-3619,
+    // :3673-3689) lands on the current row's position whenever the peer
+    // group overlaps the frame edge — also when that row lies outside the
+    // frame, where the read resolves to NULL instead of skipping the group.
+    let value_segs = |i: usize| -> ([(usize, usize); 3], usize, bool) {
+        let (h, t) = (head[i], tail[i].max(head[i]));
+        match ex_of(i) {
+            Some((es, ee, true)) if es.max(h) < ee.min(t) && !(i >= h && i < t) => {
+                let (es, ee) = (es.max(h), ee.min(t));
+                let mut out = [(0usize, 0usize); 3];
+                let mut m = 0usize;
+                if h < es {
+                    out[m] = (h, es);
+                    m += 1;
+                }
+                out[m] = (i, i + 1);
+                m += 1;
+                if ee < t {
+                    out[m] = (ee, t);
+                    m += 1;
+                }
+                (out, m, false)
+            }
+            _ => {
+                let (sg, m) = eff_segs(i);
+                (sg, m, true)
+            }
+        }
+    };
+
     for (x, f) in funcs.iter().enumerate() {
         match f.op {
             WinOp::RowNumber => out[x].extend((0..n).map(|i| FVal::N(i as i64 + 1))),
@@ -674,7 +704,7 @@ fn walk_partition(
                 // EXCLUDE that is the ascending segment concatenation
                 // (C's WinGetFuncArgInFrame exclusion seek law).
                 for i in 0..n {
-                    let (sg, m) = eff_segs(i);
+                    let (sg, m, cur_in) = value_segs(i);
                     let j = match f.op {
                         WinOp::FirstValue => (m > 0).then(|| sg[0].0),
                         WinOp::LastValue => (m > 0).then(|| sg[m - 1].1 - 1),
@@ -695,8 +725,8 @@ fn walk_partition(
                         }
                     };
                     out[x].push(match j {
-                        Some(j) => cell_val(f, cell_of(x, j)),
-                        None => null_val(f),
+                        Some(j) if cur_in || j != i => cell_val(f, cell_of(x, j)),
+                        _ => null_val(f),
                     });
                 }
             }
@@ -1715,6 +1745,30 @@ mod tests {
         let out = walk_framed(&refs(&r), &ft, &[f(WinOp::NthValue)], &[1]);
         // nth 1 = first included: row0 -> its own 10 (peer row1 gone).
         assert_eq!(ws(&out[0]), vec![Some(10), Some(20), Some(10), Some(10)]);
+    }
+
+    #[test]
+    fn exclude_ties_seek_lands_on_out_of_frame_current_row() {
+        // nodeWindowAgg.c:3607-3619 / 3673-3689: the EXCLUDE TIES seek
+        // collapses the peer-group overlap onto the current row, which reads
+        // as NULL when the frame excludes it (C 18.6 ROWS 1..3 FOLLOWING
+        // over k = 1,1,1,2: first_value NULL,NULL,2,NULL; nth 2: 2,2,NULL,NULL).
+        let r = rows(&[(Some(1), Some(1)), (Some(1), Some(1)), (Some(1), Some(1)), (Some(2), Some(2))]);
+        let fr = framex(FM::Rows, FB::Following(1), FB::Following(3), FX::Ties);
+        let mut nth2 = f(WinOp::NthValue);
+        nth2.off = 2;
+        let mut nth3 = f(WinOp::NthValue);
+        nth3.off = 3;
+        let out = walk_framed(&refs(&r), &fr, &[f(WinOp::FirstValue), nth2, nth3], &[1, 1, 1]);
+        assert_eq!(ws(&out[0]), vec![None, None, Some(2), None]);
+        assert_eq!(ws(&out[1]), vec![Some(2), Some(2), None, None]);
+        assert_eq!(ws(&out[2]), vec![None, None, None, None]);
+        // Tail seek twin: ROWS 3..1 PRECEDING over k = 0,1,1,1 ->
+        // last_value NULL,0,NULL,NULL.
+        let r = rows(&[(Some(0), Some(0)), (Some(1), Some(1)), (Some(1), Some(1)), (Some(1), Some(1))]);
+        let fr = framex(FM::Rows, FB::Preceding(3), FB::Preceding(1), FX::Ties);
+        let out = walk_framed(&refs(&r), &fr, &[f(WinOp::LastValue)], &[1]);
+        assert_eq!(ws(&out[0]), vec![None, Some(0), None, None]);
     }
 
     #[test]

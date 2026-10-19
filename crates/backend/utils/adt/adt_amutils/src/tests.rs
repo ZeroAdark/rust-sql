@@ -42,7 +42,7 @@ fn install_amhandler_stub() {
     });
 }
 
-// audit-18.6 fp-adt-amutils#1: amutils.c:198 calls the catalog's handler,
+// audit-18.6 regression: amutils.c:198 calls the catalog's handler,
 // so an extension AM is known by its handler's C symbol (prosrc), which
 // ALTER FUNCTION ... RENAME does not touch.
 #[test]
@@ -97,7 +97,7 @@ fn index_cache_lookup_failure_is_a_catchable_xx000() {
     assert_eq!(e.level(), types_error::ERROR);
 }
 
-// audit-18.6 fp-adt-amutils#1: amutils.c:97 text_to_cstring compares through
+// audit-18.6 regression: amutils.c:97 text_to_cstring compares through
 // the first NUL, so a byteain-built name with an embedded NUL still matches.
 #[test]
 fn prop_names_stop_at_the_first_nul() {

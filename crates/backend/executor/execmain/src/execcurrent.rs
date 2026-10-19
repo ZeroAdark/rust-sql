@@ -74,7 +74,9 @@ pub fn exec_current_of(
 
         // Two strategies: FOR UPDATE/SHARE digs the ctid out of the rowmark;
         // otherwise we search the plan tree for the scan node.
-        let has_rowmarks = estate.es_rowmarks.iter().any(|m| m.is_some());
+        // C tests es_rowmarks != NULL: allocated whenever the plan has
+        // rowMarks, even if every mark was skipped as isParent.
+        let has_rowmarks = !estate.es_rowmarks.is_empty();
         if has_rowmarks {
             let mut erm: Option<&::executils::ExecRowMark> = None;
             for thiserm in estate.es_rowmarks.iter().flatten() {

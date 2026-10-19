@@ -516,6 +516,22 @@ fn parse_error_mapping_carries_c_sqlstates() {
     assert!(soft.error_occurred());
 }
 
+#[test]
+fn parse_error_quotes_raw_input_bytes() {
+    let err = DateTimeParseError(DTERR_BAD_FORMAT, None, b"12:\xff".as_slice(), "time", None).unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"invalid input syntax for type time: \"12:\xff\"".as_slice())
+    );
+    let err = DateTimeParseError(DTERR_FIELD_OVERFLOW, None, b"2020-13-01\xff".as_slice(), "date", None)
+        .unwrap_err();
+    assert_eq!(
+        err.message_raw.as_deref(),
+        Some(b"date/time field value out of range: \"2020-13-01\xff\"".as_slice())
+    );
+    assert!(DateTimeParseError(DTERR_BAD_FORMAT, None, "junk", "date", None).unwrap_err().message_raw.is_none());
+}
+
 fn decode_interval(input: &str, range: i32) -> Result<(i32, pg_itm_in), i32> {
     let mut workbuf = [0u8; TS_BUFLEN];
     let p = parse(input, &mut workbuf)?;

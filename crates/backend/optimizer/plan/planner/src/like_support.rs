@@ -832,7 +832,7 @@ mod tests {
 
     #[test]
     fn like_ic_bytea_is_0a000() {
-        let cx = mcx::MemoryContext::new_bump("d434-bytea-ic");
+        let cx = mcx::MemoryContext::new_bump("yaqs-bytea-ic");
         let d = text_const(cx.mcx(), b"a", BYTEAOID).unwrap().value;
         let e = like_fixed_prefix(cx.mcx(), d, BYTEAOID, true, 0).unwrap_err();
         assert_eq!(e.sqlstate(), ERRCODE_FEATURE_NOT_SUPPORTED);
@@ -841,7 +841,7 @@ mod tests {
 
     #[test]
     fn like_ic_indeterminate_collation_is_42p22() {
-        let cx = mcx::MemoryContext::new_bump("d434-ilike-coll");
+        let cx = mcx::MemoryContext::new_bump("yaqs-ilike-coll");
         let d = text_const(cx.mcx(), b"a", TEXTOID).unwrap().value;
         let e = like_fixed_prefix(cx.mcx(), d, TEXTOID, true, 0).unwrap_err();
         assert_eq!(e.sqlstate(), ERRCODE_INDETERMINATE_COLLATION);
@@ -854,7 +854,7 @@ mod tests {
 
     #[test]
     fn regex_bytea_is_0a000() {
-        let cx = mcx::MemoryContext::new_bump("d434-bytea-re");
+        let cx = mcx::MemoryContext::new_bump("yaqs-bytea-re");
         let d = text_const(cx.mcx(), b"a", BYTEAOID).unwrap().value;
         let e = regex_fixed_prefix(cx.mcx(), d, BYTEAOID, false, 0, true).unwrap_err();
         assert_eq!(e.sqlstate(), ERRCODE_FEATURE_NOT_SUPPORTED);

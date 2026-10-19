@@ -9,7 +9,7 @@ use init_small::globals as g;
 use mcx::{Mcx, MemoryContext};
 use types_core::NAMEDATALEN;
 use types_error::{
-    PgResult, DEBUG1, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_INVALID_PARAMETER_VALUE, ERROR, FATAL,
+    ErrorLocation, PgResult, DEBUG1, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_INVALID_PARAMETER_VALUE, ERROR, FATAL,
     INFO,
 };
 
@@ -130,7 +130,12 @@ pub fn Async_Notify(channel: &[u8], payload: Option<&[u8]>) -> PgResult<()> {
         elog(ERROR, "cannot send notifications from a parallel worker")?;
     }
     if trace_notify() {
-        elog(DEBUG1, format!("Async_Notify({})", String::from_utf8_lossy(channel)))?;
+        let mut msg = b"Async_Notify(".to_vec();
+        msg.extend_from_slice(channel);
+        msg.push(b')');
+        ereport(DEBUG1)
+            .errmsg_raw(msg)
+            .finish(ErrorLocation { filename: None, lineno: 0, funcname: None })?;
     }
 
     let channel_len = channel.len();

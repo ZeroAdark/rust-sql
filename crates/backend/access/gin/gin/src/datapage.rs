@@ -6,7 +6,7 @@ use ::bufmgr_seams as bm;
 use ::gin_vocab::*;
 use ::mcx::{Mcx, PgVec};
 use ::types_core::{BlockNumber, Buffer, InvalidBlockNumber, OffsetNumber, BLCKSZ};
-use ::types_error::{PgError, PgResult, ERRCODE_DATA_CORRUPTED};
+use ::types_error::{PgError, PgResult, DEBUG2, ERRCODE_DATA_CORRUPTED};
 use init_small::globals::{EndCriticalSection, StartCriticalSection};
 use ::types_rel::Relation;
 use ::types_storage::bufpage::{PageRef, PageTemp};
@@ -961,11 +961,25 @@ impl<'a, 'r, 's> DataBtree<'a, 'r, 's> {
             maxitems = i;
         }
 
+        let verb = if append { "appended" } else { "inserted" };
+        let to_go = all_len - curitem - maxitems;
+        let blkno = bm::buffer_get_block_number::call(buf);
         let place;
         if !needsplit {
             if relation_needs_wal(self.rel) && !self.is_build {
                 compute_leaf_recompress_wal_data(&mut leaf, new_items_all);
             }
+            // gindatapage.c:609-615.
+            elog::ereport(DEBUG2)
+                .errmsg_internal(format!(
+                    "{verb} {maxitems} new items to block {blkno}; {} bytes ({to_go} to go)",
+                    leaf.lsize
+                ))
+                .finish(::types_error::ErrorLocation::new(
+                    "gindatapage.c",
+                    if append { 611 } else { 615 },
+                    "dataBeginPlaceToPageLeaf",
+                ))?;
             self.ws = Some(leaf);
             place = GinPlace::Insert;
         } else {
@@ -1004,6 +1018,17 @@ impl<'a, 'r, 's> DataBtree<'a, 'r, 's> {
             let mut newlpage = PageTemp::new(BLCKSZ)?;
             let mut newrpage = PageTemp::new(BLCKSZ)?;
             data_place_to_page_leaf_split(&leaf, lbound, rbound, &mut newlpage, &mut newrpage);
+            // gindatapage.c:695-701.
+            elog::ereport(DEBUG2)
+                .errmsg_internal(format!(
+                    "{verb} {maxitems} items to block {blkno}; split {}/{} ({to_go} to go)",
+                    leaf.lsize, leaf.rsize
+                ))
+                .finish(::types_error::ErrorLocation::new(
+                    "gindatapage.c",
+                    if append { 697 } else { 701 },
+                    "dataBeginPlaceToPageLeaf",
+                ))?;
             place = GinPlace::Split(newlpage, newrpage);
         }
 
@@ -1372,6 +1397,10 @@ pub(crate) fn createPostingTree<'s>(
     if let Some(stats) = buildStats.as_deref_mut() {
         stats.nDataPages += 1;
     }
+
+    elog::ereport(DEBUG2)
+        .errmsg_internal(format!("created GIN posting tree with {nrootitems} items"))
+        .finish(::types_error::ErrorLocation::new("gindatapage.c", 1865, "createPostingTree"))?;
 
     if items.len() > nrootitems {
         ginInsertItemPointers(

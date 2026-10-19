@@ -2803,13 +2803,6 @@ pub fn create_unique_path<'mcx>(
             let in_oper = sjinfo.semi_operators[i];
             let sortop = lsyscache::amop::get_ordering_op_for_equality_op(in_oper, false)?;
             if sortop != 0 {
-                let eqop = lsyscache::amop::get_equality_op_for_ordering_op(sortop)?
-                    .map(|(op, _)| op)
-                    .unwrap_or(0);
-                assert!(
-                    eqop != 0,
-                    "could not find equality operator for ordering operator {sortop}"
-                );
                 let expr = *run.root.expr_node(expr_id);
                 let sortref = sort_pathkeys.len() as u32 + 1;
                 let pathkey = planner_seams::make_pathkey_from_sortop::call(
@@ -2819,11 +2812,11 @@ pub fn create_unique_path<'mcx>(
                     continue;
                 }
                 sort_pathkeys.push(pathkey);
-            } else {
-                assert!(
-                    !sjinfo.semi_can_btree,
+            } else if sjinfo.semi_can_btree {
+                return Err(PgError::error(format!(
                     "could not find ordering operator for equality operator {in_oper}"
-                );
+                ))
+                .into());
             }
             uniq_exprs.push(expr_id);
             in_operators.push(in_oper);

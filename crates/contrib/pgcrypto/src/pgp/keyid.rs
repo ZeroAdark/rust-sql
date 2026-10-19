@@ -15,7 +15,7 @@ const HEXTBL: &[u8; 16] = b"0123456789ABCDEF";
 /// can encrypt.
 fn read_pubkey_keyid(body: &[u8]) -> Result<Option<[u8; 8]>, String> {
     let mut pos = 0usize;
-    let pk = read_public_key(body, &mut pos)?;
+    let pk = read_public_key(body, &mut pos, &mut super::context::PgpContext::default())?;
     Ok(match pk.algo {
         PGP_PUB_ELG_ENCRYPT | PGP_PUB_RSA_ENCRYPT | PGP_PUB_RSA_ENCRYPT_SIGN => Some(pk.key_id),
         _ => None,
@@ -23,11 +23,12 @@ fn read_pubkey_keyid(body: &[u8]) -> Result<Option<[u8; 8]>, String> {
 }
 
 /// pgp-info.c:71 read_pubenc_keyid. A version other than 3 returns the raw
-/// -1 in C, which px_strerror renders as PXE_NO_HASH's text; kept verbatim.
+/// -1 in C — an unused PXE slot (px.h:47) that px_strerror (px.c:119)
+/// renders as its fallback text.
 fn read_pubenc_keyid(body: &[u8]) -> Result<[u8; 8], String> {
     let ver = *body.first().ok_or_else(|| CORRUPT_DATA.to_string())?;
     if ver != 3 {
-        return Err("No such hash algorithm".to_string());
+        return Err("Bad error code".to_string());
     }
     if body.len() < 9 {
         return Err(CORRUPT_DATA.to_string());
@@ -69,19 +70,19 @@ pub fn pgp_get_keyid(data: &[u8]) -> Result<String, String> {
                     return Err(MULTIPLE_KEYS.to_string());
                 }
                 got_main_key = true;
-                let _ = rdr.read_body(&hdr).map_err(|_| corrupt())?;
+                rdr.read_body_avail(&hdr).map_err(|_| corrupt())?;
             }
             t if t == PGP_PKT_SECRET_SUBKEY || t == PGP_PKT_PUBLIC_SUBKEY => {
-                let body = rdr.read_body(&hdr).map_err(|_| corrupt())?;
-                if let Some(id) = read_pubkey_keyid(&body)? {
+                let body = rdr.read_body_avail(&hdr).map_err(|_| corrupt())?;
+                if let Some(id) = read_pubkey_keyid(&body.data)? {
                     keyid_buf = id;
                     got_pub_key += 1;
                 }
             }
             t if t == PGP_PKT_PUBENC_SESSKEY => {
-                let body = rdr.read_body(&hdr).map_err(|_| corrupt())?;
+                let body = rdr.read_body_avail(&hdr).map_err(|_| corrupt())?;
                 got_pubenc_key += 1;
-                keyid_buf = read_pubenc_keyid(&body)?;
+                keyid_buf = read_pubenc_keyid(&body.data)?;
             }
             t if t == PGP_PKT_SYMENC_DATA || t == PGP_PKT_SYMENC_DATA_MDC => {
                 // don't skip it, just stop
@@ -89,7 +90,7 @@ pub fn pgp_get_keyid(data: &[u8]) -> Result<String, String> {
             }
             t if t == PGP_PKT_SYMENC_SESSKEY => {
                 got_symenc_key += 1;
-                let _ = rdr.read_body(&hdr).map_err(|_| corrupt())?;
+                rdr.read_body_avail(&hdr).map_err(|_| corrupt())?;
             }
             t if t == PGP_PKT_SIGNATURE
                 || t == PGP_PKT_MARKER
@@ -98,7 +99,8 @@ pub fn pgp_get_keyid(data: &[u8]) -> Result<String, String> {
                 || t == PGP_PKT_USER_ATTR
                 || t == PGP_PKT_PRIV_61 =>
             {
-                let _ = rdr.read_body(&hdr).map_err(|_| corrupt())?;
+                // pgp-decrypt.c:1067 pgp_skip_packet: a truncated body is EOF
+                rdr.read_body_avail(&hdr).map_err(|_| corrupt())?;
             }
             _ => return Err(corrupt()),
         }

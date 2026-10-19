@@ -105,7 +105,7 @@ fn raw_syslog(_level: i32, _message: &[u8]) {}
 
 #[cold]
 #[inline(never)]
-pub fn write_syslog(level: i32, line: &str) {
+pub fn write_syslog(level: i32, line: &[u8]) {
     let (seq, do_split) = {
         let mut state = SYSLOG_STATE.lock().expect("syslog state poisoned");
 
@@ -118,7 +118,7 @@ pub fn write_syslog(level: i32, line: &str) {
         (state.seq, crate::config::syslog_split_messages())
     };
 
-    let bytes = line.as_bytes();
+    let bytes = line;
     let mut len = bytes.len();
     let mut pos = 0usize;
     let mut nlpos = memchr_newline(bytes, pos);
@@ -141,7 +141,7 @@ pub fn write_syslog(level: i32, line: &str) {
             buflen = buflen.min(PG_SYSLOG_LIMIT);
 
             // pg_mbcliplen: clip at a UTF-8 char boundary (owned strings).
-            while buflen > 0 && !line.is_char_boundary(pos + buflen) {
+            while buflen > 0 && pos + buflen < bytes.len() && bytes[pos + buflen] & 0xC0 == 0x80 {
                 buflen -= 1;
             }
             if buflen == 0 {

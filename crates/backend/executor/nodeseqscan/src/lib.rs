@@ -450,7 +450,7 @@ impl<'mcx> SeqScanState<'mcx> {
 
     #[inline(never)]
     fn open_scandesc(&mut self, estate: &mut EStateData<'mcx>) -> PgResult<()> {
-        // GL-FIXCOUNT-2 — THE SCAN-DESCRIPTOR-OPEN CHOKEPOINT. This is the
+        // regression — THE SCAN-DESCRIPTOR-OPEN CHOKEPOINT. This is the
         // only place a SeqScanState opens a PRIVATE (non-parallel) scan
         // descriptor: `table_beginscan` with no shared
         // `ParallelTableScanDescShared`, so the drive walks the WHOLE
@@ -466,7 +466,7 @@ impl<'mcx> SeqScanState<'mcx> {
         // arm which synthesizes a TWIN executor over the real scan plan
         // node produces (the twin's scan state never passes through
         // `exec_seq_scan_initialize_dsm`/`_worker`, so it holds no wiring
-        // and lands here), and it is the route the GL-FIXCOUNT-1 morsel
+        // and lands here), and it is the route the regression morsel
         // gates cannot see: they gate the private MORSEL MAP, and this
         // route never asks for one.
         //
@@ -2756,6 +2756,7 @@ fn exec_seq_scan_batch<'mcx, const PROJ: bool>(
     debug_assert!(::types_scan::sdir::ScanDirectionIsForward(estate.es_direction));
     estate.ecxt_mut(node.ss.ps_ExprContext).reset();
     loop {
+        ::execscan::check_for_interrupts()?;
         let next = node.batch_soa.as_deref_mut().expect("batch drive armed").next_selected();
         let Some(i) = next else {
             let n = seq_scan_next_pagebatch(node, estate)?;
@@ -2857,6 +2858,7 @@ fn exec_seq_scan_bloom<'mcx>(
     debug_assert!(::types_scan::sdir::ScanDirectionIsForward(estate.es_direction));
     estate.ecxt_mut(node.ss.ps_ExprContext).reset();
     loop {
+        ::execscan::check_for_interrupts()?;
         let next = node.bloom.as_deref_mut().expect("bloom drive armed").next_selected();
         let Some(i) = next else {
             // Page boundary: rs_cindex parks at page end, so the per-tuple
@@ -3016,7 +3018,7 @@ pub fn seq_scan_cb_granule_geometry<'mcx>(
     node: &mut SeqScanState<'mcx>,
     estate: &mut EStateData<'mcx>,
 ) -> PgResult<Option<(u64, Vec<u64>)>> {
-    // GL-Q4142 — THE morsel-geometry chokepoint. This geometry is a PRIVATE,
+    // regression — THE morsel-geometry chokepoint. This geometry is a PRIVATE,
     // PART-GLOBAL claim space; a scan carrying parallel wiring divides its
     // work through the shared in-AM cursor (`phs_nallocated`, claimed by
     // `claim_next_rg`) instead. Handing the part-global map to a participant
@@ -3044,7 +3046,7 @@ pub fn seq_scan_cb_ea_counters(node: &SeqScanState<'_>) -> Option<[u64; 7]> {
 }
 
 /// This scan carries parallel wiring — the plan node is `parallel_aware`
-/// and/or a shared `ParallelTableScanDescShared` is attached (GL-Q4142
+/// and/or a shared `ParallelTableScanDescShared` is attached (regression
 /// morsel-source gate). Such a scan divides its work through the SHARED
 /// in-AM cursor, so a private whole-relation morsel map must never drive it.
 /// Free function mirror of `SeqScanState::is_parallel` for the lane's
@@ -3070,7 +3072,7 @@ pub fn seq_scan_heap_block_geometry<'mcx>(
     node: &mut SeqScanState<'mcx>,
     estate: &mut EStateData<'mcx>,
 ) -> PgResult<Option<u64>> {
-    // GL-Q4142: same gate as the columnar geometry above — a private
+    // regression: same gate as the columnar geometry above — a private
     // `0..nblocks` claim space must never drive a scan that divides its work
     // through the shared parallel block cursor. (`heap_set_block_range` is
     // the AM backstop; this is the fail-closed refusal.)
@@ -3353,7 +3355,7 @@ pub fn seq_scan_cb_zone_topk_words(
 }
 
 /// RG-altitude meta-answerability census over this scan's pushed zone
-/// quals (the GL-SERIALTERM-META qual-zone helper; semantics at
+/// quals (the regression qual-zone helper; semantics at
 /// pgrcolumnar::zone_meta_rg_census). None = heap / no descriptor / no
 /// columnar part. Economics signal only — the serial fold-meta arm
 /// re-proves every unit itself.
@@ -3744,7 +3746,7 @@ pub fn exec_seq_scan_initialize_dsm<'mcx>(
     node.apply_cb_scan_settings();
     node.arm_slot_jit_deform(estate);
     node.parallel = Some(std::sync::Arc::clone(&shared));
-    // GL-FIXCOUNT-2: publish that this execution's plan tree is now
+    // regression: publish that this execution's plan tree is now
     // parallel-wired, so `open_scandesc` can refuse a SECOND, private,
     // whole-relation descriptor over a `parallel_aware` plan node.
     estate.es_parallel_scan_wired = true;
@@ -3771,7 +3773,7 @@ pub fn exec_seq_scan_initialize_worker<'mcx>(
     node.apply_cb_scan_settings();
     node.arm_slot_jit_deform(estate);
     node.parallel = Some(shared);
-    // GL-FIXCOUNT-2: see `exec_seq_scan_initialize_dsm`.
+    // regression: see `exec_seq_scan_initialize_dsm`.
     estate.es_parallel_scan_wired = true;
     Ok(())
 }

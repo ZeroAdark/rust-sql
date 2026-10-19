@@ -71,7 +71,86 @@ fn getInstallationPaths(argv0: &str) {
     // lib/ tree).
 }
 
-fn checkControlFile() {
+/// postmaster.c:599's getopt(3) optstring, expanded the way getopt does:
+/// bundled no-argument flags (`-Fs`), an inline or following argument for
+/// `X:` options, `--name=value` through the `-:` entry and `--` ending the
+/// options (any argument past it is a non-option).
+const POSTMASTER_OPTSTRING: &str = "B:bC:c:D:d:EeFf:h:ijk:lN:OPp:r:S:sTt:W:-:";
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum GetoptError {
+    RequiresArgument(char),
+    UnknownOption(char),
+    NonOption(String),
+}
+
+pub(crate) fn getopt_tokens(args: &[String]) -> Result<Vec<(char, Option<String>)>, GetoptError> {
+    match getopt_tokens_partial(args) {
+        (tokens, None) => Ok(tokens),
+        (_, Some(err)) => Err(err),
+    }
+}
+
+/// getopt(3) is incremental: postmaster.c:650 acts on each option before
+/// the next is examined, so the tokens ahead of a lexical failure still
+/// apply (their GUC errors win over the later "illegal option").
+pub(crate) fn getopt_tokens_partial(
+    args: &[String],
+) -> (Vec<(char, Option<String>)>, Option<GetoptError>) {
+    let takes_arg = |c: char| -> Option<bool> {
+        let i = POSTMASTER_OPTSTRING.find(c)?;
+        Some(POSTMASTER_OPTSTRING[i + 1..].starts_with(':'))
+    };
+    let mut tokens = Vec::new();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        if arg == "--" {
+            let err = it.next().map(|rest| GetoptError::NonOption(rest.clone()));
+            return (tokens, err);
+        }
+        let Some(rest) = arg.strip_prefix('-').filter(|r| !r.is_empty()) else {
+            return (tokens, Some(GetoptError::NonOption(arg.clone())));
+        };
+        let mut chars = rest.char_indices();
+        while let Some((i, opt)) = chars.next() {
+            let tail = &rest[i + opt.len_utf8()..];
+            match takes_arg(opt) {
+                None => return (tokens, Some(GetoptError::UnknownOption(opt))),
+                Some(false) => tokens.push((opt, None)),
+                Some(true) => {
+                    let optarg = if !tail.is_empty() {
+                        tail.to_string()
+                    } else if let Some(next) = it.next() {
+                        next.clone()
+                    } else {
+                        return (tokens, Some(GetoptError::RequiresArgument(opt)));
+                    };
+                    tokens.push((opt, Some(optarg)));
+                    break;
+                }
+            }
+        }
+    }
+    (tokens, None)
+}
+
+/// atoi(3): optional C-locale whitespace and sign, then the longest digit
+/// prefix; anything else yields 0. Saturates instead of overflowing.
+pub(crate) fn c_atoi(s: &str) -> i32 {
+    let t = s.trim_start_matches(|c: char| c.is_ascii() && pg_string::isspace_c_locale(c as u8));
+    let (sign, digits) = match t.as_bytes().first() {
+        Some(b'-') => (-1i64, &t[1..]),
+        Some(b'+') => (1, &t[1..]),
+        _ => (1, t),
+    };
+    let mut v: i64 = 0;
+    for b in digits.bytes().take_while(|b| b.is_ascii_digit()) {
+        v = (v * 10 + (b - b'0') as i64).min(i32::MAX as i64 + 1);
+    }
+    (sign * v).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+}
+
+fn checkControlFile(progname: &str) {
     // C: snprintf(path, "%s/%s", DataDir, XLOG_CONTROL_FILE) — absolute, this
     // runs before ChangeToDataDir.
     let data_dir = init_small::globals::DataDir().unwrap_or("");
@@ -83,7 +162,7 @@ fn checkControlFile() {
             // with %m (strerror), not Rust's "(os error N)" rendering.
             let errnum = e.raw_os_error().unwrap_or(0);
             write_stderr(format!(
-                "{PROGNAME}: could not find the database system\nExpected to find it in the directory \"{data_dir}\",\nbut could not open file \"{path}\": {}\n",
+                "{progname}: could not find the database system\nExpected to find it in the directory \"{data_dir}\",\nbut could not open file \"{path}\": {}\n",
                 elog::errno::strerror(errnum)
             ));
             ExitPostmaster(2);
@@ -223,6 +302,30 @@ pub fn CheckMain(argv: &[String]) -> PgResult<()> {
     std::process::exit(0)
 }
 
+/// postmaster.c:599 getopt(3) with opterr set: libc's own diagnostic names
+/// argv[0] verbatim (macOS libc wording), then the common help hint with
+/// progname; a stray non-option argument is postmaster.c:754-758.
+pub(crate) fn getopt_failure_message(argv0: &str, progname: &str, err: &GetoptError) -> String {
+    let help = format!("Try \"{progname} --help\" for more information.\n");
+    match err {
+        GetoptError::RequiresArgument(opt) => {
+            format!("{argv0}: option requires an argument -- {opt}\n{help}")
+        }
+        GetoptError::UnknownOption(opt) => format!("{argv0}: illegal option -- {opt}\n{help}"),
+        GetoptError::NonOption(arg) => format!("{progname}: invalid argument: \"{arg}\"\n{help}"),
+    }
+}
+
+/// postmaster.c:880-897: every environ entry, byte-preserving in C; a
+/// non-UTF-8 entry is rendered lossily rather than aborting the boot.
+pub(crate) fn environment_dump() -> String {
+    let mut si = String::from("initial environment dump:");
+    for (k, v) in std::env::vars_os() {
+        si.push_str(&format!("\n{}={}", k.to_string_lossy(), v.to_string_lossy()));
+    }
+    si
+}
+
 pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
     let mut user_d_option: Option<String> = None;
     let mut output_config_variable: Option<String> = None;
@@ -245,7 +348,9 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
     let postmaster_context = mcx::MemoryContext::new("Postmaster");
     let _mcx = postmaster_context.mcx();
 
-    getInstallationPaths(argv.first().map(|s| s.as_str()).unwrap_or(PROGNAME));
+    let argv0 = argv.first().map(|s| s.as_str()).unwrap_or(PROGNAME);
+    let progname = pg_path::get_progname(argv0);
+    getInstallationPaths(argv0);
 
     crate::crash_signals::install_crash_signal_reporter();
 
@@ -284,33 +389,15 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
     guc_seams::initialize_guc_options::call()?;
     stack_depth::adjust_max_stack_depth_from_rlimit()?;
 
-    let mut args = argv.iter().skip(1).peekable();
-    while let Some(arg) = args.next() {
-        let Some(rest) = arg.strip_prefix('-') else {
-            write_stderr(format!("{PROGNAME}: invalid argument: \"{arg}\"\nTry \"{PROGNAME} --help\" for more information.\n"));
-            ExitPostmaster(1);
-        };
-        let (opt, mut inline_val) = if let Some(long) = rest.strip_prefix('-') {
-            ('-', Some(long.to_string()))
-        } else {
-            let mut cs = rest.chars();
-            let o = cs.next().unwrap_or('\0');
-            let tail: String = cs.collect();
-            (o, if tail.is_empty() { None } else { Some(tail) })
-        };
-        let mut take_val = |args: &mut std::iter::Peekable<std::iter::Skip<std::slice::Iter<String>>>| {
-            inline_val.take().or_else(|| args.next().cloned()).unwrap_or_else(|| {
-                write_stderr(format!("{PROGNAME}: option requires an argument -- {opt}\n"));
-                ExitPostmaster(1);
-            })
-        };
+    let (tokens, getopt_err) = getopt_tokens_partial(&argv[1..]);
+    for (opt, optarg) in tokens {
+        let optarg = optarg.unwrap_or_default();
         match opt {
-            'B' => set_config_argv("shared_buffers", &take_val(&mut args))?,
+            'B' => set_config_argv("shared_buffers", &optarg)?,
             'b' => init_small::globals::SetIsBinaryUpgrade(true),
-            'C' => output_config_variable = Some(take_val(&mut args)),
+            'C' => output_config_variable = Some(optarg),
             '-' | 'c' => {
-                let optarg = take_val(&mut args);
-                // postmaster.c:617-627: a misplaced must-be-first subprogram
+                                // postmaster.c:617-627: a misplaced must-be-first subprogram
                 // option (--boot, --check, --describe-config, --single, ...)
                 // is a syntax error, not a GUC.
                 if opt == '-'
@@ -335,55 +422,56 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
                 };
                 set_config_argv(&name, &value)?;
             }
-            'D' => user_d_option = Some(take_val(&mut args)),
+            'D' => user_d_option = Some(optarg),
             'd' => {
-                let v: i32 = take_val(&mut args).parse().unwrap_or(0);
-                postgres_seams::set_debug_options::call(v, GucContext::PGC_POSTMASTER as i32 as u8)?;
+                postgres_seams::set_debug_options::call(c_atoi(&optarg), GucContext::PGC_POSTMASTER as i32 as u8)?;
             }
             'E' => set_config_argv("log_statement", "all")?,
             'e' => set_config_argv("datestyle", "euro")?,
             'F' => set_config_argv("fsync", "false")?,
             'f' => {
-                let v = take_val(&mut args);
+                let v = optarg;
                 if !postgres_seams::set_plan_disabling_options::call(
                     &v,
                     GucContext::PGC_POSTMASTER as i32 as u8,
                 )? {
-                    write_stderr(format!("{PROGNAME}: invalid argument for option -f: \"{v}\"\n"));
+                    write_stderr(format!("{progname}: invalid argument for option -f: \"{v}\"\n"));
                     ExitPostmaster(1);
                 }
             }
-            'h' => set_config_argv("listen_addresses", &take_val(&mut args))?,
+            'h' => set_config_argv("listen_addresses", &optarg)?,
             'i' => set_config_argv("listen_addresses", "*")?,
             'j' => {}
-            'k' => set_config_argv("unix_socket_directories", &take_val(&mut args))?,
+            'k' => set_config_argv("unix_socket_directories", &optarg)?,
             'l' => set_config_argv("ssl", "true")?,
-            'N' => set_config_argv("max_connections", &take_val(&mut args))?,
+            'N' => set_config_argv("max_connections", &optarg)?,
             'O' => set_config_argv("allow_system_table_mods", "true")?,
             'P' => set_config_argv("ignore_system_indexes", "true")?,
-            'p' => set_config_argv("port", &take_val(&mut args))?,
-            'r' => {
-                let _ = take_val(&mut args);
-            }
-            'S' => set_config_argv("work_mem", &take_val(&mut args))?,
+            'p' => set_config_argv("port", &optarg)?,
+            'r' => {}
+            'S' => set_config_argv("work_mem", &optarg)?,
             's' => set_config_argv("log_statement_stats", "true")?,
             'T' => set_config_argv("send_abort_for_crash", "true")?,
             't' => {
-                let v = take_val(&mut args);
+                let v = optarg;
                 match postgres_seams::get_stats_option_name::call(&v) {
                     Some(name) => set_config_argv(name, "true")?,
                     None => {
-                        write_stderr(format!("{PROGNAME}: invalid argument for option -t: \"{v}\"\n"));
+                        write_stderr(format!("{progname}: invalid argument for option -t: \"{v}\"\n"));
                         ExitPostmaster(1);
                     }
                 }
             }
-            'W' => set_config_argv("post_auth_delay", &take_val(&mut args))?,
+            'W' => set_config_argv("post_auth_delay", &optarg)?,
             _ => {
-                write_stderr(format!("Try \"{PROGNAME} --help\" for more information.\n"));
+                write_stderr(format!("Try \"{progname} --help\" for more information.\n"));
                 ExitPostmaster(1);
             }
         }
+    }
+    if let Some(err) = getopt_err {
+        write_stderr(getopt_failure_message(argv0, progname, &err));
+        ExitPostmaster(1);
     }
 
     // §9 provider seam (dst-p3-scheduler; COMPOSE FINDING 1): under sim cfg
@@ -407,20 +495,20 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
             Some(dd) => match vfs::sim_boot::compose_boot_namespace(&dd) {
                 Ok(line) => write_stderr(format!("{line}\n")),
                 Err(e) => {
-                    write_stderr(format!("{PROGNAME}: sim asset ingest failed: {e}\n"));
+                    write_stderr(format!("{progname}: sim asset ingest failed: {e}\n"));
                     ExitPostmaster(2);
                 }
             },
             None => {
                 write_stderr(format!(
-                    "{PROGNAME}: sim boot requires -D or PGDATA (the asset-manifest datadir root)\n"
+                    "{progname}: sim boot requires -D or PGDATA (the asset-manifest datadir root)\n"
                 ));
                 ExitPostmaster(2);
             }
         }
     }
 
-    if !guc_seams::select_config_files::call(user_d_option.as_deref(), PROGNAME)? {
+    if !guc_seams::select_config_files::call(user_d_option.as_deref(), progname)? {
         ExitPostmaster(2);
     }
 
@@ -456,7 +544,7 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
     }
 
     miscinit_seams::check_data_dir::call()?;
-    checkControlFile();
+    checkControlFile(progname);
     miscinit::ChangeToDataDir()?;
 
     let su_reserved = guc_tables::vars::SuperuserReservedConnections.read();
@@ -464,7 +552,7 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
     let max_connections = init_small::globals::MaxConnections();
     if su_reserved + reserved >= max_connections {
         write_stderr(format!(
-            "{PROGNAME}: \"superuser_reserved_connections\" ({su_reserved}) plus \"reserved_connections\" ({reserved}) must be less than \"max_connections\" ({max_connections})\n"
+            "{progname}: \"superuser_reserved_connections\" ({su_reserved}) plus \"reserved_connections\" ({reserved}) must be less than \"max_connections\" ({max_connections})\n"
         ));
         ExitPostmaster(1);
     }
@@ -490,11 +578,7 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
     // that unit (and its tables) is unported — nothing to check yet.
 
     if elog::message_level_is_interesting(DEBUG3) {
-        let mut si = String::from("initial environment dump:");
-        for (k, v) in std::env::vars() {
-            si.push_str(&format!("\n{k}={v}"));
-        }
-        crate::report_internal(DEBUG3, si, 891, "PostmasterMain");
+        crate::report_internal(DEBUG3, environment_dump(), 891, "PostmasterMain");
     }
 
     miscinit::CreateDataDirLockFile(true)?;
@@ -575,8 +659,9 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
             let _ = elog::ereport(LOG)
+                .with_saved_errno(e.raw_os_error().unwrap_or(0))
                 .errcode_for_file_access()
-                .errmsg(format!("could not remove file \"{LOG_METAINFO_DATAFILE}\": {e}"))
+                .errmsg(format!("could not remove file \"{LOG_METAINFO_DATAFILE}\": %m"))
                 .finish(loc(1068, "PostmasterMain"));
         }
     }
@@ -602,7 +687,7 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
 
     report(LOG, format!("starting {}", *PG_VERSION_STR), 1105, "PostmasterMain");
 
-    // pgrust extension (GL-STRDEFECTS-1 witness): the regexp engine tiers
+    // pgrust extension (regression witness): the regexp engine tiers
     // are a build property (RE2 links only where libre2 existed at build) —
     // name them once at startup so a Spencer-only binary can never run
     // silently. pg_settings twin: pgrust.regex_re2_linked.
@@ -750,16 +835,17 @@ pub fn PostmasterMain(argv: &[String]) -> PgResult<()> {
                 };
                 #[cfg(target_family = "wasm")]
                 let perm_result: std::io::Result<()> = Ok(());
-                if perm_result.is_err() {
-                    write_stderr(format!(
-                        "{PROGNAME}: could not change permissions of external PID file \"{pidfile}\"\n"
+                if let Err(e) = perm_result {
+                    write_stderr(external_pid_file_failure(
+                        progname,
+                        "could not change permissions of",
+                        &pidfile,
+                        &e,
                     ));
                 }
             }
-            Err(_) => {
-                write_stderr(format!(
-                    "{PROGNAME}: could not write external PID file \"{pidfile}\"\n"
-                ));
+            Err(e) => {
+                write_stderr(external_pid_file_failure(progname, "could not write", &pidfile, &e));
             }
         }
         ipc_seams::on_proc_exit::call(unlink_external_pid_file_cb, 0);
@@ -943,4 +1029,17 @@ fn CreateOptsFile(argv: &[String]) -> bool {
         return false;
     }
     true
+}
+
+/// postmaster.c:1316-1321: both external_pid_file failures end in ": %m".
+pub(crate) fn external_pid_file_failure(
+    progname: &str,
+    what: &str,
+    pidfile: &str,
+    e: &std::io::Error,
+) -> String {
+    format!(
+        "{progname}: {what} external PID file \"{pidfile}\": {}\n",
+        elog::errno::strerror(e.raw_os_error().unwrap_or(0))
+    )
 }

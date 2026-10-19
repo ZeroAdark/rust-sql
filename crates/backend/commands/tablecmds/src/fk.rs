@@ -99,7 +99,9 @@ pub(crate) fn ATExecAddConstraint<'mcx>(
                 rel.rd_rel.relnamespace,
                 &[],
             )?;
-            conname_storage.as_str()
+            // The FK name rides the trigger machinery as &str: a non-UTF-8
+            // byte clip (SQL_ASCII) is a typed refusal, never a panic.
+            pg_constraint::generated_name_utf8(&conname_storage, "foreign key constraint")?
         }
     };
 
@@ -348,15 +350,6 @@ fn at_add_foreign_key_constraint<'mcx>(
         }
     }
 
-    if numfks != numpks {
-        let e = err(
-            "number of referencing and referenced columns for foreign key disagree".into(),
-            ERRCODE_INVALID_FOREIGN_KEY,
-        );
-        pkrel.close(NoLock)?;
-        return Err(e);
-    }
-
     // Some actions are currently unsupported for foreign keys using PERIOD.
     if fkconstraint.fk_with_period {
         for (action, kind) in [
@@ -378,6 +371,15 @@ fn at_add_foreign_key_constraint<'mcx>(
                 return Err(e);
             }
         }
+    }
+
+    if numfks != numpks {
+        let e = err(
+            "number of referencing and referenced columns for foreign key disagree".into(),
+            ERRCODE_INVALID_FOREIGN_KEY,
+        );
+        pkrel.close(NoLock)?;
+        return Err(e);
     }
 
     let mut pfeqoperators = [InvalidOid; INDEX_MAX_KEYS as usize];
@@ -875,7 +877,12 @@ fn find_fkey_cast(
         coerce::CoercionContext::COERCION_IMPLICIT,
     )?;
     if ret == coerce::COERCION_PATH_NONE {
-        panic!("could not find cast from {source_type_id} to {target_type_id}");
+        return Err(Box::new(
+            PgError::error(format!(
+                "could not find cast from {source_type_id} to {target_type_id}"
+            ))
+            .with_location("tablecmds.c", 13673, "findFkeyCast"),
+        ));
     }
     Ok((ret, funcid))
 }
@@ -1308,7 +1315,7 @@ fn add_fk_constraint<'mcx>(
             rel.rd_rel.relnamespace,
             &[],
         )?;
-        conname_storage.as_str()
+        pg_constraint::generated_name_utf8(&conname_storage, "foreign key constraint")?
     } else {
         constraintname
     };
@@ -1321,7 +1328,7 @@ fn add_fk_constraint<'mcx>(
     };
 
     let mut entry = pg_constraint::ConstraintEntry::base(
-        conname,
+        conname.as_bytes(),
         rel.rd_rel.relnamespace,
         pg_constraint::CONSTRAINT_FOREIGN,
         rel.rd_id,
@@ -2757,6 +2764,16 @@ pub(crate) fn ATExecAlterConstraint<'mcx>(
             .with_hint("Do not specify the ONLY keyword.".to_string()),
         ));
     }
+    let conrel = table::table_open(
+        mcx,
+        types_core::CONSTRAINT_RELATION_ID,
+        types_rel::RowExclusiveLock,
+    )?;
+    let tgrel = table::table_open(
+        mcx,
+        types_core::TRIGGER_RELATION_ID,
+        types_rel::RowExclusiveLock,
+    )?;
     let conname = cmdcon.conname.expect("ATAlterConstraint conname");
     let Some(con) = pg_constraint::findConstraintByName(mcx, rel.rd_id, conname)? else {
         return Err(err(
@@ -2887,7 +2904,8 @@ pub(crate) fn ATExecAlterConstraint<'mcx>(
     if cmdcon.alterInheritability {
         alter_constr_inheritability(mcx, wqueue, cmdcon, rel, &con, lockmode)?;
     }
-    Ok(())
+    tgrel.close(types_rel::RowExclusiveLock)?;
+    conrel.close(types_rel::RowExclusiveLock)
 }
 
 // The topmost-ancestor walk of ATExecAlterConstraint: (conparentid, conname,

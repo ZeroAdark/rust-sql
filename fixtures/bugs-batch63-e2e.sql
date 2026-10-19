@@ -3,7 +3,7 @@
 --   --sql fixtures/bugs-batch63-e2e.sql "$PGINSTALL/postgres"
 \set VERBOSITY verbose
 
--- fp-util-clauses-p2#2: eval_const_expressions folds a SubscriptingRef whose
+-- regression: eval_const_expressions folds a SubscriptingRef whose
 -- arguments are all Consts even when it carries an assignment, so a NULL
 -- subscript in an INSERT target list is a plan-time 22004.
 CREATE TABLE b63_t5 (a integer[]);

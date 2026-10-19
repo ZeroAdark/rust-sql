@@ -176,14 +176,14 @@ fn small_ok(cnfa: &Cnfa) -> bool {
 }
 
 // regcustom.h MALLOC -> palloc_extended: every array is admitted against
-// MaxAllocSize (C raises its alloc-size error; here the regex error that
-// surfaces as "regular expression is too complex") and allocated fallibly.
-const MAX_ALLOC_SIZE: usize = 0x3FFF_FFFF;
+// MaxAllocSize with C's element size (C's alloc-size ereport) and allocated
+// fallibly (REG_ESPACE).
+const C_SIZEOF_SSET: usize = 56;
+const C_SIZEOF_ARCP: usize = 16;
+const C_SIZEOF_PTR: usize = core::mem::size_of::<usize>();
 
 fn zeroed_u32_vec(n: usize) -> RegResult<Vec<u32>> {
-    if n.checked_mul(4).is_none_or(|b| b > MAX_ALLOC_SIZE) {
-        return Err(RegError(REG_ETOOBIG));
-    }
+    crate::regex_error::check_alloc_request(n, core::mem::size_of::<u32>())?;
     let mut v: Vec<u32> = Vec::new();
     v.try_reserve_exact(n)?;
     v.resize(n, 0);
@@ -216,10 +216,13 @@ impl HeapSpace {
             .ok_or(RegError(REG_ESPACE))?;
         let vec_area = nss.checked_mul(ncolors).ok_or(RegError(REG_ESPACE))?;
         Ok(HeapSpace {
-            ssets: fill_vec(nss, Sset::blank())?,
+            ssets: fill_vec(nss, Sset::blank(), C_SIZEOF_SSET)?,
             statesarea: zeroed_u32_vec(statesarea_words)?,
-            outs: zeroed_u32_vec(vec_area)?,
-            incarea: fill_vec(vec_area, Arcp::null())?,
+            outs: {
+                crate::regex_error::check_alloc_request(vec_area, C_SIZEOF_PTR)?;
+                zeroed_u32_vec(vec_area)?
+            },
+            incarea: fill_vec(vec_area, Arcp::null(), C_SIZEOF_ARCP)?,
         })
     }
 }
@@ -491,10 +494,8 @@ pub fn newdfa<'s>(
     }
 }
 
-fn fill_vec<T: Copy>(n: usize, val: T) -> RegResult<Vec<T>> {
-    if n.checked_mul(core::mem::size_of::<T>()).is_none_or(|b| b > MAX_ALLOC_SIZE) {
-        return Err(RegError(REG_ETOOBIG));
-    }
+fn fill_vec<T: Copy>(n: usize, val: T, c_size: usize) -> RegResult<Vec<T>> {
+    crate::regex_error::check_alloc_request(n, c_size)?;
     let mut v: Vec<T> = Vec::new();
     v.try_reserve_exact(n)?;
     v.resize(n, val);
@@ -1973,7 +1974,7 @@ fn citerdissect(
     if max_matches < min_matches as usize {
         max_matches = min_matches as usize;
     }
-    let mut endpts: Vec<usize> = fill_vec(max_matches + 1, 0usize)?;
+    let mut endpts: Vec<usize> = fill_vec(max_matches + 1, 0usize, C_SIZEOF_PTR)?;
     endpts[0] = begin;
 
     getsubdfa(v, &g.tree_nodes[child.0 as usize])?;
@@ -2092,7 +2093,7 @@ fn creviterdissect(
     if max_matches < min_matches as usize {
         max_matches = min_matches as usize;
     }
-    let mut endpts: Vec<usize> = fill_vec(max_matches + 1, 0usize)?;
+    let mut endpts: Vec<usize> = fill_vec(max_matches + 1, 0usize, C_SIZEOF_PTR)?;
     endpts[0] = begin;
 
     getsubdfa(v, &g.tree_nodes[child.0 as usize])?;

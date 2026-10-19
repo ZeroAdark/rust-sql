@@ -27,7 +27,7 @@ fn project_result<'mcx>(
     inner_id: ExecSlotId,
     estate: &mut EStateData<'mcx>,
 ) -> PgResult<ExecSlotId> {
-    if node.proj.has_subplan() {
+    if node.proj.has_subplan() || !node.proj.param_exec_deps().is_empty() {
         let ecxt = node.ps_ExprContext;
         estate.ecxt_mut(ecxt).ecxt_innertuple = Some(inner_id);
         let result_id = node.ps_ResultTupleSlot;
@@ -274,7 +274,9 @@ fn parallel_outer_get_tuple<'mcx, O: HashJoinOuter<'mcx>>(
             }
             let h = match outer.staged_hash() {
                 Some(h) => h,
-                None if node.outer_hash_expr.has_subplan() => {
+                None if node.outer_hash_expr.has_subplan()
+                    || !node.outer_hash_expr.param_exec_deps().is_empty() =>
+                {
                     let r = ::executils::exec_eval_expr_with_subplans_hashkey(
                         &mut node.outer_hash_expr,
                         estate,
@@ -341,7 +343,9 @@ fn partition_outer<'mcx, O: HashJoinOuter<'mcx>>(
         }
         let hashvalue = match outer.staged_hash() {
             Some(h) => h,
-            None if node.outer_hash_expr.has_subplan() => {
+            None if node.outer_hash_expr.has_subplan()
+                || !node.outer_hash_expr.param_exec_deps().is_empty() =>
+            {
                 let r = ::executils::exec_eval_expr_with_subplans_hashkey(
                     &mut node.outer_hash_expr,
                     estate,

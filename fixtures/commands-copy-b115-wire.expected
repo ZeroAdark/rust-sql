@@ -1,0 +1,31 @@
+--- setup
+C(13):435245415445205441424c4500
+C(13):435245415445205441424c4500
+Z(1):49
+--- copy-in
+G(5):0000010000
+--- flush/sync bodies are not data
+C(7):434f5059203100
+Z(1):49
+--- one row loaded
+T(48):0002636f756e7400000000000000000000170004ffffffff00006d696e00000000000000000000170004ffffffff0000
+D(12):000200000001310000000131
+C(9):53454c454354203100
+Z(1):49
+--- copy-in
+G(5):0000010000
+--- CopyFail without terminator
+E[S=ERROR V=ERROR C=08P01 M=invalid string in message W=COPY b115w, line 1]
+Z(1):49
+--- copy-in
+G(5):0000010000
+--- CopyFail
+E[S=ERROR V=ERROR C=57014 M=COPY from stdin failed: bad W=COPY b115w, line 1]
+Z(1):49
+--- CopyOutResponse before the send-function lookup fails
+H(5):0100010001
+E[S=ERROR V=ERROR C=42883 M=no binary output function available for type aclitem]
+Z(1):49
+--- cleanup
+C(11):44524f50205441424c4500
+Z(1):49

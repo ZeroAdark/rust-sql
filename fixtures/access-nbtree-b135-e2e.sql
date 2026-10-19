@@ -5,7 +5,7 @@
 CREATE DATABASE b135e2e TEMPLATE template0 ENCODING 'UTF8';
 \c b135e2e
 \set VERBOSITY verbose
--- fp-nbtree-nbtsort#1 / fp-nbtree-nbtutils-p2#1: a SQL-language BTEQUALIMAGE
+-- regression / regression: a SQL-language BTEQUALIMAGE
 -- support function runs in an armed result context (CREATE INDEX succeeds).
 CREATE FUNCTION b135_eqimg(oid) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT true';
 CREATE FUNCTION b135_eqimg_null(oid) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT NULL::bool';
@@ -21,7 +21,7 @@ CREATE INDEX b135_i ON b135_t (a b135_int4_ops);
 SET enable_seqscan = off;
 SELECT count(*) FROM b135_t WHERE a = 3;
 RESET enable_seqscan;
--- fp-nbtree-nbtsort#2 / fp-nbtree-nbtutils-p2#2: a NULL from the equal-image
+-- regression / regression: a NULL from the equal-image
 -- function is XX000 "function N returned NULL" (OID normalized).
 DO $$ BEGIN
   CREATE INDEX b135_i2 ON b135_t (a b135_int4_null_ops);
@@ -37,7 +37,7 @@ DO $$ BEGIN
 EXCEPTION WHEN OTHERS THEN
   RAISE NOTICE '% %', SQLSTATE, regexp_replace(SQLERRM, '\d+', 'N');
 END $$;
--- fp-nbtree-nbtpreprocesskeys#1: scankey redundancy/contradiction checks and
+-- regression: scankey redundancy/contradiction checks and
 -- array-element extreme comparisons on a composite (record_cmp) key column.
 CREATE TYPE b135_ct AS (x int, y int);
 CREATE TABLE b135_c (c b135_ct);

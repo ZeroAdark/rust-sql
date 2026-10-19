@@ -109,6 +109,17 @@ fn crc24(data: &[u8]) -> u32 {
     crc & 0x00ff_ffff
 }
 
+/// pgp-armor.c:163 pg_base64_enc_len: 3 bytes to 4, a linefeed every 76.
+pub fn base64_enc_len(srclen: usize) -> usize {
+    (srclen + 2) / 3 * 4 + srclen / (76 * 3 / 4)
+}
+
+/// Bytes pgp_armor_encode appends before the base64 body.
+pub fn armor_header_len(keys: &[Vec<u8>], values: &[Vec<u8>]) -> usize {
+    let lines: usize = keys.iter().zip(values).map(|(k, v)| k.len() + 2 + v.len() + 1).sum();
+    ARMOR_HEADER.len() + lines + 1
+}
+
 pub fn armor_encode(src: &[u8], keys: &[Vec<u8>], values: &[Vec<u8>]) -> Vec<u8> {
     let crc = crc24(src);
     let mut dst: Vec<u8> = Vec::new();

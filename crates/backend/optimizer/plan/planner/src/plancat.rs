@@ -399,7 +399,7 @@ pub fn get_relation_info<'mcx>(
         };
         // SE-TOPNNI text sort-key answerability: v7 per-column stitch dict
         // sizes (0 = no stitch) for the m5_suppress DictCode top-N key
-        // probe. Knob-gated (default ON since the GL-TOPNNI-1 flip; the
+        // probe. Knob-gated (default ON since the regression flip; the
         // kill spelling stands the walk down with the probe — knob
         // coherence). Served from the session part cache like its
         // siblings (one cached-Part vec clone per pgrcolumnar plancat).
@@ -1909,8 +1909,8 @@ fn collate_sorts_bytewise(coll: Oid) -> bool {
 /// qualed star-tlist / narrow-tlist / text-key / mixed-key analogs of the
 /// census shapes engage and win 2.3–6.7x vs forced legacy, byte parity OK.
 ///
-/// DEFAULT ON since the GL-TOPNNI-1 flip (scratchpad/night/
-/// GL-TOPNNI-1-letter.md, dist witnessed ladder 2026-07-21 @ 8cf38a8c7:
+/// DEFAULT ON since the regression flip (scratchpad/night/
+/// regression-letter.md, dist witnessed ladder 2026-07-21 @ 8cf38a8c7:
 /// 10M dop{4,8,16} all six keyed shapes suppressed-and-winning vs
 /// best(serial, forced legacy), worst cell exact parity; 100M dop{4,16}
 /// census-family wins everywhere). `PGRUST_LANE_V2_TOPN_NONINT=0|off` is

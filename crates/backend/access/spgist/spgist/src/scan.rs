@@ -337,9 +337,9 @@ fn datum_copy_traversal(
     value: Datum,
     attbyval: bool,
     attlen: i16,
-) -> Datum {
+) -> PgResult<Datum> {
     if attbyval || value.as_usize() == 0 {
-        return value;
+        return Ok(value);
     }
     let mcx = traversal.mcx();
     let size = if attlen > 0 {
@@ -348,15 +348,14 @@ fn datum_copy_traversal(
         // SAFETY: by-ref varlena datum carries a live pointer.
         unsafe { ::types_tuple::varatt::varsize_any(value.as_usize() as *const u8) }
     };
-    let mut buf: ::mcx::PgVec<'_, u8> =
-        ::mcx::vec_with_capacity_in(mcx, size).expect("traversal datumCopy");
+    let mut buf: ::mcx::PgVec<'_, u8> = ::mcx::vec_with_capacity_in(mcx, size)?;
     // SAFETY: source live for size bytes.
     buf.extend_from_slice(unsafe {
         core::slice::from_raw_parts(value.as_usize() as *const u8, size)
     });
     let p = buf.as_ptr() as usize;
     core::mem::forget(buf);
-    Datum::from_usize(p)
+    Ok(Datum::from_usize(p))
 }
 
 enum StoreDest<'t, 'b> {
@@ -493,6 +492,9 @@ fn spg_leaf_test(
             Datum::from_usize(&mut leaf_out as *mut spgLeafConsistentOut as usize),
         );
         let r = so.leafConsistentFn.invoke(&mut so.frame2)?;
+        if so.frame2.isnull {
+            return Err(::types_spgist::state::returned_null(so.leafConsistentFn.fn_oid));
+        }
         let distances = if r.as_bool()
             && so.numberOfNonNullOrderBys > 0
             && !leaf_out.distances.is_null()
@@ -526,7 +528,7 @@ fn spg_leaf_test(
                     leaf_value,
                     so.state.attType.attbyval,
                     so.state.attType.attlen,
-                )
+                )?
             } else {
                 Datum::null()
             };
@@ -627,6 +629,9 @@ fn spg_inner_test(
             Datum::from_usize(&mut inner_out as *mut spgInnerConsistentOut as usize),
         );
         so.innerConsistentFn.invoke(&mut so.frame2)?;
+        if so.frame2.isnull {
+            return Err(::types_spgist::state::returned_null(so.innerConsistentFn.fn_oid));
+        }
 
         let out_n = inner_out.nNodes.max(0) as usize;
         if !inner_out.nodeNumbers.is_null() {
@@ -707,7 +712,7 @@ fn spg_inner_test(
                 recon_values[i],
                 so.state.attLeafType.attbyval,
                 so.state.attLeafType.attlen,
-            )
+            )?
         } else {
             Datum::null()
         };

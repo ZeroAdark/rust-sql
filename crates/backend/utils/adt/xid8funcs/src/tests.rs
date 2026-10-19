@@ -7,7 +7,7 @@ fn view<'a>(v: &'a ::datum::Varlena<'_>) -> SnapView<'a> {
 }
 
 fn parse<'m>(mcx: ::mcx::Mcx<'m>, s: &str) -> PgResult<Option<::datum::Varlena<'m>>> {
-    parse_snapshot(mcx, s, None)
+    parse_snapshot(mcx, s.as_bytes(), None)
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn parse_soft_error_returns_none() {
     let ctx = MemoryContext::new("t");
     let mcx = ctx.mcx();
     let mut esc = types_error::SoftErrorContext::new(false);
-    let r = parse_snapshot(mcx, "31:12:", Some(&mut esc)).unwrap();
+    let r = parse_snapshot(mcx, b"31:12:", Some(&mut esc)).unwrap();
     assert!(r.is_none());
     assert!(esc.error_occurred());
 }
@@ -202,4 +202,24 @@ fn allowable_at_epochs() {
     // special xids keep epoch 0.
     assert_eq!(full_xid_from_allowable_at((3 << 32) | 100, 2), 2);
     assert_eq!(full_xid_from_allowable_at((3 << 32) | 100, 0), 0);
+}
+
+// xid8funcs.c:323 "%s": the input bytes verbatim (SQL_ASCII high bytes).
+#[test]
+fn bad_format_keeps_non_utf8_input_bytes() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let e = parse_snapshot(mcx, b"\xff", None).unwrap_err();
+    assert_eq!(
+        e.message_raw.as_deref(),
+        Some(&b"invalid input syntax for type pg_snapshot: \"\xff\""[..])
+    );
+    let e = parse_snapshot(mcx, b"10:20:\xff", None).unwrap_err();
+    assert_eq!(
+        e.message_raw.as_deref(),
+        Some(&b"invalid input syntax for type pg_snapshot: \"10:20:\xff\""[..])
+    );
+    let e = parse(mcx, "10:20:x").unwrap_err();
+    assert_eq!(e.message_raw, None);
+    assert_eq!(e.message(), "invalid input syntax for type pg_snapshot: \"10:20:x\"");
 }

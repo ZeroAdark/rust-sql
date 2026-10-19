@@ -16,7 +16,7 @@ use mcx::{Mcx, MemoryContext, PgHashMap, PgVec};
 use ts_locale::dict_api::DictInitData;
 use ts_locale::DictSubState;
 use types_core::{InvalidOid, Oid};
-use types_error::{PgError, PgResult, ERRCODE_FEATURE_NOT_SUPPORTED, ERRCODE_UNDEFINED_OBJECT};
+use types_error::{PgError, PgResult, ERRCODE_UNDEFINED_OBJECT};
 use types_fmgr::{
     function_call1_coll_in, function_call4_coll_in, FmgrBuiltin, FmgrInfo,
     FunctionCallInfoBaseData as Fcinfo,
@@ -324,11 +324,12 @@ pub fn lookup_ts_dictionary_cache(dictId: Oid) -> PgResult<Rc<TSDictionaryCacheE
         ctx.set_ident(Some(&*String::from_utf8_lossy(dict.dictname.name_str())));
 
         dict_data = if init_oid != InvalidOid {
-            let mut dict_options: PgVec<'_, (PgVec<'_, u8>, PgVec<'_, u8>)> = PgVec::new_in(dmcx);
+            let mut dict_options: PgVec<'_, (PgVec<'_, u8>, Option<PgVec<'_, u8>>)> =
+                PgVec::new_in(dmcx);
             let mut int_options: PgVec<'_, Option<i64>> = PgVec::new_in(dmcx);
             if let Some(opt) = dict.dictinitoption {
                 for item in deserialize_deflist(dmcx, &opt)? {
-                    dict_options.push((item.name, item.value));
+                    dict_options.push((item.name, Some(item.value)));
                     int_options.push(item.int_value);
                 }
             }
@@ -468,88 +469,15 @@ pub fn lookup_ts_config_cache(cfgId: Oid) -> PgResult<Rc<TSConfigCacheEntry>> {
     Ok(entry)
 }
 
-// DeconstructQualifiedName (namespace.c).
-fn deconstruct_qualified_name<'a>(names: &[&'a str]) -> PgResult<(Option<&'a str>, &'a str)> {
-    match names {
-        [objname] => Ok((None, objname)),
-        [schemaname, objname] => Ok((Some(schemaname), objname)),
-        [catalogname, schemaname, objname] => {
-            let dbname =
-                dbcommands_seams::get_database_name::call(init_small::globals::MyDatabaseId())?;
-            if dbname.as_deref() != Some(*catalogname) {
-                return Err(PgError::error(format!(
-                    "cross-database references are not implemented: {}",
-                    names.join(".")
-                ))
-                .with_sqlstate(ERRCODE_FEATURE_NOT_SUPPORTED)
-                .into());
-            }
-            Ok((Some(schemaname), objname))
-        }
-        _ => Err(PgError::error(format!(
-            "improper qualified name (too many dotted names): {}",
-            names.join(".")
-        ))
-        .with_sqlstate(types_error::ERRCODE_SYNTAX_ERROR)
-        .into()),
-    }
-}
-
-// get_ts_config_oid / get_ts_dict_oid (C home: namespace.c) — hosted here
-// until a namespace tsearch arm exists; the search-path walk skips the temp
-// namespace like C.
-fn ts_name_lookup(
-    names: &[&str],
-    missing_ok: bool,
-    by_name: fn(&str, Oid) -> PgResult<Oid>,
-    kind: &str,
-) -> PgResult<Oid> {
-    let (schemaname, name) = deconstruct_qualified_name(names)?;
-    let mut result = InvalidOid;
-    if let Some(schemaname) = schemaname {
-        let namespace_id = namespace_seams::lookup_explicit_namespace::call(schemaname, missing_ok)?;
-        if namespace_id != InvalidOid {
-            result = by_name(name, namespace_id)?;
-        }
-    } else {
-        let scratch = MemoryContext::new("ts_name_lookup");
-        for namespace_id in namespace_seams::fetch_search_path::call(scratch.mcx(), true)?.iter() {
-            if namespace_seams::is_temp_namespace::call(*namespace_id) {
-                continue;
-            }
-            result = by_name(name, *namespace_id)?;
-            if result != InvalidOid {
-                break;
-            }
-        }
-    }
-    if result == InvalidOid && !missing_ok {
-        return Err(PgError::error(format!(
-            "text search {kind} \"{}\" does not exist",
-            names.join(".")
-        ))
-        .with_sqlstate(ERRCODE_UNDEFINED_OBJECT)
-        .into());
-    }
-    Ok(result)
-}
-
+// get_ts_config_oid / get_ts_dict_oid live in catalog_namespace (C home:
+// namespace.c); they walk the active search path without creating the
+// temporary namespace, unlike fetch_search_path.
 pub fn get_ts_config_oid(names: &[&str], missing_ok: bool) -> PgResult<Oid> {
-    ts_name_lookup(
-        names,
-        missing_ok,
-        |n, nsp| syscache_seams::lookup_pg_ts_config_oid_by_name::call(n, nsp),
-        "configuration",
-    )
+    namespace_seams::get_ts_config_oid::call(names, missing_ok)
 }
 
 pub fn get_ts_dict_oid(names: &[&str], missing_ok: bool) -> PgResult<Oid> {
-    ts_name_lookup(
-        names,
-        missing_ok,
-        |n, nsp| syscache_seams::lookup_pg_ts_dict_oid_by_name::call(n, nsp),
-        "dictionary",
-    )
+    namespace_seams::get_ts_dict_oid::call(names, missing_ok)
 }
 
 pub fn getTSCurrentConfig(emitError: bool) -> PgResult<Oid> {

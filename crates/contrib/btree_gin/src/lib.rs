@@ -344,7 +344,13 @@ fn fc_internal_stub(_f: Option<&mut FmgrInfo>, _fcinfo: &mut Fcinfo) -> PgResult
 }
 
 fn fc_gin_numeric_cmp(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
-    // SAFETY: strict fn — non-null numeric varlenas.
+    // btree_gin.c:407-413: PointerGetDatum(NULL) is the leftmost sentinel,
+    // reachable through a non-strict binding.
+    let (a_null, b_null) = (fcinfo.arg(0).as_usize() == 0, fcinfo.arg(1).as_usize() == 0);
+    if a_null || b_null {
+        return Ok(Datum::from_i32(if a_null && b_null { 0 } else if a_null { -1 } else { 1 }));
+    }
+    // SAFETY: both pointers checked non-null above; numeric varlenas.
     let (a, b) = unsafe { (adt_numeric::builtins::num_arg(fcinfo, 0)?, adt_numeric::builtins::num_arg(fcinfo, 1)?) };
     Ok(Datum::from_i32(adt_numeric::cmp_numerics(a, b)))
 }

@@ -63,7 +63,7 @@ use ::types_storage::bufpage::PageRef;
 use ::types_storage::ReadBufferMode;
 use ::vacuum_morsels::{
     merge_dead_runs, resume_granule, verify_prefix_coverage, ClaimRecord, CoverageError,
-    DeadRun, EagerScanShared, QuiesceState, ScanCounters, SkipMapParams, VacScanLocal,
+    DeadRun, EagerAdmit, EagerScanShared, QuiesceState, ScanCounters, SkipMapParams, VacScanLocal,
     VacuumBlockSource, VM_ALL_FROZEN, VM_ALL_VISIBLE,
 };
 use ::visibilitymap::{
@@ -77,6 +77,7 @@ use ::bufmgr_seams::{BUFFER_LOCK_SHARE, BUFFER_LOCK_UNLOCK};
 
 use super::{
     apply_failsafe, dead_items_add, eager_scan_disable_ereport, lazy_check_wraparound_failsafe,
+    SKIP_PAGES_THRESHOLD,
     lazy_scan_new_or_empty, lazy_scan_noprune, lazy_scan_prune, lazy_vacuum,
     update_vacuum_error_info, LVRelState, ScanEnv, VacErrContext, VacErrInfo, VacErrPhase,
     ScanFolds, FAILSAFE_EVERY_PAGES,
@@ -100,7 +101,7 @@ fn flag_enabled() -> bool {
 }
 
 /// M4.1 driver-swap switch (scratchpad/night/all-morsels-plan.md Track 3
-/// item 1), FLIPPED-KILL since the train-40 flip (GL-M41-3: wall 1.009
+/// item 1), FLIPPED-KILL since the train-40 flip (regression: wall 1.009
 /// parity 2-idx / 0.906 WIN 4-idx, OLTP flat, reclaim 15ms): the POOL
 /// channel — PGPROC-leasing runtime pool workers engaged through the M2
 /// inc-2 bound-descriptor gate at QoS class Utility — is the driver of
@@ -432,15 +433,19 @@ pub(crate) fn scan_rounds(vacrel: &mut LVRelState<'_, '_>, k: i32) -> PgResult<S
         }
         for l in &locals {
             vacrel.folds.counters.fold(&l.counters);
+            // Eagerly scanned pages are the ones the workers ADMITTED at
+            // scan time (C :1336-1337), not the map's candidates.
+            vacrel.eager_scanned_pages =
+                vacrel.eager_scanned_pages.wrapping_add(l.eager_scanned_pages as BlockNumber);
         }
         // Skip decisions below the resume point are consumed (jumped over
         // for good); later ones are re-decided by the next round's map.
-        vacrel.skippedallvis |= source.skipsallvis_before(resume_g);
-        let eager_end = resume_g.min(source.entries().len() as u64) as usize;
-        vacrel.eager_scanned_pages += source.entries()[..eager_end]
-            .iter()
-            .filter(|e| e.was_eager_scanned)
-            .count() as BlockNumber;
+        // Scan-time eager denials that skipped a run count the same way
+        // (C :1640 skippedallvis).
+        vacrel.skippedallvis |= source.skipsallvis_before(resume_g)
+            || locals
+                .iter()
+                .any(|l| l.eager_skipped_granules.iter().any(|&g| g < resume_g));
         clock.finalize_ns += t_finalize.elapsed().as_nanos() as u64;
 
         // The round's resume point, FIXED before any leader drain: on a
@@ -806,6 +811,11 @@ pub(crate) struct VacScanShared {
     eager_dbname: String,
     eager_relnamespace: String,
     eager_relname: String,
+    /// The leader's statement + query id (C PVShared.queryid /
+    /// PARALLEL_VACUUM_KEY_QUERY_TEXT, vacuumparallel.c:334-340): every
+    /// scan helper reports them for pg_stat_activity (:1013-1020).
+    query_text: Option<String>,
+    query_id: i64,
 }
 
 impl VacScanShared {
@@ -852,6 +862,8 @@ impl VacScanShared {
             eager_dbname: vacrel.dbname.clone(),
             eager_relnamespace: vacrel.relnamespace.clone(),
             eager_relname: vacrel.relname.clone(),
+            query_text: elog::with_debug_query_string(|q| q.map(str::to_owned)),
+            query_id: ::backend_status::pgstat_get_my_query_id(),
         }
     }
 
@@ -968,19 +980,104 @@ impl VacScanShared {
         }
 
         wcx.folds.counters = ScanCounters::seed(self.cutoffs.OldestXmin, self.cutoffs.OldestMxact);
-        for gidx in range.clone() {
+        let mut scanned: u64 = 0;
+        let mut gidx = range.start;
+        while gidx < range.end {
             let sb = self.source.block_of(gidx);
-            self.scan_block_worker(
-                wcx,
-                local,
-                sb.block,
-                sb.all_visible_according_to_vm,
-                sb.was_eager_scanned,
-            )?;
+            if !sb.was_eager_scanned {
+                self.scan_block_worker(wcx, local, sb.block, sb.all_visible_according_to_vm, false)?;
+                scanned += 1;
+                gidx += 1;
+                continue;
+            }
+            // Eager candidate (all-visible, not all-frozen, carried by the
+            // skip map while the region's failure budget was open): C
+            // decides admission when its cursor REACHES the block
+            // (vacuumlazy.c:1768-1771), against the live success cap and
+            // region budget — the skip map's build-time verdict only says
+            // the block may be eligible. Admit against the shared caps now.
+            let verdict = self.eager.try_admit(sb.block);
+            match verdict {
+                EagerAdmit::Admit => {}
+                EagerAdmit::AdmitAndClose(limit) => {
+                    // C :1444-1449, once: the report names the original cap.
+                    eager_scan_disable_ereport(
+                        self.eager_verbose,
+                        limit,
+                        &self.eager_dbname,
+                        &self.eager_relnamespace,
+                        &self.eager_relname,
+                    )?;
+                }
+                EagerAdmit::Deny => {
+                    // Denied: C's cursor treats the block as skippable and
+                    // walks on to the next unskippable block (:1782), then
+                    // skips the run only if it spans SKIP_PAGES_THRESHOLD
+                    // blocks (:1636-1641); a shorter run is scanned anyway
+                    // as plain all-visible blocks (:1651-1654). Walk the
+                    // round's granules the same way: the run ends at the
+                    // first non-eager granule or the first candidate the
+                    // caps would admit; the verdict is known as soon as the
+                    // span reaches the threshold.
+                    let total = self.source.entries().len() as u64;
+                    let mut j = gidx + 1;
+                    let mut end_block = self.source.rel_pages();
+                    while j < total {
+                        let nb = self.source.block_of(j);
+                        end_block = nb.block;
+                        if end_block.wrapping_sub(sb.block) >= SKIP_PAGES_THRESHOLD
+                            || !nb.was_eager_scanned
+                            || self.eager.would_admit(nb.block)
+                        {
+                            break;
+                        }
+                        j += 1;
+                    }
+                    // C measures the run from the block after the last
+                    // unskippable one it processed, which may lie in an
+                    // earlier claim (a denied candidate stays denied: the
+                    // cap never reopens and a spent region budget only
+                    // reopens at the next region, whose first block ends
+                    // the walk): extend the run start backwards over the
+                    // denied candidates before this claim.
+                    let mut start_block = sb.block;
+                    let mut i = gidx;
+                    while i > 0 && end_block.wrapping_sub(start_block) < SKIP_PAGES_THRESHOLD {
+                        let pb = self.source.block_of(i - 1);
+                        if !pb.was_eager_scanned || self.eager.would_admit(pb.block) {
+                            break;
+                        }
+                        start_block = pb.block;
+                        i -= 1;
+                    }
+                    let span = end_block.wrapping_sub(start_block);
+                    let run_end = j.min(range.end);
+                    if span >= SKIP_PAGES_THRESHOLD {
+                        // Skip the run: every granule in it is an
+                        // all-visible page left unscanned (skipsallvis —
+                        // relfrozenxid must not advance past it, :1640).
+                        for g in gidx..run_end {
+                            local.eager_skipped_granules.push(g);
+                        }
+                    } else {
+                        for g in gidx..run_end {
+                            let rb = self.source.block_of(g);
+                            self.scan_block_worker(wcx, local, rb.block, true, false)?;
+                            scanned += 1;
+                        }
+                    }
+                    gidx = run_end;
+                    continue;
+                }
+            }
+            self.scan_block_worker(wcx, local, sb.block, sb.all_visible_according_to_vm, true)?;
+            local.eager_scanned_pages += 1;
+            scanned += 1;
+            gidx += 1;
         }
         local.counters.fold(&wcx.folds.counters);
         local.claims.push(ClaimRecord { start: range.start, end: range.end, scanned: true });
-        self.scanned_pages.fetch_add(range.end - range.start, Ordering::Relaxed);
+        self.scanned_pages.fetch_add(scanned, Ordering::Relaxed);
         self.frontier.complete(range.start, range.end);
         Ok(())
     }
@@ -1107,16 +1204,10 @@ impl VacScanShared {
                     &mut has_lpdead_items,
                     &mut vm_page_frozen,
                 )?;
+                // C :1425-1463: only a cleanup-locked, eagerly scanned page
+                // counts against the caps (noprune pages are excluded).
                 if was_eager_scanned {
-                    if let Some(limit) = self.eager.account(blkno, vm_page_frozen) {
-                        eager_scan_disable_ereport(
-                            self.eager_verbose,
-                            limit,
-                            &self.eager_dbname,
-                            &self.eager_relnamespace,
-                            &self.eager_relname,
-                        )?;
-                    }
+                    self.eager.account(blkno, vm_page_frozen);
                 }
             }
 
@@ -1198,6 +1289,17 @@ fn worker_drive(shared: &Arc<VacScanShared>) -> PgResult<()> {
         shared.refused.fetch_add(1, Ordering::SeqCst);
         return Ok(());
     };
+    // vacuumparallel.c:1013-1020 for the scan helpers, both channels: the
+    // helper shows in pg_stat_activity as C's parallel worker would (type
+    // "parallel worker", leader_pid via the lock group, the leader's
+    // statement + query id); a pool serve hides its entry again on return.
+    let _serve = ::backend_status::PoolWorkerServe::begin(parallel::standing::serving_on_pool());
+    let _debug_query = shared.query_text.as_deref().map(elog::debug_query_string_scope);
+    ::backend_status::pgstat_report_activity(
+        ::backend_status::BackendState::STATE_RUNNING,
+        shared.query_text.as_deref(),
+    );
+    ::backend_status::pgstat_report_query_id(shared.query_id, false);
     let mut lane_local = lane.local();
 
     // Identity + cost ceremony (parallel_vacuum_main donor, verbatim class).
@@ -1654,12 +1756,23 @@ fn pool_wait(
             close("");
             return Err(e);
         }
+        // Read order: detaches, then starts, then claims. Every detach
+        // follows its claim, so a claim landing between the reads can only
+        // show as LIVE (claimed > detached), never as exited. The reverse
+        // order (claimed first) let a ticket-holder's bind refusal plus a
+        // fresh claim that bound and started in between read as "every
+        // participant detached" while the new claimant was driving: the
+        // leader aborted the RG under it and reported "executors exited
+        // before completing the round" (~1 in 100 VACUUMs on a pool whose
+        // threads carry resource-owner residue, so every serve on them
+        // refuses at bind and is re-served).
+        let detached = entry.detached();
+        let started = shared.started.load(Ordering::SeqCst);
         let claimed = entry.claimed();
         if !traced && claimed > 0 {
             vtrace(&format!("engaged pooldb dop={claimed} granules={granules}"));
             traced = true;
         }
-        let started = shared.started.load(Ordering::SeqCst);
         let refused = entry.refused() + shared.refused.load(Ordering::SeqCst);
         // Nobody will participate: every ticket-holder refused pre-bind or
         // at the bind/lane stage, before any granule was claimed.
@@ -1672,7 +1785,7 @@ fn pool_wait(
         // the launched gang takes over. A straggler that claims right as we
         // close simply drives the same RG (morsel claims are atomic).
         if started == 0
-            && entry.detached() >= claimed
+            && detached >= claimed
             && std::time::Duration::from_nanos(t0.elapsed_ns()) > pool_claim_deadline()
         {
             close("pooldb claim deadline — launched fallback");
@@ -1680,7 +1793,7 @@ fn pool_wait(
         }
         // Participants all detached yet the RG is incomplete and no error
         // was recorded: a worker died outside every catch layer.
-        if claimed > 0 && started > 0 && entry.detached() >= claimed {
+        if claimed > 0 && started > 0 && detached >= claimed {
             if let Some(o) = waiter.try_wait() {
                 close("");
                 return Ok(PoolWait::Done(o));

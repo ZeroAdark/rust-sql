@@ -91,7 +91,7 @@ fn decode_key(image: &[u8]) -> PgResult<GhKey> {
         return Err(PgError::error("corrupt ghstore GiST key (short header)").into());
     }
     let raw = u32::from_ne_bytes(image[0..4].try_into().unwrap());
-    let varsize = ((raw >> 2) as usize).min(image.len()).max(GTHDRSIZE);
+    let varsize = (varatt::varsize_4b_word(raw) as usize).min(image.len()).max(GTHDRSIZE);
     let flag = i32::from_ne_bytes(image[4..8].try_into().unwrap());
     if flag & ALLISTRUE != 0 {
         Ok(GhKey::AllTrue)
@@ -389,7 +389,9 @@ pub fn fc_ghstore_picksplit(f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> Pg
         let size_beta = hemdist_working(datum_r_allistrue, &union_r, kj, siglen);
         costvector.push((j, (size_alpha - size_beta).abs()));
     }
-    costvector.sort_by(|a, b| a.1.cmp(&b.1));
+    // qsort(costvector, maxoff, sizeof(SPLITCOST), comparecost): pg_qsort's
+    // equal-cost order decides page membership.
+    ::pg_qsort::pg_qsort(&mut costvector, |a, b| a.1.cmp(&b.1) as i32);
 
     let mut spl_left: Vec<u16> = Vec::new();
     let mut spl_right: Vec<u16> = Vec::new();
@@ -494,4 +496,29 @@ pub fn fc_ghstore_consistent(_f: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> 
         }
     };
     Ok(Datum::from_bool(res))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // decode_key reads the 4B varlena length through varsize_4b_word, the
+    // same word the encoder wrote (endianness-neutral on both byte orders).
+    #[test]
+    fn decode_key_round_trips_the_encoded_image() {
+        let sign: Vec<u8> = (0..16u8).collect();
+        let img = ghstore_alloc(false, 16, Some(&sign));
+        assert_eq!(img.len(), GTHDRSIZE + 16);
+        match decode_key(&img).unwrap() {
+            GhKey::Sign(s) => assert_eq!(s, sign),
+            GhKey::AllTrue => panic!("sign key"),
+        }
+        let mut padded = img.clone();
+        padded.extend_from_slice(&[0xAA; 8]);
+        match decode_key(&padded).unwrap() {
+            GhKey::Sign(s) => assert_eq!(s, sign),
+            GhKey::AllTrue => panic!("sign key"),
+        }
+        assert!(matches!(decode_key(&ghstore_alloc(true, 16, None)).unwrap(), GhKey::AllTrue));
+    }
 }

@@ -29,15 +29,17 @@ pub(crate) fn catalog_cache_initialize_cache(cache_id: i32) -> PgResult<()> {
     with_state(|st| -> PgResult<()> {
         let mcx = st.mcx;
         // Set once for the backend's life, never rebuilt (catalog schemas
-        // are immutable), so the leak below is honest.
+        // are immutable); freed with the estate at session teardown
+        // (lib.rs init_state cleanup), as C's CacheMemoryContext copy dies
+        // with the process.
         let copied: TupleDescData<'_> = tupdesc::CreateTupleDescCopyConstr(mcx, relation.descr())?;
         // Justified bare Box: the droppy descriptor header cannot live in a
-        // no-drop arena; the leak is C's never-freed CacheMemoryContext copy.
+        // no-drop arena.
         let leaked: &mut TupleDescData<'_> = Box::leak(Box::new(copied));
-        // SAFETY: the header is leaked and its inner allocations live in the
-        // ManuallyDrop'd, never-reset CacheMemoryContext (crate::STATE); it
-        // is written once here and no path frees or rebuilds it, so
-        // extending to 'static is sound.
+        // SAFETY: the header's inner allocations live in CacheMemoryContext
+        // (crate::STATE), which outlives every reader; it is written once
+        // here and freed only by the session-teardown cleanup, after the
+        // last reader on this thread, so extending to 'static is sound.
         let td: &'static TupleDescData<'static> =
             unsafe { core::mem::transmute::<&TupleDescData<'_>, &'static TupleDescData<'static>>(leaked) };
 

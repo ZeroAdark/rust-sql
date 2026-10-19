@@ -252,3 +252,61 @@ fn safe_scan_state_cannot_escape_owner() {
     });
     drop(so);
 }
+
+// ginget.c:1253: keyGetItem's GIN_TRUE arm leaves recheckCurItem as the tri
+// consistent fn left it, and a native tri fn never writes it, so the true
+// set by an earlier lossy (GIN_MAYBE) item is still in force on a later
+// exact match; only the shim over a bool consistent fn resets it.
+#[test]
+fn key_get_item_keeps_recheck_left_by_a_lossy_item_under_a_native_tri_fn() {
+    use ::gin_vocab::{
+        ginCompareItemPointers, item_pointer_set_lossy_page, item_pointer_set_min, GinScanWork,
+        GIN_CAT_NORM_KEY, GIN_SEARCH_MODE_DEFAULT,
+    };
+    // ginarrayproc.c GinOverlapStrategy: the tri fn reads only the entryRes.
+    const GIN_OVERLAP_STRATEGY: ::types_scan::scankey::StrategyNumber = 1;
+    use ::types_tuple::itemptr::ItemPointerData;
+    let ctx = MemoryContext::new("b130");
+    let rel = index_rel(ctx.mcx());
+    let state = gin_state();
+    let mut owner = GinScanWork::new();
+    owner.with(|work| {
+        let kcx = work.kcx();
+        crate::scan::fill_scan_key(
+            &state,
+            work,
+            1,
+            GIN_OVERLAP_STRATEGY,
+            GIN_SEARCH_MODE_DEFAULT,
+            Datum::null(),
+            &[Datum::from_i32(1)],
+            Datum::null(),
+            &[GIN_CAT_NORM_KEY],
+            &[false],
+            PgVec::new_in(kcx),
+            PgVec::new_in(kcx),
+            None,
+        )
+        .unwrap();
+        work.keys[0].requiredEntries.push(0);
+        let mut lossy = ItemPointerData::invalid();
+        item_pointer_set_lossy_page(&mut lossy, 5);
+        let mut min = ItemPointerData::invalid();
+        item_pointer_set_min(&mut min);
+
+        work.entries[0].curItem = lossy;
+        crate::get::key_get_item(&rel, &state, work, 0, &min).unwrap();
+        assert!(work.keys[0].curItemMatches);
+        assert!(work.keys[0].recheckCurItem, "lossy item forces a recheck");
+
+        let exact = ItemPointerData::new(6, 1);
+        work.entries[0].curItem = exact;
+        crate::get::key_get_item(&rel, &state, work, 0, &lossy).unwrap();
+        assert!(work.keys[0].curItemMatches);
+        assert_eq!(ginCompareItemPointers(&work.keys[0].curItem, &exact), 0);
+        assert!(
+            work.keys[0].recheckCurItem,
+            "GIN_TRUE keeps the recheck a native tri fn never cleared (ginget.c:1253)"
+        );
+    });
+}

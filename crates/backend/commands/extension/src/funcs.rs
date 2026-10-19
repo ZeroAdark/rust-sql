@@ -4,7 +4,6 @@ use mcx::Mcx;
 use types_core::NAMEOID;
 use types_error::PgResult;
 use types_fmgr::{varlena_result, FmgrInfo, FunctionCallInfoBaseData as Fcinfo};
-use types_tuple::NameData;
 
 use crate::control::{
     for_each_primary_control_name, parse_control_in_dir, read_extension_control_file_bytes,
@@ -17,8 +16,7 @@ fn text_datum(mcx: Mcx<'_>, s: &str) -> PgResult<Datum> {
 }
 
 fn name_datum<'mcx>(mcx: Mcx<'mcx>, s: &str) -> PgResult<Datum> {
-    let mut name = NameData::default();
-    name.namestrcpy(s);
+    let name = crate::namein_bytes(s.as_bytes());
     let stable = mcx::slice_borrow_in(mcx, &name.data)?;
     Ok(Datum::from_usize(stable.as_ptr() as usize))
 }
@@ -233,12 +231,20 @@ pub fn fc_pg_get_loaded_modules(
         let library_path = module.library_path.as_str();
         let file_name =
             &library_path[pg_path::last_dir_separator(library_path).map_or(0, |i| i + 1)..];
-        let values = [
-            text_datum(mcx, module.module_name)?,
-            text_datum(mcx, guc_tables::consts::PG_COMPAT_VERSION)?,
-            text_datum(mcx, file_name)?,
-        ];
-        srf.putvalues(&values, &[false; 3])?;
+        // extension.c:2997-3004: a plain PG_MODULE_MAGIC module has neither
+        // name nor version.
+        let (values, nulls) = match module.module_name {
+            Some(name) => (
+                [
+                    text_datum(mcx, name)?,
+                    text_datum(mcx, guc_tables::consts::PG_COMPAT_VERSION)?,
+                    text_datum(mcx, file_name)?,
+                ],
+                [false; 3],
+            ),
+            None => ([Datum::null(), Datum::null(), text_datum(mcx, file_name)?], [true, true, false]),
+        };
+        srf.putvalues(&values, &nulls)?;
     }
 
     Ok(srf.finish(fcinfo))

@@ -854,17 +854,27 @@ fn out_window_agg(out: &mut PgString<'_>, w: &WindowAgg<'_>) -> PgResult<()> {
         w.winref,
         w.partNumCols
     );
-    out_attrnumber_array(out, w.partColIdx);
-    w!(out, " :partOperators ");
-    out_oid_array(out, w.partOperators);
-    w!(out, " :partCollations ");
-    out_oid_array(out, w.partCollations);
+    // make_windowagg's arrays are palloc'd even at zero length
+    // (createplan.c:2647/2664): C prints "()" here, never "<>".
+    if w.partNumCols == 0 {
+        w!(out, "() :partOperators () :partCollations ()");
+    } else {
+        out_attrnumber_array(out, w.partColIdx);
+        w!(out, " :partOperators ");
+        out_oid_array(out, w.partOperators);
+        w!(out, " :partCollations ");
+        out_oid_array(out, w.partCollations);
+    }
     w!(out, " :ordNumCols {} :ordColIdx ", w.ordNumCols);
-    out_attrnumber_array(out, w.ordColIdx);
-    w!(out, " :ordOperators ");
-    out_oid_array(out, w.ordOperators);
-    w!(out, " :ordCollations ");
-    out_oid_array(out, w.ordCollations);
+    if w.ordNumCols == 0 {
+        w!(out, "() :ordOperators () :ordCollations ()");
+    } else {
+        out_attrnumber_array(out, w.ordColIdx);
+        w!(out, " :ordOperators ");
+        out_oid_array(out, w.ordOperators);
+        w!(out, " :ordCollations ");
+        out_oid_array(out, w.ordCollations);
+    }
     w!(out, " :frameOptions {} :startOffset ", w.frameOptions);
     out_opt_node(out, w.startOffset)?;
     w!(out, " :endOffset ");

@@ -810,8 +810,14 @@ unsafe fn relocate_states_into(
                     // Verbatim, self-contained image copy into the 16-aligned
                     // slot (varsize_any covers every form: short, 4B-U, the
                     // external toast-pointer struct, and the compressed 4B-C
-                    // body). The avg transarray is always the accum family's
-                    // 4B-U MAXALIGNed aggcontext image. A text min/max
+                    // body). The accum family's avg transarray is a 4B-U
+                    // aggcontext image, but a user aggregate pairing
+                    // int4_avg_combine with its own sfunc hands whatever that
+                    // sfunc returned (a short-header array out of a SQL
+                    // function's result tuple, or the wrong shape entirely);
+                    // the consume-time validation pass routes those to the
+                    // fmgr combine, which detoasts and raises C's
+                    // "expected 2-element int8 array". A text min/max
                     // transvalue is USUALLY a plain inline datumCopy, but the
                     // first-value adoption path (advance_transition_function's
                     // datumCopy of the raw input) can store a 1B_E external
@@ -820,10 +826,6 @@ unsafe fn relocate_states_into(
                     // consume-time validation pass, which falls the whole
                     // shape back to the serial fmgr combine (it detoasts).
                     let sp = pg.trans_value.as_usize() as *const u8;
-                    debug_assert!(
-                        !matches!(k, CombineKind::AvgInt8Array) || varatt_is_4b_u(sp),
-                        "avg transarray images are 4B-U MAXALIGNed"
-                    );
                     let len = varsize_any(sp);
                     core::ptr::copy_nonoverlapping(sp, state, len);
                     off += align16(len);
@@ -1277,12 +1279,44 @@ pub(crate) fn agg_retrieve_merged<'mcx>(
             }
             entry.additional(additionalsize).map_or(NonNull::dangling(), |p| p.cast())
         };
+        combine_initcond(node, estate, pergroup)?;
         finalize_aggregates(node, estate, pergroup)?;
 
         if let Some(slot) = merge_project_aggregates(node, estate, mcx)? {
             return Ok(Some(slot));
         }
     }
+}
+
+// C initialize_aggregate (nodeAgg.c:636) seeds every finalize group from
+// agginitval before the partials combine into it; the merge adopted the first
+// partial's state directly, so a non-null initcond folds in here, once per
+// merged group (the admitted combines are commutative).
+fn combine_initcond<'mcx>(
+    node: &mut AggStateData<'mcx>,
+    estate: &mut EStateData<'mcx>,
+    pergroup: NonNull<AggPerGroup>,
+) -> PgResult<()> {
+    let per_tuple = estate.ecxt(node.tmpcontext).per_tuple_mcx();
+    let agg_node = node.agg_node;
+    let AggStateData { merge, trans_init, .. } = node;
+    let m = merge.as_mut().expect("merge engaged");
+    for (transno, c) in m.combines.iter_mut().enumerate() {
+        let init = trans_init[transno];
+        if init.isnull {
+            continue;
+        }
+        let src = AggPerGroup {
+            trans_value: init.value,
+            trans_value_is_null: false,
+            no_trans_value: false,
+        };
+        // SAFETY: additionalsize holds numtrans pergroups; the merged entry is
+        // uniquely reachable through the run's output and finalizes once.
+        let dst = unsafe { &mut *pergroup.as_ptr().add(transno) };
+        combine_one(c, agg_node, per_tuple, dst, &src)?;
+    }
+    Ok(())
 }
 
 fn next_merged_group<'mcx>(
@@ -1786,6 +1820,22 @@ unsafe fn varlena_is_plain_inline(p: *const u8) -> bool {
     unsafe { (varatt_is_1b(p) && !varatt_is_1b_e(p)) || varatt_is_4b_u(p) }
 }
 
+// The exact image int4_avg_combine (numeric.c:6883) accepts once detoasted —
+// a 4B-U no-nulls 1-D int8[2] — and the only one the native add may touch:
+// anything else (short header, toast pointer, wrong shape) goes through the
+// fmgr combine, which detoasts and raises C's error.
+//
+// # Safety
+// `p` is a live varlena image.
+unsafe fn avg_transarray_is_native(p: *const u8) -> bool {
+    // SAFETY: caller contract; the header reads stay within the image.
+    unsafe {
+        varatt_is_4b_u(p)
+            && varsize_4b(p) == ARR_OVERHEAD_NONULLS_1 + 2 * core::mem::size_of::<i64>()
+            && p.add(8).cast::<i32>().read_unaligned() == 0
+    }
+}
+
 // The parallel run at the consume boundary. Ok(None) = fell back to the
 // serial bucket merge — a varlena the thread comparator must not touch in
 // place because it has a compressed/external representation that needs
@@ -1807,8 +1857,10 @@ fn parallel_merge(
     // VarlenaMinMax transvalues are compared in place by var_payload /
     // varstrfastcmp_c, so they too must be plain inline images — independent
     // of whether any grouping KEY is varlena (e.g. GROUP BY int, min(text)).
-    let has_varlena_trans =
-        spec.combines.iter().any(|c| matches!(c.kind, CombineKind::VarlenaMinMax { .. }));
+    let has_varlena_trans = spec
+        .combines
+        .iter()
+        .any(|c| matches!(c.kind, CombineKind::VarlenaMinMax { .. } | CombineKind::AvgInt8Array));
     if spec.has_varlena || has_varlena_trans {
         let mut values = vec![Datum::null(); ncols];
         let mut isnull = vec![false; ncols];
@@ -1835,9 +1887,11 @@ fn parallel_merge(
                     let Some(add) = e.additional(additionalsize) else { continue };
                     let pg = add.as_ptr().cast::<AggPerGroup>();
                     for (transno, c) in spec.combines.iter().enumerate() {
-                        if !matches!(c.kind, CombineKind::VarlenaMinMax { .. }) {
-                            continue;
-                        }
+                        let avg = match c.kind {
+                            CombineKind::VarlenaMinMax { .. } => false,
+                            CombineKind::AvgInt8Array => true,
+                            _ => continue,
+                        };
                         // SAFETY: additionalsize holds numtrans live pergroups.
                         let s = unsafe { &*pg.add(transno) };
                         if s.trans_value_is_null {
@@ -1847,7 +1901,10 @@ fn parallel_merge(
                         // SAFETY: non-null byref transvalue is a live varlena
                         // image (plain inline, or a toast pointer / compressed
                         // image the first-value adoption path stored verbatim).
-                        if !unsafe { varlena_is_plain_inline(p) } {
+                        let ok = unsafe {
+                            if avg { avg_transarray_is_native(p) } else { varlena_is_plain_inline(p) }
+                        };
+                        if !ok {
                             return false;
                         }
                     }

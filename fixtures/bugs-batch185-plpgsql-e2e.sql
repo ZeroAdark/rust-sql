@@ -9,7 +9,7 @@
 \set VERBOSITY verbose
 \pset pager off
 
--- fp-pl-plpgsql-pl_exec-p1#1 / pl_exec-p4#2: a non-atomic procedure stores IN arguments detoasted
+-- regression / pl_exec-p4#2: a non-atomic procedure stores IN arguments detoasted
 CREATE TABLE b185_src(id int, t text);
 ALTER TABLE b185_src ALTER COLUMN t SET STORAGE EXTERNAL;
 INSERT INTO b185_src SELECT 1, string_agg(md5(i::text), '') FROM generate_series(1, 200) i;
@@ -26,7 +26,7 @@ BEGIN DELETE FROM b185_src; COMMIT; RAISE NOTICE 'after commit: %', length(x); E
 CALL b185_p2(b185_srcval());
 DROP PROCEDURE b185_p, b185_p2; DROP FUNCTION b185_srcval; DROP TABLE b185_src;
 
--- fp-pl-plpgsql-pl_exec-p1#2: a NULL composite-domain argument is domain-checked at entry
+-- regression: a NULL composite-domain argument is domain-checked at entry
 CREATE TYPE b185_ct AS (a int);
 CREATE DOMAIN b185_dct AS b185_ct CHECK (VALUE IS NOT NULL);
 CREATE FUNCTION b185_f(x b185_dct) RETURNS text LANGUAGE plpgsql AS $$
@@ -39,7 +39,7 @@ BEGIN RETURN 'x is null: ' || (x IS NULL)::text; END $$;
 SELECT b185_f2((SELECT NULL::b185_dct2 WHERE false));
 DROP FUNCTION b185_f, b185_f2; DROP DOMAIN b185_dct, b185_dct2;
 
--- fp-pl-plpgsql-pl_exec-p1#4: a result of the declared composite-domain type is not re-checked
+-- regression: a result of the declared composite-domain type is not re-checked
 CREATE FUNCTION b185_chk(x b185_ct) RETURNS bool LANGUAGE plpgsql AS $$
 BEGIN RAISE NOTICE 'check called a=%', x.a; RETURN (x).a > 0; END $$;
 CREATE DOMAIN b185_dchk AS b185_ct CHECK (b185_chk(VALUE));
@@ -58,14 +58,14 @@ SELECT b185_r4();
 DROP FUNCTION b185_r1, b185_r2, b185_r3, b185_r4; DROP DOMAIN b185_dchk; DROP FUNCTION b185_chk;
 DROP TYPE b185_ct;
 
--- fp-pl-plpgsql-pl_exec-p1#5: the CALL statement is a PG_CONTEXT frame
+-- regression: the CALL statement is a PG_CONTEXT frame
 CREATE PROCEDURE b185_ctx() LANGUAGE plpgsql AS $$
 DECLARE c text; BEGIN GET DIAGNOSTICS c = PG_CONTEXT; RAISE NOTICE '%', c; END $$;
 DO $$ BEGIN CALL b185_ctx(); END $$;
 CALL b185_ctx();
 DROP PROCEDURE b185_ctx;
 
--- fp-pl-plpgsql-pl_exec-p4#1: a non-simple expression is never generic-planned
+-- regression: a non-simple expression is never generic-planned
 DO $$ DECLARE p int := 1; x int;
 BEGIN x := (SELECT CASE WHEN p > 0 THEN 1 ELSE 1/0 END); RAISE NOTICE 'sublink: %', x; END $$;
 DO $$ DECLARE p int := 1; x int;
@@ -77,7 +77,7 @@ BEGIN RAISE WARNING 'warn from b185_w'; RETURN 1; END $$;
 DO $$ DECLARE x int; BEGIN x := b185_w() + (SELECT 1); RAISE NOTICE '%', x; END $$;
 DROP FUNCTION b185_w;
 
--- fp-pl-plpgsql-pl_exec-p4#3 / pl_handler#1: simple-expression state is rebuilt per transaction
+-- regression / pl_handler#1: simple-expression state is rebuilt per transaction
 CREATE FUNCTION b185_g() RETURNS int LANGUAGE plpgsql AS 'BEGIN RETURN 1; END';
 CREATE FUNCTION b185_call_g() RETURNS int LANGUAGE plpgsql AS $$ BEGIN RETURN b185_g(); END $$;
 SET track_functions = 'none';
@@ -91,7 +91,7 @@ SELECT funcname, calls FROM pg_stat_user_functions WHERE funcname IN ('b185_g', 
 RESET track_functions;
 DROP FUNCTION b185_call_g, b185_g;
 
--- fp-pl-plpgsql-pl_gram-p1#2: fixed grammar tokens are not matched by same-named variables
+-- regression: fixed grammar tokens are not matched by same-named variables
 DO $$ DECLARE stacked int; c text;
 BEGIN BEGIN RAISE EXCEPTION 'x'; EXCEPTION WHEN OTHERS THEN GET STACKED DIAGNOSTICS c = MESSAGE_TEXT; END; END $$;
 DO $$ DECLARE current int; c text; BEGIN GET CURRENT DIAGNOSTICS c = PG_CONTEXT; END $$;
@@ -107,7 +107,7 @@ CREATE FUNCTION b185_vc3() RETURNS int LANGUAGE plpgsql AS $$ #variable_conflict
 BEGIN RETURN 1; END $$;
 DO $$ DECLARE c text; BEGIN GET CURRENT DIAGNOSTICS c = PG_CONTEXT; RAISE NOTICE '%', c; END $$;
 
--- fp-pl-plpgsql-pl_gram-p2#1: datatype warnings carry the declaration's position
+-- regression: datatype warnings carry the declaration's position
 DO $$ DECLARE x timestamp(9); BEGIN x := now(); END $$;
 CREATE FUNCTION b185_ts() RETURNS int LANGUAGE plpgsql AS $$ DECLARE y timestamp(9); BEGIN RETURN 1; END $$;
 SET check_function_bodies = off;
@@ -116,13 +116,13 @@ RESET check_function_bodies;
 SELECT b185_ts2();
 DROP FUNCTION b185_ts, b185_ts2;
 
--- fp-pl-plpgsql-pl_scanner#2: the cursor-variable peek reads one raw token
+-- regression: the cursor-variable peek reads one raw token
 DO $$ DECLARE i int; x int; BEGIN FETCH i bogus 'oops; END $$;
 DO $$ DECLARE i int; x int; BEGIN OPEN i bogus 'oops; END $$;
 DO $$ DECLARE i int; x int; BEGIN CLOSE i bogus 'oops; END $$;
 DO $$ DECLARE i int; x int; BEGIN FETCH i INTO x; END $$;
 
--- fp-pl-plpgsql-pl_gram-p1#3: the compile-context line of an end-label error is the block's BEGIN
+-- regression: the compile-context line of an end-label error is the block's BEGIN
 SET check_function_bodies = off;
 CREATE FUNCTION b185_lbl() RETURNS int LANGUAGE plpgsql AS $$
 DECLARE x int;
@@ -149,7 +149,7 @@ SELECT b185_lbl2();
 RESET check_function_bodies;
 DROP FUNCTION b185_lbl, b185_lbl2;
 
--- fp-pl-plpgsql-pl_exec-p2#3: RETURN NEXT of multiple OUT parameters builds its tuple in eval scratch
+-- regression: RETURN NEXT of multiple OUT parameters builds its tuple in eval scratch
 CREATE FUNCTION b185_srf(OUT a text, OUT b text) RETURNS SETOF record LANGUAGE plpgsql AS $$
 DECLARE i int; m bigint;
 BEGIN
@@ -165,7 +165,7 @@ END $$;
 SELECT count(*) FROM b185_srf();
 DROP FUNCTION b185_srf;
 
--- fp-executor-spi-p2#3: planning-time warnings of a simple expression carry the assignment context
+-- regression: planning-time warnings of a simple expression carry the assignment context
 \set SHOW_CONTEXT always
 CREATE FUNCTION b185_w2() RETURNS int LANGUAGE plpgsql IMMUTABLE AS $$
 BEGIN RAISE WARNING 'warn from b185_w2'; RETURN 1; END $$;
@@ -174,3 +174,24 @@ DO $$ DECLARE x int; BEGIN x := b185_w2() + (SELECT 1); RAISE NOTICE '%', x; END
 DO $$ DECLARE x timestamp(9); BEGIN x := now(); END $$;
 \set SHOW_CONTEXT errors
 DROP FUNCTION b185_w2;
+
+-- regression: TG_* promises are fulfilled on first read
+-- (plpgsql_fulfill_promise), not at trigger entry: a body that renames its
+-- own schema before reading TG_TABLE_SCHEMA sees the new name, and a
+-- promise read once stays as read (TG_TABLE_NAME after a rename).
+CREATE SCHEMA b185_s1;
+CREATE TABLE b185_s1.t (a int);
+CREATE FUNCTION b185_s1.trg() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  ALTER SCHEMA b185_s1 RENAME TO b185_s2;
+  RAISE NOTICE 'schema=% name=% when=% op=% level=% nargs=% argv=%',
+    TG_TABLE_SCHEMA, TG_TABLE_NAME, TG_WHEN, TG_OP, TG_LEVEL, TG_NARGS, TG_ARGV;
+  ALTER TABLE b185_s2.t RENAME TO t2;
+  RAISE NOTICE 'schema=% name=% relid_ok=%', TG_TABLE_SCHEMA, TG_TABLE_NAME,
+    TG_RELID = 'b185_s2.t2'::regclass;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER b185_tr BEFORE INSERT ON b185_s1.t FOR EACH ROW
+  EXECUTE FUNCTION b185_s1.trg('x', 'y');
+INSERT INTO b185_s1.t VALUES (1);
+DROP SCHEMA b185_s2 CASCADE;

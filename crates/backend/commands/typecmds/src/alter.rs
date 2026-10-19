@@ -16,7 +16,7 @@ use types_nodes::parsenodes::{AlterDomainStmt, ObjectType, RenameStmt};
 use types_nodes::rawnodes::{Constraint, ConstrType, TypeName};
 use types_nodes::{Node, NodeList, NodeTag};
 use types_rel::{
-    AccessShareLock, Relation, RowExclusiveLock, ShareLock, LOCKMODE, RELKIND_MATVIEW,
+    AccessShareLock, NoLock, Relation, RowExclusiveLock, ShareLock, LOCKMODE, RELKIND_MATVIEW,
     RELKIND_RELATION,
 };
 
@@ -756,7 +756,7 @@ fn get_rels_with_domain<'mcx>(
 
 fn validateDomainNotNullConstraint<'mcx>(mcx: Mcx<'mcx>, domainoid: Oid) -> PgResult<()> {
     let rels = get_rels_with_domain(mcx, domainoid, ShareLock)?;
-    for rtc in rels.iter() {
+    for rtc in rels {
         let testrel = &rtc.rel;
         let snapshot = snapmgr::GetLatestSnapshot()?;
         let snapshot = snapmgr::RegisterSnapshot(Some(&snapshot))?.expect("registered snapshot");
@@ -784,6 +784,8 @@ fn validateDomainNotNullConstraint<'mcx>(mcx: Mcx<'mcx>, domainoid: Oid) -> PgRe
         }
         tableam::table_endscan(scan)?;
         snapmgr::UnregisterSnapshot(Some(&snapshot));
+        // typecmds.c:3250 table_close(testrel, NoLock): the ShareLock stays.
+        rtc.rel.close(NoLock)?;
     }
     Ok(())
 }
@@ -803,7 +805,7 @@ fn validateDomainCheckConstraint<'mcx>(
     unsafe { program.arm_result_mcx_raw(per_tuple.mcx()) };
 
     let rels = get_rels_with_domain(mcx, domainoid, ShareLock)?;
-    for rtc in rels.iter() {
+    for rtc in rels {
         let testrel = &rtc.rel;
         let snapshot = snapmgr::GetLatestSnapshot()?;
         let snapshot = snapmgr::RegisterSnapshot(Some(&snapshot))?.expect("registered snapshot");
@@ -835,6 +837,7 @@ fn validateDomainCheckConstraint<'mcx>(
         }
         tableam::table_endscan(scan)?;
         snapmgr::UnregisterSnapshot(Some(&snapshot));
+        rtc.rel.close(NoLock)?;
     }
     Ok(())
 }
@@ -893,7 +896,13 @@ pub fn RenameType<'mcx>(mcx: Mcx<'mcx>, stmt: &RenameStmt<'mcx>) -> PgResult<Obj
     // If the type is composite, rename the associated pg_class entry too;
     // RenameRelationInternal calls RenameTypeInternal automatically.
     if row.typtype == TYPTYPE_COMPOSITE {
-        tablecmds_seams::rename_relation_internal::call(mcx, row.typrelid, new_type_name, false)?;
+        tablecmds_seams::rename_relation_internal::call(
+            mcx,
+            row.typrelid,
+            new_type_name,
+            false,
+            false,
+        )?;
     } else {
         pg_type::RenameTypeInternal(mcx, type_oid, new_type_name, row.typnamespace)?;
     }
@@ -1253,7 +1262,11 @@ fn not_a_domain(type_oid: Oid) -> PgResult<Box<PgError>> {
 #[cold]
 #[inline(never)]
 pub(crate) fn must_be_owner_of_type(type_oid: Oid) -> PgResult<Box<PgError>> {
-    let name = format_type::format_type_be(type_oid)?;
+    // aclcheck_error_type (aclchk.c:2974): an array type is reported by its
+    // element type.
+    let element_type = lsyscache::get_element_type(type_oid)?;
+    let shown = if element_type != InvalidOid { element_type } else { type_oid };
+    let name = format_type::format_type_be(shown)?;
     Ok(Box::new(
         PgError::new(ERROR, format!("must be owner of type {name}"))
             .with_sqlstate(ERRCODE_INSUFFICIENT_PRIVILEGE),

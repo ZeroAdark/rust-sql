@@ -22,7 +22,7 @@
 //!      never loses a wake, and the retire-on-return discipline leaves NO
 //!      handle residue for the next ownership epoch (proc-slot/pool-thread
 //!      reuse; the 2026-07 dev-profile "concurrent waiters" wedge shape).
-//!   6. flushpipe-over-Waiter (GL-FLUSHPIPE-1) — a mirror of the
+//!   6. flushpipe-over-Waiter (regression) — a mirror of the
 //!      pending-flush queue's register/complete Dekker
 //!      (transam_xlog::flushpipe): a commit registrant either self-serves
 //!      on the published flush result or is completed by a flusher's walk,
@@ -771,7 +771,7 @@ fn uring_wait_backstop_races_live_completer() {
 }
 
 // ---------------------------------------------------------------------------
-// flushpipe-over-Waiter (GL-FLUSHPIPE-1).
+// flushpipe-over-Waiter (regression).
 //
 // Mirror of crates/backend/access/transam/transam_xlog/src/flushpipe.rs's
 // register/complete protocol: the pending-flush queue (link under lock +
@@ -784,7 +784,7 @@ fn uring_wait_backstop_races_live_completer() {
 // detector being the lost-wake oracle.
 //
 // Expressibility translations, as in ModelSema above (loom carries recency
-// for RMWs, not for SC stores — the GL-STMTTASK-3 semaphore lesson): the
+// for RMWs, not for SC stores — the regression semaphore lesson): the
 // production logFlushResult publication (Release store serialized by
 // WALWriteLock) is fetch_max(SeqCst) — equal-or-stronger and monotonic like
 // the lock-serialized original; the min_pending hint write (fence-guarded
@@ -1005,7 +1005,7 @@ fn flushpipe_one_walk_completes_multiple_in_lsn_order() {
 
 
 // ---------------------------------------------------------------------------
-// 7. LWLock wakeup flag handoff (GL-TESTFIX-1 F-R1-5).
+// 7. LWLock wakeup flag handoff (regression F-R1-5).
 //
 // Mirror of lwlock's LWLockWakeup drain vs a woken waiter's re-enqueue: the
 // waker proclist_delete's the waiter's NON-ATOMIC wait-link node, then
@@ -1063,7 +1063,7 @@ fn lwlock_wakeup_flag_handoff_orders_link_writes() {
 }
 
 // ---------------------------------------------------------------------------
-// deferred-ticket-over-Waiter (inc-5(d) d1; GL-FLUSHPIPE-1 §8.6 G-d1-2 —
+// deferred-ticket-over-Waiter (inc-5(d) d1; regression §8.6 G-d1-2 —
 // the 4 mandatory models).
 //
 // Mirror of flushpipe.rs's DEFERRED registration (heap ticket + registry):

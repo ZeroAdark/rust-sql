@@ -19,8 +19,9 @@ fn errsave(escontext: Option<&mut SoftErrorContext>, err: PgError) -> PgResult<(
     ereturn(escontext, (), err)
 }
 
-fn pg_mblen_cstr(s: &[u8]) -> i32 {
-    mbutils::pg_mblen_range(s).unwrap_or(s.len() as i32)
+// mbutils.c pg_mblen_cstr: a character running past the terminator is 22021.
+fn pg_mblen_cstr(s: &[u8]) -> PgResult<i32> {
+    mbutils::pg_mblen_range(s)
 }
 
 /// C: `TmFromChar` (formatting.c:440). `abbrev` is inline (max TOKMAXLEN
@@ -58,15 +59,16 @@ pub struct TmFromChar {
     pub abbrev_len: u8,
 }
 
-fn skip_thth(cur: &mut FromCharCursor, suffix: u8) {
+fn skip_thth(cur: &mut FromCharCursor, suffix: u8) -> PgResult<()> {
     if s_thth(suffix) {
         if cur.cur() != 0 {
-            cur.pos += pg_mblen_cstr(cur.rest()) as usize;
+            cur.pos += pg_mblen_cstr(cur.rest())? as usize;
         }
         if cur.cur() != 0 {
-            cur.pos += pg_mblen_cstr(cur.rest()) as usize;
+            cur.pos += pg_mblen_cstr(cur.rest())? as usize;
         }
     }
+    Ok(())
 }
 
 fn cstr_to_slice(buf: &[u8; MAX_MULTIBYTE_CHAR_LEN + 1]) -> &[u8] {
@@ -151,7 +153,7 @@ pub fn dch_from_char<'mcx>(
                     extra_skip += 1;
                 }
             } else {
-                cur.pos += pg_mblen_cstr(cur.rest()) as usize;
+                cur.pos += pg_mblen_cstr(cur.rest())? as usize;
             }
             idx += 1;
             continue;
@@ -160,10 +162,10 @@ pub fn dch_from_char<'mcx>(
                 if extra_skip > 0 {
                     extra_skip -= 1;
                 } else {
-                    cur.pos += pg_mblen_cstr(cur.rest()) as usize;
+                    cur.pos += pg_mblen_cstr(cur.rest())? as usize;
                 }
             } else {
-                let chlen = pg_mblen_cstr(cur.rest()) as usize;
+                let chlen = pg_mblen_cstr(cur.rest())? as usize;
                 if std && node_typ == NODE_TYPE_CHAR {
                     let nc = cstr_to_slice(&nodes[idx].character);
                     if cur.rest().len() < chlen || &cur.rest()[..chlen] != nc {
@@ -242,7 +244,7 @@ pub fn dch_from_char<'mcx>(
                     return Ok(false);
                 }
                 out.clock = CLOCK_12_HOUR;
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_HH24 => {
                 if parse_int_len(&mut out.hh, &mut cur, 2, nodes, idx, escontext.as_deref_mut())?
@@ -250,21 +252,21 @@ pub fn dch_from_char<'mcx>(
                 {
                     return Ok(false);
                 }
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_MI => {
                 if parse_int(&mut out.mi, &mut cur, nodes, idx, escontext.as_deref_mut())?.is_none()
                 {
                     return Ok(false);
                 }
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_SS => {
                 if parse_int(&mut out.ss, &mut cur, nodes, idx, escontext.as_deref_mut())?.is_none()
                 {
                     return Ok(false);
                 }
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_MS => {
                 let len =
@@ -279,7 +281,7 @@ pub fn dch_from_char<'mcx>(
                 } else {
                     1
                 };
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_FF1 | DCH_FF2 | DCH_FF3 | DCH_FF4 | DCH_FF5 | DCH_FF6 | DCH_US => {
                 if (DCH_FF1..=DCH_FF6).contains(&key_id) {
@@ -299,7 +301,7 @@ pub fn dch_from_char<'mcx>(
                     5 => 10,
                     _ => 1,
                 };
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_SSSS => {
                 if parse_int(&mut out.ssss, &mut cur, nodes, idx, escontext.as_deref_mut())?
@@ -307,7 +309,7 @@ pub fn dch_from_char<'mcx>(
                 {
                     return Ok(false);
                 }
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_TZ_LOWER | DCH_TZ | DCH_OF => {
                 let mut fell_through = key_id == DCH_OF;
@@ -482,7 +484,7 @@ pub fn dch_from_char<'mcx>(
                 {
                     return Ok(false);
                 }
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_DAY | DCH_DAY_CAP | DCH_DAY_LOWER => {
                 let localized_arr = if s_tm(suffix) {
@@ -537,7 +539,7 @@ pub fn dch_from_char<'mcx>(
                 {
                     return Ok(false);
                 }
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_IDDD => {
                 if parse_int_len(&mut out.ddd, &mut cur, 3, nodes, idx, escontext.as_deref_mut())?
@@ -545,20 +547,20 @@ pub fn dch_from_char<'mcx>(
                 {
                     return Ok(false);
                 }
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_DD => {
                 if parse_int(&mut out.dd, &mut cur, nodes, idx, escontext.as_deref_mut())?.is_none()
                 {
                     return Ok(false);
                 }
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_D => {
                 if parse_int(&mut out.d, &mut cur, nodes, idx, escontext.as_deref_mut())?.is_none() {
                     return Ok(false);
                 }
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_ID => {
                 if parse_int_len(&mut out.d, &mut cur, 1, nodes, idx, escontext.as_deref_mut())?
@@ -570,14 +572,14 @@ pub fn dch_from_char<'mcx>(
                 if out.d > 7 {
                     out.d = 1;
                 }
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_WW | DCH_IW => {
                 if parse_int(&mut out.ww, &mut cur, nodes, idx, escontext.as_deref_mut())?.is_none()
                 {
                     return Ok(false);
                 }
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_Q => {
                 if from_char_parse_int(None, &mut cur, nodes, idx, escontext.as_deref_mut())?
@@ -585,14 +587,14 @@ pub fn dch_from_char<'mcx>(
                 {
                     return Ok(false);
                 }
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_CC => {
                 if parse_int(&mut out.cc, &mut cur, nodes, idx, escontext.as_deref_mut())?.is_none()
                 {
                     return Ok(false);
                 }
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_Y_YYY => {
                 let (years, nch) = match parse_y_yyy(cur.rest()) {
@@ -625,7 +627,7 @@ pub fn dch_from_char<'mcx>(
                 }
                 out.yysz = 4;
                 cur.pos += nch;
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_YYYY | DCH_IYYY => {
                 if parse_int(&mut out.year, &mut cur, nodes, idx, escontext.as_deref_mut())?
@@ -634,7 +636,7 @@ pub fn dch_from_char<'mcx>(
                     return Ok(false);
                 }
                 out.yysz = 4;
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_YYY | DCH_IYY => {
                 let len =
@@ -646,7 +648,7 @@ pub fn dch_from_char<'mcx>(
                     out.year = adjust_partial_year_to_2020(out.year);
                 }
                 out.yysz = 3;
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_YY | DCH_IY => {
                 let len =
@@ -658,7 +660,7 @@ pub fn dch_from_char<'mcx>(
                     out.year = adjust_partial_year_to_2020(out.year);
                 }
                 out.yysz = 2;
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_Y | DCH_I => {
                 let len =
@@ -670,7 +672,7 @@ pub fn dch_from_char<'mcx>(
                     out.year = adjust_partial_year_to_2020(out.year);
                 }
                 out.yysz = 1;
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_RM | DCH_RM_LOWER => {
                 let mut value = 0;
@@ -699,13 +701,13 @@ pub fn dch_from_char<'mcx>(
                 if parse_int(&mut out.w, &mut cur, nodes, idx, escontext.as_deref_mut())?.is_none() {
                     return Ok(false);
                 }
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             DCH_J => {
                 if parse_int(&mut out.j, &mut cur, nodes, idx, escontext.as_deref_mut())?.is_none() {
                     return Ok(false);
                 }
-                skip_thth(&mut cur, suffix);
+                skip_thth(&mut cur, suffix)?;
             }
             _ => {}
         }

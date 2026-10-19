@@ -1800,7 +1800,8 @@ pub fn addRangeTableEntryForENR<'mcx>(
     debug_assert!(enrmd.enrtype == queryenvironment::ENR_NAMED_TUPLESTORE);
     let tupdesc = queryenvironment::ENRMetadataGetTupDesc(mcx, enrmd)?;
 
-    let (eref, rebuilt_alias) = buildRelationAliases(mcx, &tupdesc, alias, str_in(mcx, refname)?)?;
+    // parse_relation.c:2553-2554: an ENR RTE never carries rte->alias.
+    let (eref, _) = buildRelationAliases(mcx, &tupdesc, alias, str_in(mcx, refname)?)?;
 
     let mut coltypes = types_nodes::list::OidList::nil();
     let mut coltypmods = types_nodes::list::IntList::nil();
@@ -1826,7 +1827,7 @@ pub fn addRangeTableEntryForENR<'mcx>(
 
     let rte = RangeTblEntry {
         rtekind: RTEKind::RTE_NAMEDTUPLESTORE,
-        alias: rebuilt_alias,
+        alias: None,
         relid: enrmd.reliddesc,
         enrname: Some(str_in(mcx, enrmd.name.as_str())?),
         enrtuples: enrmd.enrtuples,

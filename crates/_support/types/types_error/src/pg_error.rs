@@ -85,9 +85,15 @@ pub struct PgError {
     // stays the lossy rendering for Rust-side consumers and the server log.
     pub message_raw: Option<alloc::vec::Vec<u8>>,
     pub detail: Option<String>,
+    // Exact wire bytes for DETAIL, same contract as `message_raw`.
+    pub detail_raw: Option<alloc::vec::Vec<u8>>,
     pub detail_log: Option<String>,
     pub hint: Option<String>,
     pub context: Option<String>,
+    // Exact wire bytes of the first CONTEXT line when it is not valid UTF-8
+    // (C's errcontext copies the input excerpt verbatim); later lines are
+    // appended to `context` only and the wire splices them after these bytes.
+    pub context_raw: Option<alloc::vec::Vec<u8>>,
     pub backtrace: Option<String>,
     pub message_id: Option<String>,
     pub domain: Option<String>,
@@ -137,6 +143,8 @@ impl PgError {
             message,
             message_raw: None,
             detail: None,
+            detail_raw: None,
+            context_raw: None,
             detail_log: None,
             hint: None,
             context: None,
@@ -179,6 +187,29 @@ impl PgError {
         let mut e = Self::new(ERROR, String::from_utf8_lossy(truncated).into_owned());
         e.message_raw = Some(bytes);
         e
+    }
+
+    /// C `errmsg("<prefix>%s<suffix>", bytes)` where `bytes` are raw
+    /// server-encoding input bytes: a plain message when they are UTF-8,
+    /// otherwise the exact wire bytes via `error_raw_message`.
+    #[cold]
+    #[track_caller]
+    pub fn error_bytes(prefix: &str, bytes: &[u8], suffix: &str) -> Self {
+        match core::str::from_utf8(bytes) {
+            Ok(s) => Self::error(alloc::format!("{prefix}{s}{suffix}")),
+            Err(_) => {
+                let mut msg = alloc::vec::Vec::with_capacity(prefix.len() + bytes.len() + suffix.len());
+                msg.extend_from_slice(prefix.as_bytes());
+                msg.extend_from_slice(bytes);
+                msg.extend_from_slice(suffix.as_bytes());
+                let mut e = Self::error_raw_message(msg);
+                e.location = Some(ErrorLocation::from_rust_site(
+                    core::panic::Location::caller().file(),
+                    core::panic::Location::caller().line(),
+                ));
+                e
+            }
+        }
     }
 
     #[cold]
@@ -298,6 +329,47 @@ impl PgError {
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
         self
+    }
+
+    /// C errdetail whose bytes are not guaranteed UTF-8 (e.g. %c of a high
+    /// byte): the wire sends `bytes` verbatim, `detail` keeps the lossy
+    /// rendering.
+    pub fn with_detail_raw(mut self, bytes: alloc::vec::Vec<u8>) -> Self {
+        let truncated = match bytes.iter().position(|&b| b == 0) {
+            Some(n) => &bytes[..n],
+            None => &bytes[..],
+        };
+        self.detail = Some(String::from_utf8_lossy(truncated).into_owned());
+        self.detail_raw = Some(bytes);
+        self
+    }
+
+    /// C errcontext whose bytes are not guaranteed UTF-8: the wire sends
+    /// `bytes` verbatim as the first CONTEXT line, `context` keeps the lossy
+    /// rendering (later `with_context` lines append behind both).
+    pub fn with_context_raw(mut self, bytes: alloc::vec::Vec<u8>) -> Self {
+        if !self.hide_context {
+            let lossy = String::from_utf8_lossy(&bytes).into_owned();
+            self.context_raw = if self.context.is_none() { Some(bytes) } else { None };
+            self.context = append_context(self.context.take(), lossy);
+        }
+        self
+    }
+
+    /// The CONTEXT field's wire bytes: `context_raw` followed by whatever
+    /// was appended to `context` after it, or `context` alone when the raw
+    /// line no longer leads it (a site replaced the context wholesale).
+    pub fn context_wire_bytes(&self) -> Option<alloc::borrow::Cow<'_, [u8]>> {
+        let context = self.context.as_ref()?;
+        if let Some(raw) = &self.context_raw {
+            let lossy = String::from_utf8_lossy(raw);
+            if let Some(tail) = context.strip_prefix(&*lossy) {
+                let mut out = raw.clone();
+                out.extend_from_slice(tail.as_bytes());
+                return Some(alloc::borrow::Cow::Owned(out));
+            }
+        }
+        Some(alloc::borrow::Cow::Borrowed(context.as_bytes()))
     }
 
     pub fn with_detail_log(mut self, detail_log: impl Into<String>) -> Self {
@@ -632,6 +704,33 @@ mod tests {
             "PgResult<Datum> should be <=16 B, got {}",
             core::mem::size_of::<PgResult<u64>>()
         );
+    }
+
+    #[test]
+    fn error_bytes_and_context_raw_carry_non_utf8_input() {
+        let err = PgError::error_bytes("unit \"", b"a\xffb", "\" not supported");
+        assert_eq!(err.message(), "unit \"a\u{fffd}b\" not supported");
+        assert_eq!(
+            err.message_raw.as_deref(),
+            Some(b"unit \"a\xffb\" not supported".as_slice())
+        );
+        assert!(PgError::error_bytes("x", b"y", "z").message_raw.is_none());
+
+        let err = PgError::error("bad json")
+            .with_context_raw(b"JSON data, line 1: \xff".to_vec())
+            .with_context("PL/pgSQL function f() line 1");
+        assert_eq!(
+            err.context(),
+            Some("JSON data, line 1: \u{fffd}\nPL/pgSQL function f() line 1")
+        );
+        assert_eq!(
+            &*err.context_wire_bytes().unwrap(),
+            b"JSON data, line 1: \xff\nPL/pgSQL function f() line 1".as_slice()
+        );
+        let mut replaced = PgError::error("x").with_context_raw(b"a\xff".to_vec());
+        replaced.context = Some(String::from("other"));
+        assert_eq!(&*replaced.context_wire_bytes().unwrap(), b"other".as_slice());
+        assert!(PgError::error("x").context_wire_bytes().is_none());
     }
 
     #[test]

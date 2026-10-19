@@ -66,6 +66,20 @@ impl<'mcx> ScanNode<'mcx> for ValuesScanState<'mcx> {
         // because we want any registered shutdown callbacks to be called".
         estate.ecxt_mut(self.rowcontext).rescan();
 
+        // Rows referencing initplan $n params (no SubPlan, so C compiles
+        // them per visit) are compiled on first visit: only the suspension
+        // driver below can run pending initplans (ExecEvalParamExec's lazy
+        // arm), and compiling at init would permission-check functions in
+        // rows C never reaches.
+        if self.exprstatelists[self.curr_idx as usize].is_none()
+            && !estate.es_subplanstates.is_empty()
+            && clauses::contain_exec_params(self.exprlists[self.curr_idx as usize])?
+        {
+            let row = self.exprlists[self.curr_idx as usize];
+            self.exprstatelists[self.curr_idx as usize] =
+                Some(compile_row_subplans(qmcx, row, estate, self.rowcontext)?);
+        }
+
         if self.exprstatelists[self.curr_idx as usize].is_some() {
             let rowcontext = self.rowcontext;
             let scan_slot = self.ss.ss_ScanTupleSlot;
@@ -191,30 +205,8 @@ pub fn exec_init_values_scan<'mcx>(
         .try_reserve(array_len as usize)
         .map_err(|_| mcx.oom(array_len as usize))?;
     for row in &node.values_lists {
-        // Rows referencing initplan $n params ride the pre-initialized leg
-        // too: it can run pending initplans (ExecEvalParamExec's lazy arm).
-        if !estate.es_subplanstates.is_empty()
-            && (clauses::contain_subplans(row)? || clauses::contain_exec_params(row)?)
-        {
-            let row_list = row.as_list().expect("values row is a List");
-            let pb = estate.param_bind();
-            let mut states: PgVec<'mcx, PgBox<'mcx, ExprState<'mcx>>> = PgVec::new_in(mcx);
-            states.try_reserve(row_list.len()).map_err(|_| mcx.oom(row_list.len()))?;
-            ::executils::with_subplan_compile_env(estate, |env| -> PgResult<()> {
-                for e in row_list.iter() {
-                    states.push(
-                        ::execexpr::exec_init_expr_subplans(mcx, Some(e), pb, env)?
-                            .expect("non-NULL values expression"),
-                    );
-                }
-                Ok(())
-            })?;
-            for st in states.iter_mut() {
-                // SAFETY: the rowcontext ExprContext outlives the program
-                // (same estate, reset-only).
-                unsafe { st.arm_result_mcx_raw(estate.ecxt(rowcontext).per_tuple_mcx()) };
-            }
-            exprstatelists.push(Some(states));
+        if !estate.es_subplanstates.is_empty() && clauses::contain_subplans(row)? {
+            exprstatelists.push(Some(compile_row_subplans(mcx, row, estate, rowcontext)?));
         } else {
             exprstatelists.push(None);
         }
@@ -222,6 +214,35 @@ pub fn exec_init_values_scan<'mcx>(
     }
 
     Ok(ValuesScanState { ss, rowcontext, exprlists, exprstatelists, curr_idx: -1, array_len })
+}
+
+// ExecInitExprList over one VALUES row under the subplan compile env, the
+// programs armed onto the row context.
+fn compile_row_subplans<'mcx>(
+    mcx: Mcx<'mcx>,
+    row: Node<'mcx>,
+    estate: &mut EStateData<'mcx>,
+    rowcontext: EcxtId,
+) -> PgResult<PgVec<'mcx, PgBox<'mcx, ExprState<'mcx>>>> {
+    let row_list = row.as_list().expect("values row is a List");
+    let pb = estate.param_bind();
+    let mut states: PgVec<'mcx, PgBox<'mcx, ExprState<'mcx>>> = PgVec::new_in(mcx);
+    states.try_reserve(row_list.len()).map_err(|_| mcx.oom(row_list.len()))?;
+    ::executils::with_subplan_compile_env(estate, |env| -> PgResult<()> {
+        for e in row_list.iter() {
+            states.push(
+                ::execexpr::exec_init_expr_subplans(mcx, Some(e), pb, env)?
+                    .expect("non-NULL values expression"),
+            );
+        }
+        Ok(())
+    })?;
+    for st in states.iter_mut() {
+        // SAFETY: the rowcontext ExprContext outlives the program (same
+        // estate, reset-only).
+        unsafe { st.arm_result_mcx_raw(estate.ecxt(rowcontext).per_tuple_mcx()) };
+    }
+    Ok(states)
 }
 
 // ExecTypeFromExprList (execTuples.c): anonymous RECORD rowtype from the

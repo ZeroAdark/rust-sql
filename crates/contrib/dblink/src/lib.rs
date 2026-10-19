@@ -129,6 +129,16 @@ fn res_error(
     if primary.is_empty() {
         primary = pchomp(&conn.error_message());
     }
+    // dblink.c:2860 vsnprintf(dblink_context_msg[512]): the action keeps
+    // at most 511 bytes.
+    let mut action = action;
+    if action.len() > 511 {
+        let mut end = 511;
+        while !action.is_char_boundary(end) {
+            end -= 1;
+        }
+        action = &action[..end];
+    }
     let dblink_ctx = match conname {
         Some(n) => format!("{action} on dblink connection named \"{n}\""),
         None => format!("{action} on unnamed dblink connection"),
@@ -172,6 +182,17 @@ enum ConnTarget {
     Transient(PgConn),
 }
 
+// dblink.c:345: the connection is made with the conninfo's own
+// client_encoding (an invalid one fails to connect, as C); only afterwards is
+// the remote told to match the local database encoding.
+fn match_database_encoding(conn: &mut pgclient::PgConn) -> PgResult<()> {
+    let enc = mbutils::GetDatabaseEncodingName();
+    if !conn.client_encoding().is_some_and(|e| e.eq_ignore_ascii_case(enc)) {
+        conn.set_client_encoding(enc)?;
+    }
+    Ok(())
+}
+
 fn dblink_get_conn(mcx: mcx::Mcx<'_>, conname_or_str: &str) -> PgResult<(ConnTarget, Option<String>)> {
     if registry::named_present(conname_or_str)? {
         let n = conname_or_str.to_string();
@@ -181,12 +202,12 @@ fn dblink_get_conn(mcx: mcx::Mcx<'_>, conname_or_str: &str) -> PgResult<(ConnTar
         .unwrap_or_else(|| conname_or_str.to_string());
     registry::connstr_check(&connstr)?;
     let we = registry::we_get_conn()?;
-    let enc = mbutils::GetDatabaseEncodingName();
-    let conn = match pgclient::connect_db(&connstr, Some(enc), we)? {
+    let mut conn = match pgclient::connect_db(&connstr, None, we)? {
         Ok(c) => c,
         Err(msg) => return Err(connect_failed(&msg)),
     };
     registry::security_check(&conn, &connstr)?;
+    match_database_encoding(&mut conn)?;
     Ok((ConnTarget::Transient(conn), None))
 }
 
@@ -228,6 +249,7 @@ fn terminate_transient(target: &mut ConnTarget) {
 // --- connection management ---
 
 fn fc_dblink_connect(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    registry::init()?;
     let mcx = fcinfo.result_mcx();
     let (connname, conname_or_str) = if fcinfo.nargs() == 2 {
         (Some(arg_text(fcinfo, 0)?), arg_text(fcinfo, 1)?)
@@ -243,16 +265,24 @@ fn fc_dblink_connect(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
     if let Some(name) = &connname {
         registry::reserve_named(name)?;
     }
-    let enc = mbutils::GetDatabaseEncodingName();
-    let conn = match pgclient::connect_db(&connstr, Some(enc), we)? {
+    let conn = match pgclient::connect_db(&connstr, None, we)? {
         Ok(c) => c,
-        Err(msg) => return Err(connect_failed(&msg)),
+        Err(msg) => {
+            if let Some(name) = &connname {
+                registry::unreserve_named(name)?;
+            }
+            return Err(connect_failed(&msg));
+        }
     };
+    let mut conn = conn;
     if let Err(e) = registry::security_check(&conn, &connstr) {
-        let mut conn = conn;
         conn.terminate();
+        if let Some(name) = &connname {
+            registry::unreserve_named(name)?;
+        }
         return Err(e);
     }
+    match_database_encoding(&mut conn)?;
     match &connname {
         Some(name) => registry::store_named(name, conn)?,
         None => registry::set_unnamed(conn),
@@ -261,6 +291,7 @@ fn fc_dblink_connect(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
 }
 
 fn fc_dblink_disconnect(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    registry::init()?;
     let mcx = fcinfo.result_mcx();
     if fcinfo.nargs() == 1 {
         let name = arg_text(fcinfo, 0)?;
@@ -290,7 +321,7 @@ fn fc_dblink_get_connections(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo
         // `else` of `if (astate)`). A bare `Ok(Datum::null())` without
         // isnull=true hands the executor a "non-null" zero pointer datum —
         // detoasting it aborted the server mid-corpus (CI cluster gate
-        // pgrust-fast-tests-601a9800c4-1784439279-28fc).
+        // pgrust-tests-601a9800c4-1784439279-28fc).
         fcinfo.isnull = true;
         return Ok(Datum::null());
     }
@@ -305,6 +336,7 @@ fn fc_dblink_get_connections(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo
 }
 
 fn fc_dblink_error_message(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    registry::init()?;
     let mcx = fcinfo.result_mcx();
     let name = arg_text(fcinfo, 0)?;
     if !registry::named_present(&name)? {
@@ -319,6 +351,7 @@ fn fc_dblink_error_message(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) 
 }
 
 fn fc_dblink_is_busy(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    registry::init()?;
     let name = arg_text(fcinfo, 0)?;
     if !registry::named_present(&name)? {
         return Err(registry::conn_not_avail(Some(&name)));
@@ -331,6 +364,7 @@ fn fc_dblink_is_busy(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgR
 }
 
 fn fc_dblink_cancel_query(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    registry::init()?;
     let mcx = fcinfo.result_mcx();
     let name = arg_text(fcinfo, 0)?;
     if !registry::named_present(&name)? {
@@ -367,22 +401,24 @@ fn fc_dblink_record(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
     let mcx = unsafe { fcinfo.result_mcx_detached() };
     let (sql, mut target, conname, fail) = parse_conn_sql_args(mcx, fcinfo, Some(flinfo))?;
 
-    // C storeQueryResult: PQsendQuery busy (asyncStatus != IDLE) is elog XX000.
-    if with_target_ref(&target, |c| c.transaction_status() == pgclient::TransactionStatus::Active)?
-    {
+    // storeQueryResult: a refused PQsendQuery (busy or dead connection) is
+    // elog(ERROR) with PQerrorMessage whatever fail_on_error says; the
+    // PG_CATCH drains whatever the connection still holds.
+    if !with_target(&mut target, |c| c.send_query(&sql))? {
+        let errmsg = with_target_ref(&target, |c| c.error_message())?;
         let _ = with_target(&mut target, |c| c.drain());
         terminate_transient(&mut target);
         return throw(
             ereport(ERROR)
-                .errmsg("could not send query: another command is already in progress")
+                .errmsg(format!("could not send query: {}", pchomp(&errmsg)))
                 .finish(loc("dblink_record")),
         );
     }
 
     let fcinfo_ptr: *mut Fcinfo = fcinfo;
-    // SAFETY: sink holds fcinfo only across exec_streaming, no aliasing.
+    // SAFETY: sink holds fcinfo only across stream_results, no aliasing.
     let mut sink = unsafe { materialize::TupleSink::new(mcx, flinfo, fcinfo_ptr) };
-    let res = with_target(&mut target, |c| c.exec_streaming(&sql, &mut sink))?;
+    let res = with_target(&mut target, |c| c.stream_results(&mut sink))?;
     let res = match res {
         Ok(r) => r,
         Err(e) => {
@@ -409,6 +445,7 @@ fn fc_dblink_record(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgRes
 }
 
 fn fc_dblink_exec(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    registry::init()?;
     let mcx = fcinfo.result_mcx();
     let flinfo_ref = flinfo.map(|f| &*f);
     let (sql, mut target, conname, fail) = parse_conn_sql_args(mcx, fcinfo, flinfo_ref)?;
@@ -439,6 +476,7 @@ fn fc_dblink_exec(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
 }
 
 fn fc_dblink_get_result(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    registry::init()?;
     let flinfo = flinfo.expect("dblink_get_result: resolved FmgrInfo required");
     prep_tuplestore_result(fcinfo)?; // C: dblink_record_internal's first act
     let mcx = unsafe { fcinfo.result_mcx_detached() };
@@ -470,6 +508,7 @@ fn fc_dblink_get_result(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> P
 // --- cursor family ---
 
 fn fc_dblink_open(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    registry::init()?;
     let mcx = fcinfo.result_mcx();
     let flinfo_ref = flinfo.map(|f| &*f);
     let (conname, curname, sql, fail) = match fcinfo.nargs() {
@@ -510,6 +549,7 @@ fn fc_dblink_open(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResul
 }
 
 fn fc_dblink_close(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    registry::init()?;
     let mcx = fcinfo.result_mcx();
     let flinfo_ref = flinfo.map(|f| &*f);
     let (conname, curname, fail) = match fcinfo.nargs() {
@@ -540,6 +580,7 @@ fn fc_dblink_close(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResu
 }
 
 fn fc_dblink_fetch(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    registry::init()?;
     let flinfo = flinfo.expect("dblink_fetch: resolved FmgrInfo required");
     prep_tuplestore_result(fcinfo)?; // C: dblink_fetch's first act
     let mcx = unsafe { fcinfo.result_mcx_detached() };
@@ -578,6 +619,7 @@ fn fc_dblink_fetch(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResu
 }
 
 fn fc_dblink_get_notify(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
+    registry::init()?;
     let flinfo = flinfo.expect("dblink_get_notify: resolved FmgrInfo required");
     let mcx = unsafe { fcinfo.result_mcx_detached() };
     let conname = if fcinfo.nargs() == 1 { Some(arg_text(fcinfo, 0)?) } else { None };

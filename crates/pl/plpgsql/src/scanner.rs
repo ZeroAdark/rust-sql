@@ -620,7 +620,7 @@ impl<'mcx> PlScanner<'mcx> {
         parser_small1::parser_errposition_source(
             Some(self.scanbuf),
             location,
-            wchar::PG_UTF8,
+            mbutils::GetDatabaseEncoding(),
         )
     }
 

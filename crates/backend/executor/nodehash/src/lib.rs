@@ -1338,9 +1338,10 @@ fn exec_hash_build_skew_hash<'mcx>(
     }
 
     let mut hashes: PgVec<'mcx, u32> = vec_with_capacity_in(mcx, mcvs_to_use)?;
+    let mut finfo = ::fmgr_core::fmgr_info(hashfn)?;
     for &v in &values[..mcvs_to_use] {
-        // FunctionCall1Coll(skew_hashfunction, skew_collation, value)
-        hashes.push(::fmgr_core::oid_function_call1_coll(hashfn, collation, v)?.as_u32());
+        // FunctionCall1Coll; array and record hashes detoast into the result mcx.
+        hashes.push(::fmgr_core::function_call1_coll_in(&mut finfo, collation, mcx, v)?.as_u32());
     }
     table.build_skew_buckets(mcx, &hashes)
 }
@@ -1535,10 +1536,10 @@ pub fn estimate_hash_inner_rel_bytes(ntuples: f64, tupwidth: i32) -> u64 {
 /// and the 1.9M-build default-work_mem cliff rung), and 1/8 left the
 /// latter inside the margin — 1/4 covers every witnessed crossing with
 /// ~11% to spare while every witnessed healthy unbatched cell stays >30%
-/// clear of its envelope (the classification table rides the GL-HJMB-2
+/// clear of its envelope (the classification table rides the regression
 /// letter).
 ///
-/// Consumers (GL-HJMB-1 escalation A, the demote-unsafe boundary): an
+/// Consumers (regression escalation A, the demote-unsafe boundary): an
 /// admission whose exec_choose nbatch estimate is 1 but whose true build
 /// crosses the combined envelope has NO demote path — HjSpill is only
 /// constructed for batched admissions — and refuses at seal into an R5

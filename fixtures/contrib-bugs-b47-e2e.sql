@@ -5,7 +5,7 @@
 CREATE DATABASE b47e2e TEMPLATE template0 ENCODING 'UTF8';
 \c b47e2e
 \set VERBOSITY verbose
--- fp-contrib-pgstattuple-pgstattuple#1 / -b1#1 / -pgstatindex#1: a RECORD
+-- regression / -b1#1 / -pgstatindex#1: a RECORD
 -- wrapper with a column definition list resolves through expectedDesc
 CREATE EXTENSION pgstattuple;
 CREATE TABLE b47_t(i int);
@@ -22,13 +22,13 @@ SELECT * FROM b47_gin_record('b47_gi') AS s(version integer, pending_pages integ
 CREATE INDEX b47_ti ON b47_t(i);
 CREATE FUNCTION b47_bt_record(regclass) RETURNS record AS '$libdir/pgstattuple', 'pgstatindexbyid_v1_5' LANGUAGE C STRICT;
 SELECT * FROM b47_bt_record('b47_ti') AS s(version integer, tree_level integer, index_size bigint);
--- fp-contrib-pgstattuple-pgstattuple#2: dropped attributes of a named
+-- regression: dropped attributes of a named
 -- composite result are NULL, not looked up
 CREATE TYPE b47_stat_pair AS (table_len bigint, discarded bigint);
 ALTER TYPE b47_stat_pair DROP ATTRIBUTE discarded;
 CREATE FUNCTION b47_stat_named(regclass) RETURNS b47_stat_pair AS '$libdir/pgstattuple', 'pgstattuplebyid_v1_5' LANGUAGE C STRICT;
 SELECT * FROM b47_stat_named('b47_t');
--- fp-contrib-pg_logicalinspect-b1#1: same expectedDesc resolution (the
+-- regression: same expectedDesc resolution (the
 -- filename error proves the result type was accepted first)
 CREATE EXTENSION pg_logicalinspect;
 CREATE FUNCTION b47_snap_meta(text) RETURNS record AS '$libdir/pg_logicalinspect', 'pg_get_logical_snapshot_meta' LANGUAGE C STRICT;
@@ -36,7 +36,7 @@ CREATE FUNCTION b47_snap_info(text) RETURNS record AS '$libdir/pg_logicalinspect
 SELECT * FROM b47_snap_meta('bogus') AS t(magic int4, checksum int8, version int4);
 SELECT * FROM b47_snap_meta('0-1.snap') AS t(magic int4, checksum int8, version int4);
 SELECT * FROM b47_snap_info('bogus') AS t(state text);
--- fp-contrib-pgrowlocks-b1#1: rows are built through the declared columns'
+-- regression: rows are built through the declared columns'
 -- input functions (BuildTupleFromCStrings)
 CREATE EXTENSION pgrowlocks;
 CREATE TABLE b47_rl(i int);
@@ -54,7 +54,7 @@ BEGIN;
 SELECT * FROM b47_rl FOR UPDATE;
 SELECT locked_row, multi, modes FROM b47_locks_int('b47_rl');
 ROLLBACK;
--- fp-contrib-pg_trgm-trgm_gist#1: gtrgm_distance extracts trigrams for any
+-- regression: gtrgm_distance extracts trigrams for any
 -- strategy, then rejects the unsupported one
 CREATE EXTENSION pg_trgm;
 CREATE OPERATOR CLASS b47_gist_trgm FOR TYPE text USING gist AS
@@ -77,7 +77,7 @@ SELECT t FROM b47_ta ORDER BY t <-> '.' LIMIT 1;
 SELECT t FROM b47_ta ORDER BY t <-> '[' LIMIT 1;
 SELECT t FROM b47_ta ORDER BY t <-> 'abc' LIMIT 1;
 RESET enable_seqscan;
--- fp-contrib-pg_trgm-trgm_gist#2: signature bits hash CPTRGM's native int
+-- regression: signature bits hash CPTRGM's native int
 CREATE EXTENSION pageinspect;
 CREATE TABLE b47_trgm(t text);
 INSERT INTO b47_trgm SELECT 'abc' FROM generate_series(1, 10000);
@@ -87,13 +87,13 @@ SET enable_seqscan = off;
 SELECT count(*) FROM b47_trgm WHERE t % 'abc';
 SELECT count(*) FROM b47_trgm WHERE t LIKE '%abc%';
 RESET enable_seqscan;
--- fp-contrib-pg_trgm-trgm_op#1 / -b1#2: the trigram array size guard is
+-- regression / -b1#2: the trigram array size guard is
 -- 54000 without palloc's DETAIL
 SELECT similarity(repeat('!', 357913941), 'a');
--- fp-contrib-pg_trgm-trgm_op#2: the positional trigram array is bounded by
+-- regression: the positional trigram array is bounded by
 -- MaxAllocSize
 SELECT word_similarity(repeat('a', 134217727), '');
--- fp-contrib-pg_prewarm-b1#1: 'buffer' rejects another session's temp table
+-- regression: 'buffer' rejects another session's temp table
 -- before reading any block, so an empty relation still errors
 CREATE EXTENSION pg_prewarm;
 CREATE EXTENSION dblink;

@@ -31,21 +31,20 @@ pub(crate) fn replslot_key(index: u64) -> PgStat_HashKey {
 }
 
 pub fn pgstat_reset_replslot(name: &str) -> PgResult<()> {
-    // C holds ReplicationSlotControlLock across lookup + reset; the lock
-    // window narrows to the seam's lookup here (the store mutex serializes
-    // the reset itself).
-    let (index, is_logical) = slot_seams::named_replication_slot_info::call(name, true)?;
-    if index < 0 {
-        return Err(Box::new(
-            PgError::error(format!("replication slot \"{name}\" does not exist"))
-                .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE),
-        ));
-    }
-    // Stats are only collected for logical slots.
-    if is_logical {
-        crate::shmem::pgstat_reset(PGSTAT_KIND_REPLSLOT, InvalidOid, index as u64);
-    }
-    Ok(())
+    // ReplicationSlotControlLock stays held across lookup + reset.
+    slot_seams::with_named_replication_slot_info::call(name, &mut |index, is_logical| {
+        if index < 0 {
+            return Err(Box::new(
+                PgError::error(format!("replication slot \"{name}\" does not exist"))
+                    .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE),
+            ));
+        }
+        // Stats are only collected for logical slots.
+        if is_logical {
+            crate::shmem::pgstat_reset(PGSTAT_KIND_REPLSLOT, InvalidOid, index as u64);
+        }
+        Ok(())
+    })
 }
 
 // C takes the slot pointer; callers resolve ReplicationSlotIndex so this
@@ -77,14 +76,15 @@ pub fn pgstat_drop_replslot(index: i32) {
 }
 
 pub fn pgstat_fetch_replslot(name: &str) -> PgResult<Option<PgStat_StatReplSlotEntry>> {
-    let (index, _) = slot_seams::named_replication_slot_info::call(name, true)?;
-    if index < 0 {
-        return Ok(None);
-    }
-    Ok(
-        match crate::shmem::fetch_entry(replslot_key(index as u64)) {
-            Some(crate::shmem::SharedEntry::ReplSlot(e)) => Some(e),
-            _ => None,
-        },
-    )
+    let mut entry = None;
+    slot_seams::with_named_replication_slot_info::call(name, &mut |index, _| {
+        if index >= 0 {
+            entry = match crate::shmem::fetch_entry(replslot_key(index as u64)) {
+                Some(crate::shmem::SharedEntry::ReplSlot(e)) => Some(e),
+                _ => None,
+            };
+        }
+        Ok(())
+    })?;
+    Ok(entry)
 }

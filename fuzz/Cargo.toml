@@ -1,4 +1,4 @@
-# cargo-fuzz (libFuzzer) wrapper for pgrust-fast byte-level decoders.
+# cargo-fuzz (libFuzzer) wrapper for pgrust byte-level decoders.
 #
 #   Run (needs a nightly toolchain — libFuzzer/sanitizers are nightly-only;
 #   the repo's pinned stable 1.96.0 cannot build these targets):

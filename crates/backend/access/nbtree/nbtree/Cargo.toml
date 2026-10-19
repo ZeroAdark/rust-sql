@@ -56,6 +56,7 @@ varsup = { path = "../../transam/varsup" }
 guc_tables = { path = "../../../utils/misc/guc_tables" }
 xloginsert_seams = { path = "../../transam/xloginsert_seams" }
 smgr = { path = "../../../storage/smgr/smgr" }
+waitevent_seams = { path = "../../../utils/activity/waitevent_seams" }
 
 [dev-dependencies]
 seam_core = { path = "../../../../_support/seam_core" }
@@ -76,7 +77,6 @@ procarray = { path = "../../../storage/ipc/procarray" }
 miscinit_seams = { path = "../../../utils/init/miscinit_seams" }
 origin_seams = { path = "../../../replication/origin_seams" }
 aio_seams = { path = "../../../storage/aio/aio_seams" }
-waitevent_seams = { path = "../../../utils/activity/waitevent_seams" }
 pg_sema_seams = { path = "../../../port/pg_sema_seams" }
 s_lock_seams = { path = "../../../storage/lmgr/s_lock_seams" }
 latch_seams = { path = "../../../storage/ipc/latch_seams" }

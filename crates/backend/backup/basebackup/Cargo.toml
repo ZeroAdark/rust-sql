@@ -17,6 +17,7 @@ types_core = { path = "../../../_support/types/types_core" }
 types_error = { path = "../../../_support/types/types_error" }
 types_storage = { path = "../../../_support/types/types_storage" }
 pgstrcasecmp = { path = "../../../port/pgstrcasecmp" }
+adt_bool = { path = "../../utils/adt/bool" }
 repl_gram = { path = "../../replication/repl_gram" }
 walsender = { path = "../../replication/walsender" }
 walsender_seams = { path = "../../replication/walsender_seams" }

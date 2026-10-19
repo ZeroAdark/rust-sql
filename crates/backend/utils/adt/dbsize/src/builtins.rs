@@ -9,8 +9,7 @@ use ::types_fmgr::{FmgrBuiltin, FmgrInfo, FunctionCallInfoBaseData as Fcinfo, PG
 pub fn fc_pg_size_bytes(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 is a non-null text varlena (strict fn).
     let a = unsafe { fcinfo.arg_varlena_packed(0)? };
-    let s = String::from_utf8_lossy(a.data());
-    Ok(Datum::from_i64(crate::pg_size_bytes(&s)?))
+    Ok(Datum::from_i64(crate::pg_size_bytes(a.data())?))
 }
 
 const fn b(foid: Oid, name: &'static str, nargs: i16, func: PGFunction) -> FmgrBuiltin {

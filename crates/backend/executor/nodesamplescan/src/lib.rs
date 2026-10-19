@@ -23,6 +23,7 @@ pub struct SampleScanState<'mcx> {
     pub ss: ScanState<'mcx>,
     args: PgVec<'mcx, PgBox<'mcx, ExprState<'mcx>>>,
     repeatable: Option<PgBox<'mcx, ExprState<'mcx>>>,
+    params: PgVec<'mcx, Datum>,
     tsm: Tsm,
     tsm_state: TsmState,
     seed: u32,
@@ -146,6 +147,7 @@ pub fn exec_init_sample_scan<'mcx>(
         ss,
         args,
         repeatable,
+        params: PgVec::new_in(mcx),
         tsm,
         tsm_state: tsm.init_state(),
         seed,
@@ -188,7 +190,7 @@ impl<'mcx> SampleScanState<'mcx> {
         self.donetuples = 0;
 
         let ecxt = self.ss.ps_ExprContext;
-        let mut params: PgVec<'mcx, Datum> = PgVec::new_in(mcx);
+        self.params.clear();
         for arg in self.args.iter_mut() {
             estate.reset_expr_context(ecxt);
             let v = if arg.has_subplan() || !arg.param_exec_deps().is_empty() {
@@ -200,7 +202,7 @@ impl<'mcx> SampleScanState<'mcx> {
             if v.isnull {
                 return Err(null_param());
             }
-            params.push(v.value);
+            self.params.push(v.value);
         }
 
         let seed = match self.repeatable.as_deref_mut() {
@@ -223,7 +225,7 @@ impl<'mcx> SampleScanState<'mcx> {
 
         self.use_bulkread = true;
         self.use_pagemode = true;
-        let (bulkread, pagemode) = self.tsm_state.begin_sample_scan(&params, seed)?;
+        let (bulkread, pagemode) = self.tsm_state.begin_sample_scan(&self.params, seed)?;
         self.use_bulkread = bulkread;
         self.use_pagemode = pagemode;
 
@@ -311,6 +313,6 @@ fn null_repeatable() -> Box<PgError> {
 mcx::forget_safe_struct!(
     SampleScanState<'_> {
         ss, tsm, tsm_state, seed, use_bulkread, use_pagemode, epq, begun, done,
-        haveblock, donetuples; args, repeatable,
+        haveblock, donetuples; args, repeatable, params,
     },
 );

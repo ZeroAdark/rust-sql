@@ -3586,6 +3586,9 @@ fn apply_scanjoin_target_to_paths<'mcx>(
         for i in crate::relnode::relids_members(&live) {
             let child = run.root.rel(rel_id).part_rels[i as usize]
                 .expect("live partition has a RelOptInfo");
+            if crate::joinrels::is_dummy_rel(&run.root, child) {
+                continue;
+            }
             let child_relids = crate::relnode::relids_copy(run.mcx, &run.root.rel(child).relids);
             let appinfos = crate::inherit::find_appinfos_by_relids(run, &child_relids)?;
             let mut child_targets: mcx::PgVec<'mcx, types_pathnodes::PtId> =

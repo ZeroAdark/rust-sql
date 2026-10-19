@@ -299,7 +299,7 @@ pub(crate) fn get_current_timestamp() -> types_core::TimestampTz {
 
 // Per-tuple hot: TLS pointer + Relaxed load + one predictable branch (C's
 // CHECK_FOR_INTERRUPTS; the shared flag is how async senders reach us).
-// GL-STMTTASK-2 quantum-yield tick: one MORE thread-local bool load +
+// regression quantum-yield tick: one MORE thread-local bool load +
 // predictable branch (armed only inside statement-task spans under the
 // DEFAULT-OFF PGRUST_STMT_TASK_YIELD knob; the governor is the executor's
 // registered hook).
@@ -313,13 +313,31 @@ pub fn check_for_interrupts() -> PgResult<()> {
 }
 
 thread_local! {
-    // C's RecoveryConflictPending(Reasons) statics as one ProcSignalReason bitmask.
+    // C's RecoveryConflictPendingReasons[] as a ProcSignalReason bitmask, with
+    // the separate RecoveryConflictPending gate as the top bit.
     static RECOVERY_CONFLICT_PENDING_REASONS: Cell<u32> = const { Cell::new(0) };
 }
 
+const RECOVERY_CONFLICT_PENDING: u32 = 1 << 31;
+
 pub fn HandleRecoveryConflictInterrupt(reason: u32) {
-    RECOVERY_CONFLICT_PENDING_REASONS.with(|c| c.set(c.get() | (1 << reason)));
+    RECOVERY_CONFLICT_PENDING_REASONS
+        .with(|c| c.set(c.get() | (1 << reason) | RECOVERY_CONFLICT_PENDING));
     init_small::globals::SetInterruptPending(true);
+}
+
+fn recovery_conflict_interrupt_pending() -> bool {
+    RECOVERY_CONFLICT_PENDING_REASONS.with(Cell::get) & RECOVERY_CONFLICT_PENDING != 0
+}
+
+// One RecoveryConflictPendingReasons[reason] test-and-clear (postgres.c:3277).
+fn take_recovery_conflict_reason(reason: u32) -> bool {
+    let bit = 1u32 << reason;
+    let set = RECOVERY_CONFLICT_PENDING_REASONS.with(Cell::get) & bit != 0;
+    if set {
+        RECOVERY_CONFLICT_PENDING_REASONS.with(|c| c.set(c.get() & !bit));
+    }
+    set
 }
 
 // errdetail_recovery_conflict (postgres.c:2553).
@@ -412,8 +430,7 @@ fn ProcessRecoveryConflictInterrupt(reason: ProcSignalReason) -> PgResult<()> {
             if g::QueryCancelHoldoffCount() != 0 {
                 // Mid-message read: re-arm and defer (FE/BE sync), as in
                 // ProcessInterrupts' QueryCancelPending arm.
-                RECOVERY_CONFLICT_PENDING_REASONS.with(|c| c.set(c.get() | (1 << reason as u32)));
-                g::SetInterruptPending(true);
+                HandleRecoveryConflictInterrupt(reason as u32);
                 return Ok(());
             }
 
@@ -454,12 +471,13 @@ fn ProcessRecoveryConflictInterrupts() -> PgResult<()> {
     debug_assert!(!elog::config::proc_exit_inprogress());
     debug_assert_eq!(init_small::globals::InterruptHoldoffCount(), 0);
 
+    debug_assert!(recovery_conflict_interrupt_pending());
+
+    RECOVERY_CONFLICT_PENDING_REASONS.with(|c| c.set(c.get() & !RECOVERY_CONFLICT_PENDING));
     let first = types_storage::storage::PROCSIG_RECOVERY_CONFLICT_FIRST as u32;
     let last = types_storage::storage::PROCSIG_RECOVERY_CONFLICT_LAST as u32;
     for r in first..=last {
-        let bit = 1u32 << r;
-        if RECOVERY_CONFLICT_PENDING_REASONS.with(Cell::get) & bit != 0 {
-            RECOVERY_CONFLICT_PENDING_REASONS.with(|c| c.set(c.get() & !bit));
+        if take_recovery_conflict_reason(r) {
             // SAFETY: r is within the ProcSignalReason repr range.
             let reason: ProcSignalReason = unsafe { std::mem::transmute(r) };
             ProcessRecoveryConflictInterrupt(reason)?;
@@ -486,6 +504,13 @@ pub fn ProcessInterrupts() -> PgResult<()> {
         return Ok(());
     }
     g::SetInterruptPending(false);
+    // A post landing between the drains above and the clear just lost its
+    // InterruptPending edge (C's handlers run before the clear, never
+    // between): drain again so the pended handler fires now.
+    if timeout_seams::process_timeout_interrupt::is_installed() {
+        timeout_seams::process_timeout_interrupt::call();
+    }
+    procsignal::DrainThreadSignals()?;
 
     if g::ProcDiePending() {
         g::SetProcDiePending(false);
@@ -633,7 +658,7 @@ pub fn ProcessInterrupts() -> PgResult<()> {
         }
     }
 
-    if RECOVERY_CONFLICT_PENDING_REASONS.with(Cell::get) != 0 {
+    if recovery_conflict_interrupt_pending() {
         ProcessRecoveryConflictInterrupts()?;
     }
 
@@ -714,7 +739,7 @@ pub fn ProcessInterrupts() -> PgResult<()> {
         slotsync_seams::process_slot_sync_message::call()?;
     }
 
-    // Serial-lease v2 safe-point admission (GL-SLEASE-2; pgrust extension):
+    // Serial-lease v2 safe-point admission (regression; pgrust extension):
     // a sweeper-flagged floor crossing acquires its execution permit HERE —
     // the canonical safe point (past the holdoff/crit-section gates, never
     // on the error-raising arms above, which unwind out of the run anyway).
@@ -757,7 +782,13 @@ pub fn install_thread_signal_handlers() {
     procsignal::pqsignal_thread(SIGINT, Simple(StatementCancelHandler));
     procsignal::pqsignal_thread(SIGTERM, Fallible(die));
     if init_small::globals::IsUnderPostmaster() {
-        procsignal::pqsignal_thread(SIGQUIT, Simple(quickdie_handler));
+        // WalSndSignals keeps InitPostmasterChild's SignalHandlerForCrashExit
+        // (walsender.c:3677): no client WARNING on SIGQUIT.
+        if walsender_seams::am_walsender() {
+            procsignal::pqsignal_thread(SIGQUIT, Simple(crash_exit_handler));
+        } else {
+            procsignal::pqsignal_thread(SIGQUIT, Simple(quickdie_handler));
+        }
         // No C analog (SIGKILL has no handler): the crash-test injection's
         // kill-9 rendering, reachable only via procsignal::SendThreadKill.
         procsignal::pqsignal_thread(SIGKILL, Simple(kill9_handler));
@@ -782,6 +813,10 @@ pub fn install_thread_signal_handlers() {
 
 fn quickdie_handler() {
     quickdie()
+}
+
+fn crash_exit_handler() {
+    interrupt::SignalHandlerForCrashExit()
 }
 
 // SIGKILL semantics: no handler runs in C, so no client message and no exit
@@ -972,9 +1007,18 @@ pub fn ResetUsage() {
 }
 
 pub fn ShowUsage(title: &str) -> PgResult<()> {
+    ereport(types_error::LOG)
+        .errmsg_internal(title.to_string())
+        .errdetail_internal(usage_report())
+        .finish(loc(5157, "ShowUsage"))
+}
+
+fn usage_report() -> String {
+    // SAFETY: plain data; C's Save_r/Save_t are zero-initialized statics
+    // until the first ResetUsage.
     let (save_r, save_t) = SAVE_RUSAGE
         .with(Cell::get)
-        .unwrap_or_else(|| (getrusage_self(), gettimeofday_now()));
+        .unwrap_or_else(|| unsafe { core::mem::zeroed() });
     let r = getrusage_self();
     let mut elapse = gettimeofday_now();
 
@@ -1055,11 +1099,7 @@ pub fn ShowUsage(title: &str) -> PgResult<()> {
     if str_.ends_with('\n') {
         str_.pop();
     }
-
-    ereport(types_error::LOG)
-        .errmsg_internal(title.to_string())
-        .errdetail_internal(str_)
-        .finish(loc(5157, "ShowUsage"))
+    str_
 }
 
 

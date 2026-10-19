@@ -57,8 +57,7 @@ pub(crate) struct AttInMeta {
     // conversion_error_callback's names (postgres_fdw.c:7762-7836), resolved
     // once: one entry per output column, plus the relation name the retrieved
     // ctid (SelfItemPointerAttributeNumber) is reported under.
-    ctx: Vec<ConvCtx>,
-    ctid_rel: Option<String>,
+    names: std::rc::Rc<ConvNames>,
     in_funcs: Vec<FmgrInfo>,
     typioparams: Vec<Oid>,
     typmods: Vec<i32>,
@@ -119,8 +118,7 @@ impl AttInMeta {
             lsyscache::getTypeInputInfo(types_core::catalog::TIDOID)?;
         Ok(AttInMeta {
             natts,
-            ctx,
-            ctid_rel: Some(relname.to_string()),
+            names: std::rc::Rc::new(ConvNames { ctx, ctid_rel: Some(relname.to_string()) }),
             in_funcs,
             typioparams,
             typmods,
@@ -136,10 +134,23 @@ impl AttInMeta {
     /// the simple-relation and remote-join cases.
     fn set_scan_context(&mut self, ctx: Vec<ConvCtx>, ctid_rel: Option<String>) {
         debug_assert_eq!(ctx.len(), self.natts);
-        self.ctx = ctx;
-        self.ctid_rel = ctid_rel;
+        self.names = std::rc::Rc::new(ConvNames { ctx, ctid_rel });
     }
 
+    fn context_line(&self, attno: i32) -> String {
+        self.names.context_line(attno)
+    }
+}
+
+// conversion_error_callback's name table, shared with the emit-context
+// callback convert_result_row keeps installed while input functions run
+// (postgres_fdw.c:7645): a WARNING raised there carries the column line.
+pub(crate) struct ConvNames {
+    ctx: Vec<ConvCtx>,
+    ctid_rel: Option<String>,
+}
+
+impl ConvNames {
     fn context_line(&self, attno: i32) -> String {
         let ctx = if attno == types_tuple::htup::SelfItemPointerAttributeNumber {
             self.ctid_rel.as_ref().map(|r| ConvCtx::Column(r.clone(), "ctid".to_string()))
@@ -172,6 +183,22 @@ fn rte_eref_names(rte: &types_nodes::parsenodes::RangeTblEntry<'_>) -> (String, 
         .map(|n| n.as_string().map(|s| s.sval.to_string()).unwrap_or_default())
         .collect();
     (eref.aliasname.unwrap_or("").to_string(), colnames)
+}
+
+// AttInMeta for a scan of one foreign table (scanrelid > 0), named through
+// that RTE's aliases (postgres_fdw.c:7776-7811); shared with direct modify,
+// whose get_returning_data also passes the ForeignScanState (:4663).
+pub(crate) fn base_scan_attin(
+    relname: &str,
+    tupdesc: &TupleDescData<'_>,
+    rte: &types_nodes::parsenodes::RangeTblEntry<'_>,
+) -> PgResult<AttInMeta> {
+    let mut attin = AttInMeta::build(relname, tupdesc)?;
+    let (alias, colnames) = rte_eref_names(rte);
+    let natts = tupdesc.natts as usize;
+    let ctx = (1..=natts as i32).map(|colno| var_conv_ctx(&alias, &colnames, colno)).collect();
+    attin.set_scan_context(ctx, Some(alias));
+    Ok(attin)
 }
 
 // One ConvCtx for a Var of the scan (postgres_fdw.c:7795-7811): colno 0 is
@@ -315,13 +342,8 @@ pub(crate) fn begin_foreign_scan<'mcx>(
     // simple-relation and remote-join cases), never from the relation.
     let attin = if fsplan.scan.scanrelid > 0 {
         let rel = node.ss.ss_currentRelation.as_ref().expect("base foreign scan has a relation");
-        let mut attin = AttInMeta::build(rel.name(), &rel.rd_att)?;
         let rte = estate.es_range_table[(fsplan.scan.scanrelid - 1) as usize];
-        let (relname, colnames) = rte_eref_names(rte);
-        let natts = rel.rd_att.natts as usize;
-        let ctx = (1..=natts as i32).map(|colno| var_conv_ctx(&relname, &colnames, colno)).collect();
-        attin.set_scan_context(ctx, Some(relname));
-        attin
+        base_scan_attin(rel.name(), &rel.rd_att, rte)?
     } else {
         // Join/upper scan tuples follow the fdw_scan_tlist-shaped slot; a Var
         // entry names its relation's alias, an expression only its position.
@@ -542,6 +564,26 @@ pub(crate) fn convert_result_row(
     row: &[Option<Vec<u8>>],
     batch: mcx::Mcx<'_>,
 ) -> PgResult<(Vec<Datum>, Vec<bool>, types_tuple::ItemPointerData)> {
+    let cur_attno = std::rc::Rc::new(core::cell::Cell::new(0i32));
+    let callback = {
+        let names = attin.names.clone();
+        let cur = cur_attno.clone();
+        elog::push_emit_context_callback(Box::new(move |e: &mut PgError| {
+            e.add_context_line(names.context_line(cur.get()));
+        }))
+    };
+    let r = convert_result_row_inner(attin, retrieved_attrs, row, batch, &cur_attno);
+    elog::pop_emit_context_callback(callback);
+    r
+}
+
+fn convert_result_row_inner(
+    attin: &mut AttInMeta,
+    retrieved_attrs: &[i32],
+    row: &[Option<Vec<u8>>],
+    batch: mcx::Mcx<'_>,
+    cur_attno: &core::cell::Cell<i32>,
+) -> PgResult<(Vec<Datum>, Vec<bool>, types_tuple::ItemPointerData)> {
     let natts = attin.natts;
     let nfields = row.len();
     let mut values = vec![Datum::null(); natts];
@@ -551,6 +593,7 @@ pub(crate) fn convert_result_row(
 
     let mut j = 0usize;
     for &i in retrieved_attrs {
+        cur_attno.set(i);
         let cell = row.get(j).cloned().flatten();
         let cstr = match &cell {
             None => None,

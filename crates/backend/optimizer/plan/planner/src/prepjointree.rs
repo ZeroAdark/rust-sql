@@ -1032,6 +1032,49 @@ fn is_simple_subquery_sub<'mcx>(
     Ok(true)
 }
 
+// prepjointree.c:1431-1437: join alias Vars in the subquery's targetlist are
+// flattened (nested pull-ups may have turned their expansions into arbitrary
+// expressions) before pullup_replace_vars decides which replacements need a
+// PlaceHolderVar wrapper. None when the subquery has no join RTE.
+fn flatten_tlist_join_aliases<'mcx>(
+    run: &mut crate::run::PlannerRun<'mcx>,
+    sub: &Query<'mcx>,
+) -> PgResult<Option<NodeList<'mcx>>> {
+    if !sub
+        .rtable
+        .iter()
+        .any(|n| n.as_range_tbl_entry().expect("rtable cell").rtekind == RTEKind::RTE_JOIN)
+    {
+        return Ok(None);
+    }
+    let mcx = run.mcx;
+    let last_ph_id = core::cell::Cell::new(run.glob.last_ph_id);
+    let root = vars::FjavRoot { last_ph_id: &last_ph_id };
+    let mut out = NodeList::nil();
+    for n in &sub.targetList {
+        let tle = n.as_target_entry().expect("targetlist entry");
+        let expr =
+            vars::flatten_join_alias_vars(mcx, &sub.rtable, sub.jointree, Some(&root), tle.expr)?;
+        out.lappend(
+            mcx,
+            Node::mk(
+                mcx,
+                TargetEntry {
+                    expr,
+                    resno: tle.resno,
+                    resname: tle.resname,
+                    ressortgroupref: tle.ressortgroupref,
+                    resorigtbl: tle.resorigtbl,
+                    resorigcol: tle.resorigcol,
+                    resjunk: tle.resjunk,
+                },
+            )?,
+        )?;
+    }
+    run.glob.last_ph_id = last_ph_id.get();
+    Ok(Some(out))
+}
+
 // pull_up_simple_subquery (prepjointree.c). C copyObject's rte->subquery and
 // mutates the copy; here the offset pass rebuilds the pieces functionally, so
 // the shared tree is never written. PlaceHolderVar wrapping is structurally
@@ -1116,6 +1159,9 @@ fn pull_up_simple_subquery<'mcx>(
             run.root.append_rel_list.truncate(appinfo_snap);
             return Ok(false);
         }
+        if let Some(tl) = flatten_tlist_join_aliases(run, &sub_local)? {
+            sub_local.targetList = tl;
+        }
         let sealed = Node::mk(mcx, sub_local)?;
         rewrite_manip::OffsetVarNodes(mcx, sealed, rtoffset, 0)?;
         rewrite_manip::IncrementVarSublevelsUp(sealed, -1, 1)?;
@@ -1171,6 +1217,9 @@ fn pull_up_simple_subquery<'mcx>(
             // the functional offset passes below do not descend into SubLink
             // bodies, so take the sealed in-place route (deep copy first: the
             // cells copy still shares expression nodes with the plancache).
+            if let Some(tl) = flatten_tlist_join_aliases(run, &sub_local)? {
+                sub_local.targetList = tl;
+            }
             let sealed = Node::mk(mcx, sub_local)?;
             let deep = rewrite_manip::copy_query_node(mcx, sealed.as_query().expect("Query"))?;
             rewrite_manip::OffsetVarNodes(mcx, deep, rtoffset, 0)?;
@@ -1196,11 +1245,11 @@ fn pull_up_simple_subquery<'mcx>(
     let off_tlist = if pre_adjusted {
         sub.targetList.clone_in(mcx)?
     } else {
-        match clauses::walker::mutate_list(mcx, &sub.targetList, &mut |n| {
-            offset_expr(mcx, n, rtoffset)
-        })? {
+        let flat = flatten_tlist_join_aliases(run, sub)?;
+        let base = flat.as_ref().unwrap_or(&sub.targetList);
+        match clauses::walker::mutate_list(mcx, base, &mut |n| offset_expr(mcx, n, rtoffset))? {
             Some(l) => l,
-            None => sub.targetList.clone_in(mcx)?,
+            None => base.clone_in(mcx)?,
         }
     };
     let mut off_fromlist = NodeList::nil();

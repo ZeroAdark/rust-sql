@@ -53,6 +53,7 @@ detoast_seams = { path = "../../access/common/detoast_seams" }
 funcapi = { path = "../../utils/fmgr/funcapi" }
 tupdesc = { path = "../../access/common/tupdesc" }
 nodes_core = { path = "../../nodes/nodes_core" }
+clauses = { path = "../../optimizer/util/clauses" }
 heaptuple = { path = "../../access/common/heaptuple" }
 catalog = { path = "../../catalog/catalog" }
 pg_cast = { path = "../../catalog/pg_cast" }

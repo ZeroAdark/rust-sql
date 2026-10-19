@@ -1307,7 +1307,7 @@ mod corpus_replay {
 }
 
 #[cfg(test)]
-mod fleet_repro {
+mod ci_repro {
     /// div5 REGRESSION: the uninitialized-`flag[BUFSIZ]` C-UB class
     /// (README-div5.md). Asserts the carve DETECTS the shape — an old-format
     /// section with no `flag` directive — so the input can never reach the

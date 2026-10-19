@@ -5,8 +5,8 @@
 //! drain a ring's completions (C's deadlock rule: whoever waits completes).
 //! Like C 18, the route is io_method-gated: PrefetchSharedBuffer takes it
 //! only under io_method=io_uring (AND uring_available()); fadvise stays the
-//! fallback everywhere else. It was availability-gated only until the
-//! archil-neon incident showed io_method=sync clusters issuing ring reads.
+//! fallback everywhere else. The previous availability-only gate allowed
+//! io_method=sync clusters to issue ring reads.
 //!
 //! M1 §2.9 (parallelism-redesign): every in-flight slot carries a
 //! `waiter::io::IoToken`; reaping completes it (unpark-all). Runtime-pool

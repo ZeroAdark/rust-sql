@@ -267,6 +267,11 @@ pub fn json_typeof(json: &[u8]) -> PgResult<&'static str> {
         JsonToken::Number => "number",
         JsonToken::True | JsonToken::False => "boolean",
         JsonToken::Null => "null",
-        other => panic!("unexpected json token: {other:?}"),
+        other => {
+            return Err(Box::new(PgError::error(format!(
+                "unexpected json token: {}",
+                other as i32
+            ))))
+        }
     })
 }

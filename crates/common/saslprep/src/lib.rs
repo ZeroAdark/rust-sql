@@ -122,7 +122,12 @@ fn pg_utf8_string_to_codepoints<'mcx>(
         }
     }
 
-    let mut result = vec_with_capacity_in(mcx, num_chars)?;
+    // saslprep.c:1093 goes to oom (the caller then keeps the raw password);
+    // one past that, C's (input_size + 1) * sizeof(pg_wchar) palloc errors.
+    if num_chars >= mcx::MAX_ALLOC_SIZE / core::mem::size_of::<pg_wchar>() {
+        return Ok(None);
+    }
+    let mut result = vec_with_capacity_in(mcx, num_chars + 1)?;
     let mut remaining = input;
     while !remaining.is_empty() {
         let l = pg_utf_mblen(remaining) as usize;

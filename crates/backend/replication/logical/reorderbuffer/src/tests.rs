@@ -1841,3 +1841,38 @@ fn largest_txn_resolves_size_ties_like_the_pairing_heap() {
 fn distributed_invalidation_overflow_threshold_matches_c() {
     assert_eq!(MAX_DISTR_INVAL_MSG_PER_TXN, 524288);
 }
+
+// reorderbuffer.c:3996 / :3166: both announce at DEBUG2.
+#[test]
+fn serialize_and_abort_old_announce_at_debug2() {
+    let slot = "spill_debug2";
+    let mut rb = spill_rb(slot);
+    for i in 0..4u64 {
+        rb.queue_change(90, 2000 + i, msg_change("m"), false).unwrap();
+    }
+
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn hook(error: &types_error::PgError, _output_to_server: &mut bool) {
+        if error.level == types_error::DEBUG2 {
+            SEEN.lock().unwrap().push(error.message.clone());
+        }
+    }
+    SEEN.lock().unwrap().clear();
+    let prev_level = elog::config::log_min_messages();
+    elog::config::set_log_min_messages(types_error::DEBUG2);
+    let prev_hook = elog::set_emit_log_hook(Some(hook));
+
+    let txn = rb.txn_by_xid(90, false, 0, false).0.unwrap();
+    let serialized = rb.serialize_txn(txn);
+    let aborted = rb.abort_old(91);
+
+    elog::set_emit_log_hook(prev_hook);
+    elog::config::set_log_min_messages(prev_level);
+    serialized.unwrap();
+    aborted.unwrap();
+
+    let seen = SEEN.lock().unwrap();
+    assert!(seen.iter().any(|m| m == "spill 4 changes in XID 90 to disk"), "{seen:?}");
+    assert!(seen.iter().any(|m| m == "aborting old transaction 90"), "{seen:?}");
+    assert!(rb.txn_by_xid(90, false, 0, false).0.is_none());
+}

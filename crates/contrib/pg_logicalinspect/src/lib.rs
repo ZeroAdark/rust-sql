@@ -55,8 +55,12 @@ fn get_snapbuild_state_desc(state: i32) -> &'static str {
 
 #[track_caller]
 #[cold]
-fn invalid_filename_err(name: &str) -> Box<PgError> {
-    Box::new(PgError::error(format!("invalid snapshot file name \"{name}\"")))
+fn invalid_filename_err(name: &[u8]) -> Box<PgError> {
+    // pg_logicalinspect.c:89 prints the text_to_cstring bytes as given.
+    let mut msg = b"invalid snapshot file name \"".to_vec();
+    msg.extend_from_slice(name);
+    msg.push(b'"');
+    Box::new(PgError::error_raw_message(msg))
 }
 
 // parse_snapshot_filename: sscanf("%X-%X.snap") then a strict round-trip
@@ -83,13 +87,20 @@ fn parse_snapshot_filename(name: &str) -> PgResult<u64> {
             return Ok(((hi as u64) << 32) | lo as u64);
         }
     }
-    Err(invalid_filename_err(name))
+    Err(invalid_filename_err(name.as_bytes()))
 }
 
 fn filename_arg(fcinfo: &Fcinfo) -> PgResult<String> {
     // SAFETY: arg 0 is a non-null text (STRICT).
     let v = unsafe { fcinfo.arg_varlena_packed(0)? };
-    Ok(String::from_utf8_lossy(v.data()).into_owned())
+    // text_to_cstring (pg_logicalinspect.c:110): the name ends at its first NUL.
+    let b = v.data();
+    let b = &b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())];
+    // A non-UTF-8 name (SQL_ASCII) can never spell an LSN: C's sscanf
+    // round-trip rejects it with the raw bytes in the message.
+    core::str::from_utf8(b)
+        .map(str::to_owned)
+        .map_err(|_| invalid_filename_err(b))
 }
 
 fn fc_pg_get_logical_snapshot_meta(

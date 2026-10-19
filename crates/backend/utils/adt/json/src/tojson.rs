@@ -569,10 +569,7 @@ fn odd_argument_list() -> Box<PgError> {
 #[inline(never)]
 fn duplicate_json_object_key(key: &[u8]) -> Box<PgError> {
     Box::new(
-        PgError::error(alloc::format!(
-            "duplicate JSON object key value: {}",
-            String::from_utf8_lossy(key)
-        ))
+        PgError::error_bytes("duplicate JSON object key value: ", key, "")
         .with_sqlstate(types_error::ERRCODE_DUPLICATE_JSON_OBJECT_KEY_VALUE),
     )
 }

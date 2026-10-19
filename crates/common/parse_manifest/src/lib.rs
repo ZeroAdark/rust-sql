@@ -229,7 +229,13 @@ impl<C: JsonManifestParseContext> JsonManifestParseState<C> {
         /* Decode encoded pathname, if that's what we have. */
         let pathname: Vec<u8> = match self.encoded_pathname.take() {
             Some(encoded) => match hexdecode_string(&encoded) {
-                Some(raw) => raw,
+                // C hands the decoded bytes on as a NUL-terminated string.
+                Some(mut raw) => {
+                    if let Some(nul) = raw.iter().position(|&b| b == 0) {
+                        raw.truncate(nul);
+                    }
+                    raw
+                }
                 None => return self.parse_failure("could not decode file name"),
             },
             None => self.pathname.take().expect("checked above"),

@@ -158,7 +158,7 @@ fn RecordTransactionCommitGuts(xp: XsPtr, mcx: mcx::Mcx<'_>) -> PgResult<Transac
         || xp.with(|s| s.force_sync_commit)
         || !rels.is_empty()
     {
-        // GL-FLUSHPIPE-1: THE commit durability wait (C xact.c:1502). The
+        // regression: THE commit durability wait (C xact.c:1502). The
         // dedicated seam routes it through the pipelined flush variant
         // (identical to xlog_flush unless PGRUST_FLUSH_PIPELINE is armed;
         // ordering after it — commit tree, proc array, locks, ack — is

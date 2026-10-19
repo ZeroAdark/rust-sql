@@ -305,3 +305,23 @@ fn worker_setup_initialises_stats_times_to_now() {
     assert_eq!((w.last_send_time, w.last_recv_time, w.reply_time), (777_000_000, 777_000_000, 777_000_000));
     ipc::shmem_exit(0).unwrap();
 }
+
+// launcher.c:458-461: a freshly claimed slot carries TIMESTAMP_NOBEGIN in
+// last_send_time / last_recv_time / reply_time, so pg_stat_subscription shows
+// -infinity (not NULL) until the first replication message.
+#[test]
+fn claimed_worker_slot_starts_its_message_times_at_nobegin() {
+    let mut w = LogicalRepWorker::empty();
+    w.last_send_time = 5;
+    w.last_recv_time = 6;
+    w.reply_time = 7;
+    w.claim_for_launch(LogicalRepWorkerType::Apply, 1234, 5, 10, 100, InvalidOid);
+    assert!(w.in_use);
+    assert_eq!(w.generation, 1);
+    assert_eq!(w.launch_time, 1234);
+    assert_eq!(w.last_send_time, TIMESTAMP_NOBEGIN);
+    assert_eq!(w.last_recv_time, TIMESTAMP_NOBEGIN);
+    assert_eq!(w.reply_time, TIMESTAMP_NOBEGIN);
+    assert_eq!(TIMESTAMP_NOBEGIN, i64::MIN);
+    assert_ne!(w.last_send_time, 0, "0 is the NULL sentinel of pg_stat_get_subscription");
+}

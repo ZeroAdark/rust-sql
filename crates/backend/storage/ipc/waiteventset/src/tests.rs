@@ -6,6 +6,16 @@ use types_storage::waiteventset::{WL_SOCKET_CLOSED, WL_SOCKET_READABLE, WL_SOCKE
 
 static NEXT_PID: AtomicI32 = AtomicI32::new(7100);
 
+// Kernel-block laps of the one thread that armed the spy (its MyProcPid).
+static SPY_PID: AtomicI32 = AtomicI32::new(0);
+static SPY_BLOCKS: AtomicI32 = AtomicI32::new(0);
+
+pub(crate) fn note_kernel_block() {
+    if g::MyProcPid() == SPY_PID.load(SeqCst) {
+        SPY_BLOCKS.fetch_add(1, SeqCst);
+    }
+}
+
 fn setup_backend() -> i32 {
     static SETUP: Once = Once::new();
     SETUP.call_once(|| {
@@ -156,7 +166,7 @@ fn cross_backend_set_latch_wakes_blocked_wait() {
 
 #[test]
 fn fd_parked_wait_recovers_lost_latch_wake_within_cadence() {
-    // GL-RECWAKE-1: the lost-wake shape at the fd-park boundary — is_set
+    // regression: the lost-wake shape at the fd-park boundary — is_set
     // lands but the unpark (and so the wake-pipe byte) is never delivered.
     // An UNTIMED WaitEventSetWait must still observe the set latch within
     // one recheck-cadence period (1s default), not block in epoll/kqueue
@@ -484,4 +494,42 @@ fn readiness_error_ends_the_fd_park() {
     let n = WaitEventSetWait(set, 10, &mut occurred, 0).unwrap();
     assert_eq!(n, 0);
     FreeWaitEventSet(set);
+}
+
+// waiteventset.c:1139: an infinite wait keeps cur_timeout = -1 lap after lap.
+// A wake that landed while the waiter was idle (SetLatch between the
+// maybe_sleeping publish and the recheck, the latch reset since) degrades ONE
+// kernel block to a poll; it must not turn every later lap into a zero-timeout
+// epoll_wait/kevent spin until the socket has data.
+#[test]
+fn stale_wake_before_park_does_not_turn_an_infinite_wait_into_a_spin() {
+    let pid = setup_backend();
+    let latch = owned_latch();
+    let (a, b) = socketpair();
+    let set = CreateWaitEventSet(2).unwrap();
+    AddWaitEventToSet(set, WL_LATCH_SET, PGINVALID_SOCKET, Some(latch), None).unwrap();
+    AddWaitEventToSet(set, WL_SOCKET_READABLE, a, None, None).unwrap();
+
+    assert_eq!(waiter::unpark(waiter::current_handle()), waiter::Unparked::Pending);
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        // SAFETY: b is the open peer of the registered socket.
+        assert_eq!(unsafe { libc::write(b, b"x".as_ptr().cast(), 1) }, 1);
+    });
+    SPY_BLOCKS.store(0, SeqCst);
+    SPY_PID.store(pid, SeqCst);
+    let mut occurred = [WaitEvent::default(); 2];
+    let n = WaitEventSetWait(set, -1, &mut occurred, 0).unwrap();
+    SPY_PID.store(0, SeqCst);
+    writer.join().unwrap();
+    assert_eq!(n, 1);
+    assert_eq!(occurred[0].events & WL_SOCKET_READABLE, WL_SOCKET_READABLE);
+    let laps = SPY_BLOCKS.load(SeqCst);
+    assert!(laps <= 3, "{laps} kernel blocks for one degraded poll plus a blocking wait");
+    FreeWaitEventSet(set);
+    // SAFETY: both ends were created by socketpair above.
+    unsafe {
+        libc::close(a);
+        libc::close(b);
+    }
 }

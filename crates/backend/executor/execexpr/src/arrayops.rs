@@ -311,7 +311,8 @@ pub struct SbsRefState {
     pub resmcx: ResMcx,
     // Assignment whose container is a Param: a PL/pgSQL array variable,
     // which C stores expanded (pl_exec.c exec_assign_value expand_array).
-    pub container_is_param: bool,
+    // (owner hook, paramid) of an assignment container that is a Param.
+    pub container_param: Option<(::types_portal::params::ParamExpandedFn, i32)>,
 }
 
 #[track_caller]
@@ -400,8 +401,15 @@ pub fn sbsref_fetch_slice(st: &mut SbsRefState, cur: NullableDatum) -> PgResult<
     })
 }
 
-pub fn sbsref_assign(st: &mut SbsRefState, cur: NullableDatum) -> PgResult<NullableDatum> {
+pub fn sbsref_assign(
+    st: &mut SbsRefState,
+    cur: NullableDatum,
+    cparam_arg: *mut (),
+) -> PgResult<NullableDatum> {
     let mcx = res_mcx(&st.resmcx);
+    // SAFETY: cparam_arg is what the list owner armed for this evaluation.
+    let expanded = !cur.isnull
+        && st.container_param.is_some_and(|(f, id)| unsafe { f(cparam_arg, id) });
 
     if st.refattrlength > 0 && (cur.isnull || st.replace.isnull) {
         // Fixed-length arrays: punt and return the original (C shape).
@@ -437,7 +445,7 @@ pub fn sbsref_assign(st: &mut SbsRefState, cur: NullableDatum) -> PgResult<Nulla
         st.refelemlength,
         st.refelembyval,
         st.refelemalign,
-        st.container_is_param && !cur.isnull,
+        expanded,
     )?;
     Ok(NullableDatum {
         value: Datum::from_usize(img.leak().as_ptr() as usize),
@@ -474,6 +482,13 @@ pub fn sbsref_assign_slice(st: &mut SbsRefState, cur: NullableDatum) -> PgResult
         return Ok(cur);
     }
 
+    if st.refattrlength > 0 {
+        return Err(::types_error::PgError::error(
+            "updates on slices of fixed-length arrays not implemented",
+        )
+        .with_sqlstate(::types_error::ERRCODE_FEATURE_NOT_SUPPORTED)
+        .into());
+    }
     let src = datum_array_image(st.replace.value, &st.resmcx)?;
     let img = arrayfuncs::array_set_slice(
         mcx,
@@ -581,6 +596,7 @@ pub fn eval_array_coerce(st: &mut ArrayCoerceState, arrd: Datum) -> PgResult<Nul
     let mut out_values: PgVec<'_, Datum> = vec_with_capacity_in(mcx, n)?;
     let mut out_nulls: PgVec<'_, bool> = vec_with_capacity_in(mcx, n)?;
     let mut hasnulls = false;
+    let mut nbytes = 0usize;
     for i in 0..n {
         // SAFETY: slot is a live compile-mcx cell owned by this step.
         unsafe {
@@ -615,6 +631,27 @@ pub fn eval_array_coerce(st: &mut ArrayCoerceState, arrd: Datum) -> PgResult<Nul
         } else {
             ::adt_scalar::datum_copy(mcx, r.value, false, st.ret_typlen)?
         };
+        if !r.isnull {
+            nbytes = if st.ret_typbyval {
+                nbytes + st.ret_typlen as usize
+            } else {
+                arrayfuncs::foundation::att_addlength_pointer(
+                    nbytes,
+                    st.ret_typlen as i32,
+                    v.as_usize() as *const u8,
+                )
+            };
+            nbytes = arrayfuncs::foundation::att_align_nominal(nbytes, st.ret_typalign);
+            if nbytes > arrayfuncs::foundation::MAX_ALLOC_SIZE {
+                return Err(Box::new(
+                    PgError::error(format!(
+                        "array size exceeds the maximum allowed ({})",
+                        arrayfuncs::foundation::MAX_ALLOC_SIZE
+                    ))
+                    .with_sqlstate(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+                ));
+            }
+        }
         out_values.push(v);
         out_nulls.push(r.isnull);
     }

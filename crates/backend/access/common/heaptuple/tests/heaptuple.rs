@@ -446,6 +446,7 @@ fn desc_with_missing<'m>(mcx: Mcx<'m>, missing_val: &'m [u8]) -> TupleDescData<'
         defval: PgVec::new_in(mcx),
         check: PgVec::new_in(mcx),
         missing,
+        missing_store: PgVec::new_in(mcx),
         num_defval: 0,
         num_check: 0,
         relchecks: 0,
@@ -544,6 +545,7 @@ fn expand_tuple_short_converts_packable_missing_value() {
         defval: PgVec::new_in(mcx),
         check: PgVec::new_in(mcx),
         missing,
+        missing_store: PgVec::new_in(mcx),
         num_defval: 0,
         num_check: 0,
         relchecks: 0,
@@ -598,6 +600,24 @@ fn too_many_columns_is_sqlstate_54011() {
         panic!("expected error")
     };
     assert_eq!(err.sqlstate(), types_error::ERRCODE_TOO_MANY_COLUMNS);
+}
+
+// heaptuple.c:1166 palloc0(HEAPTUPLESIZE + len): the 24-byte HeapTupleData
+// counts toward MaxAllocSize. Only the header of the varlena is read before
+// the size check fires, so the datum need not be backed by 1 GiB.
+#[test]
+fn form_tuple_counts_heaptuplesize_toward_max_alloc_size() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let desc = make_desc(mcx, &[attr(-1, false, 4)]);
+    let hdr = set_varsize_4b_word(1_073_741_776).to_ne_bytes();
+    let values = [Datum::from_usize(hdr.as_ptr() as usize)];
+    let isnull = [false];
+    let Err(err) = heap_form_tuple(mcx, &desc, &values, &isnull) else {
+        panic!("expected error")
+    };
+    assert_eq!(err.sqlstate(), types_error::ERRCODE_INTERNAL_ERROR);
+    assert_eq!(err.message(), "invalid memory alloc request size 1073741824");
 }
 
 #[test]

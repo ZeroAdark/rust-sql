@@ -271,24 +271,27 @@ pub fn CountChildren(target_mask: u32) -> i32 {
         let _ = ereport(DEBUG4)
             .errmsg_internal(format!(
                 "{} process {} is still running",
-                launch_backend::postmaster_child_name(bp.bkend_type),
+                miscinit::GetBackendTypeDesc(bp.bkend_type),
                 bp.pid
             ))
             .finish(types_error::ErrorLocation::new(file!(), line!() as i32, "CountChildren"));
     })
 }
 
+/// signal_child's DEBUG3 line (postmaster.c:3435-3439).
+fn signal_child_line(signal: i32, bkend_type: BackendType, pid: pid_t) -> String {
+    format!(
+        "sending signal {}/{} to {} process with pid {}",
+        signal,
+        launch_backend::pm_signame(signal),
+        miscinit::GetBackendTypeDesc(bkend_type),
+        pid
+    )
+}
+
 pub fn SignalChildren(signal: i32, target_mask: u32) -> bool {
     let matched = for_each_match(target_mask, |bp| {
-        let _ = report(
-            DEBUG3,
-            format!(
-                "sending signal {} to {} process with pid {}",
-                signal,
-                launch_backend::postmaster_child_name(bp.bkend_type),
-                bp.pid
-            ),
-        );
+        let _ = report(DEBUG3, signal_child_line(signal, bp.bkend_type, bp.pid));
         // kill(pid, signal): pend on the target's ProcSignal slot + procLatch
         // wake (procsignal::SendThreadSignal). C's SignalChildren/signal_child
         // (postmaster.c) calls kill(pid, signal) unconditionally for every

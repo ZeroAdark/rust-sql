@@ -120,10 +120,15 @@ fn ShmemAllocRaw(size: usize, allocated_size: &mut usize) -> (*mut u8, usize) {
     else {
         return (std::ptr::null_mut(), 0);
     };
-    let off = SHMEM_FREEOFFSET.fetch_add(padded, Ordering::Relaxed);
     // SAFETY: layout has non-zero size. Zeroed to match a fresh C segment;
     // leaked for the cluster lifetime, as C shmem is never freed.
-    (unsafe { std::alloc::alloc_zeroed(layout) }, off)
+    let new_space = unsafe { std::alloc::alloc_zeroed(layout) };
+    if new_space.is_null() {
+        return (std::ptr::null_mut(), 0);
+    }
+    // shmem.c:216: freeoffset advances only for space actually carved.
+    let off = SHMEM_FREEOFFSET.fetch_add(padded, Ordering::Relaxed);
+    (new_space, off)
 }
 
 pub fn ShmemAlloc(size: usize) -> PgResult<*mut u8> {

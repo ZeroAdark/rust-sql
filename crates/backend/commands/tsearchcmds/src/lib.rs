@@ -254,13 +254,15 @@ pub(crate) fn defGetQualifiedName<'mcx>(
     Ok(name_list_parts(mcx, commands_define::defGetQualifiedName(mcx, defel)?))
 }
 
-// verify_dictoptions (tsearchcmds.c). DIVERGENCE: C suppresses the check in a
-// standalone backend for initdb; this server is always under the postmaster.
+// verify_dictoptions (tsearchcmds.c)
 fn verify_dictoptions<'mcx>(
     mcx: Mcx<'mcx>,
     tmplId: Oid,
     dictoptions: &[DefItem<'mcx>],
 ) -> PgResult<()> {
+    if !init_small::globals::IsUnderPostmaster() {
+        return Ok(());
+    }
     let Some(tup) = SearchSysCache1(TSTEMPLATEOID, SysCacheKey::Value(Datum::from_oid(tmplId)))?
     else {
         return Err(Box::new(PgError::error(format!(
@@ -303,14 +305,19 @@ pub fn call_template_init<'mcx>(
     initmethod: Oid,
     dictoptions: &[DefItem<'mcx>],
 ) -> PgResult<Datum> {
-    let mut options: PgVec<'mcx, (PgVec<'mcx, u8>, PgVec<'mcx, u8>)> = PgVec::new_in(mcx);
+    let mut options: PgVec<'mcx, (PgVec<'mcx, u8>, Option<PgVec<'mcx, u8>>)> =
+        PgVec::new_in(mcx);
     let mut int_options: PgVec<'mcx, Option<i64>> = PgVec::new_in(mcx);
     for item in dictoptions {
-        let val = def_value_string(mcx, item)?;
         let mut n: PgVec<'mcx, u8> = PgVec::new_in(mcx);
         mcx::vec_append_bytes(&mut n, item.name.as_bytes())?;
-        let mut v: PgVec<'mcx, u8> = PgVec::new_in(mcx);
-        mcx::vec_append_bytes(&mut v, val.as_bytes())?;
+        let v = if item.value.is_some() {
+            let mut v: PgVec<'mcx, u8> = PgVec::new_in(mcx);
+            mcx::vec_append_bytes(&mut v, def_value_string(mcx, item)?.as_bytes())?;
+            Some(v)
+        } else {
+            None
+        };
         options.push((n, v));
         int_options.push(match item.value {
             Some(crate::deflist::DefValue::Int(i)) => Some(i as i64),
@@ -319,9 +326,10 @@ pub fn call_template_init<'mcx>(
     }
     let initdata = ts_locale::dict_api::DictInitData::new(mcx, options, int_options);
     let mut flinfo = fmgr_seams::fmgr_info::call(initmethod)?;
-    let d = types_fmgr::function_call1_coll(
+    let d = types_fmgr::function_call1_coll_in(
         &mut flinfo,
         InvalidOid,
+        mcx,
         Datum::from_usize(&initdata as *const _ as usize),
     )?;
     if let Some(f) = initdata.drop_fn.get() {
@@ -504,9 +512,9 @@ pub fn DefineTSParser<'mcx>(mcx: Mcx<'mcx>, stmt: &DefineStmt<'mcx>) -> PgResult
                 .with_sqlstate(types_error::ERRCODE_INSUFFICIENT_PRIVILEGE),
         ));
     }
+    let prsRel = table::table_open(mcx, TSParserRelationId, RowExclusiveLock)?;
     let (namespaceoid, prsname) = qualified_name_get_creation_namespace(mcx, &stmt.defnames)?;
 
-    let prsRel = table::table_open(mcx, TSParserRelationId, RowExclusiveLock)?;
     let prsOid = catalog::GetNewOidWithIndex(
         mcx,
         &prsRel,

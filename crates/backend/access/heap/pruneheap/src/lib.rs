@@ -4,6 +4,7 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
+use ::elog::CritSection;
 use ::tableam_vocab::VacuumCutoffs;
 use ::types_core::xact::{
     InvalidTransactionId, TransactionIdFollows, TransactionIdIsNormal, TransactionIdPrecedes,
@@ -430,12 +431,12 @@ pub fn heap_page_prune_and_freeze(
         prstate.nfrozen = 0;
     }
 
-    init_small::globals::StartCriticalSection();
-    let res = prune_apply(
-        relation, buffer, page_ptr, &mut prstate, reason, do_prune, do_hint, do_freeze,
-    );
-    init_small::globals::EndCriticalSection();
-    res?;
+    // pruneheap.c:754 START_CRIT_SECTION() .. :847 END.
+    CritSection::run(|| {
+        prune_apply(
+            relation, buffer, page_ptr, &mut prstate, reason, do_prune, do_hint, do_freeze,
+        )
+    })?;
 
     presult.ndeleted = prstate.ndeleted;
     presult.nnewlpdead = prstate.ndead as i32;

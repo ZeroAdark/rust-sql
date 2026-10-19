@@ -354,3 +354,15 @@ fn startmsgread_twice_is_protocol_loss() {
     pq_startmsgread().unwrap();
     let _ = pq_startmsgread();
 }
+
+// pqcomm.c:453-459: UNIXSOCK_PATH formats into a MAXPGPATH buffer, so the
+// "too long" LOG never echoes more than 1023 bytes of the directory
+// (batch-232 regression).
+#[test]
+fn unix_socket_path_is_clipped_to_maxpgpath() {
+    assert_eq!(socket::unix_socket_path_for("/tmp", 5432), "/tmp/.s.PGSQL.5432");
+    let dir = "/".to_string() + &"d".repeat(1100);
+    let path = socket::unix_socket_path_for(&dir, 5432);
+    assert_eq!(path.len(), 1023);
+    assert_eq!(path, dir[..1023]);
+}

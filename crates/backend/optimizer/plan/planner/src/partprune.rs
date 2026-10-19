@@ -438,13 +438,13 @@ fn gen_partprune_steps_internal<'mcx>(
                         let last = argsteps.nth(argsteps.len() - 1);
                         arg_stepids.lappend(mcx, step_id_of(last))?;
                     } else {
-                        let sid = gen_prune_step_combine(
+                        let step = gen_prune_step_combine(
                             run,
                             ctx,
                             IntList::nil(),
                             types_nodes::plannodes::PARTPRUNE_COMBINE_UNION,
                         )?;
-                        arg_stepids.lappend(mcx, sid)?;
+                        arg_stepids.lappend(mcx, step_id_of(step))?;
                     }
                 }
                 if all_args_contradictory {
@@ -452,13 +452,13 @@ fn gen_partprune_steps_internal<'mcx>(
                     return Ok(NodeList::nil());
                 }
                 if !arg_stepids.is_nil() {
-                    let sid = gen_prune_step_combine(
+                    let step = gen_prune_step_combine(
                         run,
                         ctx,
                         arg_stepids,
                         types_nodes::plannodes::PARTPRUNE_COMBINE_UNION,
                     )?;
-                    result.lappend(mcx, step_node(ctx, sid))?;
+                    result.lappend(mcx, step)?;
                 }
                 continue;
             } else if be.boolop == BoolExprType::AND_EXPR {
@@ -538,7 +538,7 @@ fn gen_partprune_steps_internal<'mcx>(
             || (ctx.strategy == PARTITION_STRATEGY_HASH
                 && nullkeys.num_members() == ctx.partnatts as i32))
     {
-        let sid = gen_prune_step_op(
+        let step = gen_prune_step_op(
             run,
             ctx,
             InvalidStrategy,
@@ -547,14 +547,14 @@ fn gen_partprune_steps_internal<'mcx>(
             OidList::nil(),
             nullkeys,
         )?;
-        result.lappend(mcx, step_node(ctx, sid))?;
+        result.lappend(mcx, step)?;
     } else if generate_opsteps {
         let opsteps = gen_prune_steps_from_opexps(run, ctx, &mut keyclauses, &nullkeys)?;
         for s in opsteps.iter() {
             result.lappend(mcx, s)?;
         }
     } else if notnullkeys.num_members() == ctx.partnatts as i32 {
-        let sid = gen_prune_step_op(
+        let step = gen_prune_step_op(
             run,
             ctx,
             InvalidStrategy,
@@ -563,7 +563,7 @@ fn gen_partprune_steps_internal<'mcx>(
             OidList::nil(),
             Bitmapset::empty(),
         )?;
-        result.lappend(mcx, step_node(ctx, sid))?;
+        result.lappend(mcx, step)?;
     }
 
     if result.len() > 1 {
@@ -571,13 +571,13 @@ fn gen_partprune_steps_internal<'mcx>(
         for s in result.iter() {
             step_ids.lappend(mcx, step_id_of(s))?;
         }
-        let sid = gen_prune_step_combine(
+        let step = gen_prune_step_combine(
             run,
             ctx,
             step_ids,
             types_nodes::plannodes::PARTPRUNE_COMBINE_INTERSECT,
         )?;
-        result.lappend(mcx, step_node(ctx, sid))?;
+        result.lappend(mcx, step)?;
     }
 
     Ok(result)
@@ -593,15 +593,6 @@ fn step_id_of(step: Node<'_>) -> i32 {
     }
 }
 
-fn step_node<'mcx>(ctx: &GenCtx<'mcx>, step_id: i32) -> Node<'mcx> {
-    for s in ctx.steps.iter() {
-        if step_id_of(s) == step_id {
-            return s;
-        }
-    }
-    panic!("pruning step {step_id} not in context");
-}
-
 fn gen_prune_step_op<'mcx>(
     run: &mut PlannerRun<'mcx>,
     ctx: &mut GenCtx<'mcx>,
@@ -610,7 +601,7 @@ fn gen_prune_step_op<'mcx>(
     exprs: NodeList<'mcx>,
     cmpfns: OidList<'mcx>,
     nullkeys: Bitmapset<'mcx>,
-) -> PgResult<i32> {
+) -> PgResult<Node<'mcx>> {
     let mcx = run.mcx;
     let mut op = Node::build::<types_nodes::plannodes::PartitionPruneStepOp>(mcx)?;
     op.step_id = ctx.next_step_id;
@@ -620,9 +611,9 @@ fn gen_prune_step_op<'mcx>(
     op.exprs = exprs;
     op.cmpfns = cmpfns;
     op.nullkeys = nullkeys;
-    let id = op.step_id;
-    ctx.steps.lappend(mcx, op.seal())?;
-    Ok(id)
+    let step = op.seal();
+    ctx.steps.lappend(mcx, step)?;
+    Ok(step)
 }
 
 fn gen_prune_step_combine<'mcx>(
@@ -630,16 +621,16 @@ fn gen_prune_step_combine<'mcx>(
     ctx: &mut GenCtx<'mcx>,
     source_stepids: IntList<'mcx>,
     combine_op: u32,
-) -> PgResult<i32> {
+) -> PgResult<Node<'mcx>> {
     let mcx = run.mcx;
     let mut c = Node::build::<types_nodes::plannodes::PartitionPruneStepCombine>(mcx)?;
     c.step_id = ctx.next_step_id;
     ctx.next_step_id += 1;
     c.combineOp = combine_op;
     c.source_stepids = source_stepids;
-    let id = c.step_id;
-    ctx.steps.lappend(mcx, c.seal())?;
-    Ok(id)
+    let step = c.seal();
+    ctx.steps.lappend(mcx, step)?;
+    Ok(step)
 }
 
 // gen_prune_steps_from_opexps (partprune.c).
@@ -851,7 +842,7 @@ fn get_steps_using_prefix<'mcx>(
     debug_assert!(step_nullkeys.is_empty() || ctx.strategy == PARTITION_STRATEGY_HASH);
     let mcx = run.mcx;
     if prefix.is_empty() {
-        let sid = gen_prune_step_op(
+        let step = gen_prune_step_op(
             run,
             ctx,
             step_opstrategy,
@@ -860,7 +851,7 @@ fn get_steps_using_prefix<'mcx>(
             OidList::make1(mcx, step_lastcmpfn)?,
             step_nullkeys,
         )?;
-        return NodeList::make1(mcx, step_node(ctx, sid));
+        return NodeList::make1(mcx, step);
     }
     get_steps_using_prefix_recurse(
         run,
@@ -948,7 +939,7 @@ fn get_steps_using_prefix_recurse<'mcx>(
             exprs.lappend(mcx, step_lastexpr)?;
             cmpfns.lappend(mcx, pc.cmpfn)?;
             cmpfns.lappend(mcx, step_lastcmpfn)?;
-            let sid = gen_prune_step_op(
+            let step = gen_prune_step_op(
                 run,
                 ctx,
                 step_opstrategy,
@@ -957,7 +948,7 @@ fn get_steps_using_prefix_recurse<'mcx>(
                 cmpfns,
                 step_nullkeys.clone_in(mcx)?,
             )?;
-            result.lappend(mcx, step_node(ctx, sid))?;
+            result.lappend(mcx, step)?;
         }
     }
     Ok(result)

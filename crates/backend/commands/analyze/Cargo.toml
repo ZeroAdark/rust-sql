@@ -14,6 +14,8 @@ datum = { path = "../../../_support/types/datum" }
 types_core = { path = "../../../_support/types/types_core" }
 types_error = { path = "../../../_support/types/types_error" }
 pg_qsort = { path = "../../../_support/pg_qsort" }
+hashfn = { path = "../../../common/hashfn" }
+autovacuum_seams = { path = "../../postmaster/autovacuum_seams" }
 types_nodes = { path = "../../../_support/types/nodes" }
 types_rel = { path = "../../../_support/types/rel" }
 types_scan = { path = "../../../_support/types/types_scan" }

@@ -645,7 +645,7 @@ pub fn init_seams() {
     s::xlog_redo::set(redo::xlog_redo);
     s::data_checksums_enabled::set(DataChecksumsEnabled);
     s::xlog_flush::set(write::XLogFlush);
-    // GL-FLUSHPIPE-1: the sync-commit durability wait (xact.c:1502's call
+    // regression: the sync-commit durability wait (xact.c:1502's call
     // site, and only it) routes through the pipelined variant; disarmed it
     // falls straight into XLogFlush (one memoized bool read).
     s::xlog_flush_commit::set(write::XLogFlushPipelined);

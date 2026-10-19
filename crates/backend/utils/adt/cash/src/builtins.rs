@@ -3,7 +3,6 @@
 //! (935) the text-result convention (the varlena textin precedent); their
 //! value cores live in the crate root.
 
-use std::borrow::Cow;
 
 use ::datum::Datum;
 use ::types_core::Oid;
@@ -13,17 +12,17 @@ use ::types_fmgr::{
     PGFunction,
 };
 
-fn in_arg<'a>(fcinfo: &'a Fcinfo) -> Cow<'a, str> {
+// Raw server-encoding bytes: C quotes the cstring as-is in its messages.
+fn in_arg<'a>(fcinfo: &'a Fcinfo) -> &'a [u8] {
     // SAFETY: catalog arg 0 of cash_in is cstring (typlen -2).
-    let s = unsafe { fcinfo.arg_cstring(0) };
-    String::from_utf8_lossy(s.to_bytes())
+    unsafe { fcinfo.arg_cstring(0) }.to_bytes()
 }
 
 pub fn fc_cash_in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let s = in_arg(fcinfo);
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
-    Ok(Datum::from_i64(crate::cash_in(&s, esc)?))
+    Ok(Datum::from_i64(crate::cash_in(s, esc)?))
 }
 
 pub fn fc_cash_out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {

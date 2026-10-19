@@ -63,6 +63,9 @@ fn recovery_lock_table_bookkeeping_dedupes_and_chains() {
     assert_eq!(ts::chain(700), vec![(5, 16384), (5, 16385)]);
     assert_eq!(ts::chain(701), vec![(5, 16384)]);
     assert_eq!(ts::chain(702), vec![]);
+    // standby.c:1021 prepends, :1040 walks from the head: newest lock first
+    // (batch-232 regression).
+    assert_eq!(ts::release_sequence(&ts::chain(700)), vec![(5, 16385), (5, 16384)]);
 }
 
 // A hostile primary/archive can set arbitrary counts in a RM_STANDBY_ID

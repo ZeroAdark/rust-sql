@@ -7,7 +7,7 @@ use core::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use ::datum::Datum;
-use ::fmgr::FmgrInfo;
+use ::fmgr::{FmgrInfo, OpclassOptions};
 use ::mcx::MemoryContext;
 use ::types_error::{PgError, PgResult, ERRCODE_DATA_CORRUPTED};
 use ::types_core::{BlockNumber, Buffer, InvalidBlockNumber, Oid, BLCKSZ};
@@ -42,8 +42,10 @@ pub const BRIN_PROCNUM_UNION: u16 = 4;
 // flags the u16 before it.
 pub const BrinSpecialSpaceSize: usize = 8;
 
-const TYPE_OFF: usize = BLCKSZ - 2;
-const FLAGS_OFF: usize = BLCKSZ - 4;
+// brin_page.h BrinSpecialSpace: vector[MAXALIGN(1)/sizeof(uint16)] read off
+// PageGetSpecialPointer; flags at +4, type at +6.
+const FLAGS_FIELD: usize = 4;
+const TYPE_FIELD: usize = 6;
 
 const REVMAP_CONTENTS_OFF: usize = SizeOfPageHeaderData;
 pub const REVMAP_CONTENT_SIZE: usize = BLCKSZ - REVMAP_CONTENTS_OFF - BrinSpecialSpaceSize;
@@ -61,36 +63,51 @@ pub const fn HEAPBLK_TO_REVMAP_INDEX(pagesPerRange: BlockNumber, heapBlk: BlockN
     ((heapBlk / pagesPerRange) % REVMAP_PAGE_MAXITEMS as BlockNumber) as usize
 }
 
+// Special-space field offset (C PageGetSpecialPointer + field); a declared
+// pd_special past the block falls back to the tail so the read stays in
+// bounds.
+#[inline]
+fn special_off(page: &PageRef<'_>, field: usize) -> usize {
+    let sp = page.pd_special() as usize;
+    if sp + BrinSpecialSpaceSize <= BLCKSZ {
+        sp + field
+    } else {
+        BLCKSZ - BrinSpecialSpaceSize + field
+    }
+}
+
 #[inline]
 fn page_read_u16(page: &PageRef<'_>, off: usize) -> u16 {
-    // SAFETY: off < BLCKSZ, 2-aligned (all callers pass aligned constants).
-    unsafe { page.as_ptr().add(off).cast::<u16>().read() }
+    // SAFETY: off + 2 <= BLCKSZ (special_off keeps it in the block).
+    unsafe { page.as_ptr().add(off).cast::<u16>().read_unaligned() }
 }
 
 #[inline]
 fn page_write_u16(page: &mut PageMut<'_>, off: usize, v: u16) {
-    // SAFETY: off < BLCKSZ, 2-aligned; caller holds exclusive page access.
-    unsafe { page.as_ref().as_ptr().cast_mut().add(off).cast::<u16>().write(v) }
+    // SAFETY: off + 2 <= BLCKSZ; caller holds exclusive page access.
+    unsafe { page.as_ref().as_ptr().cast_mut().add(off).cast::<u16>().write_unaligned(v) }
 }
 
 #[inline]
 pub fn BrinPageType(page: &PageRef<'_>) -> u16 {
-    page_read_u16(page, TYPE_OFF)
+    page_read_u16(page, special_off(page, TYPE_FIELD))
 }
 
 #[inline]
 pub fn BrinSetPageType(page: &mut PageMut<'_>, ty: u16) {
-    page_write_u16(page, TYPE_OFF, ty)
+    let off = special_off(&page.as_ref(), TYPE_FIELD);
+    page_write_u16(page, off, ty)
 }
 
 #[inline]
 pub fn BrinPageFlags(page: &PageRef<'_>) -> u16 {
-    page_read_u16(page, FLAGS_OFF)
+    page_read_u16(page, special_off(page, FLAGS_FIELD))
 }
 
 #[inline]
 pub fn BrinSetPageFlags(page: &mut PageMut<'_>, flags: u16) {
-    page_write_u16(page, FLAGS_OFF, flags)
+    let off = special_off(&page.as_ref(), FLAGS_FIELD);
+    page_write_u16(page, off, flags)
 }
 
 #[inline]
@@ -387,11 +404,22 @@ pub fn decode_desummarize(d: &[u8]) -> PgResult<XlBrinDesummarize> {
     })
 }
 
-// The closed opclass set (rule 4); the OPCINFO pg_amproc OID selects the arm.
 pub const F_BRIN_MINMAX_OPCINFO: Oid = 3383;
-pub const F_BRIN_MINMAX_MULTI_OPCINFO: Oid = 4616;
+pub const F_BRIN_MINMAX_ADD_VALUE: Oid = 3384;
+pub const F_BRIN_MINMAX_CONSISTENT: Oid = 3385;
+pub const F_BRIN_MINMAX_UNION: Oid = 3386;
 pub const F_BRIN_INCLUSION_OPCINFO: Oid = 4105;
+pub const F_BRIN_INCLUSION_ADD_VALUE: Oid = 4106;
+pub const F_BRIN_INCLUSION_CONSISTENT: Oid = 4107;
+pub const F_BRIN_INCLUSION_UNION: Oid = 4108;
 pub const F_BRIN_BLOOM_OPCINFO: Oid = 4591;
+pub const F_BRIN_BLOOM_ADD_VALUE: Oid = 4592;
+pub const F_BRIN_BLOOM_CONSISTENT: Oid = 4593;
+pub const F_BRIN_BLOOM_UNION: Oid = 4594;
+pub const F_BRIN_MINMAX_MULTI_OPCINFO: Oid = 4616;
+pub const F_BRIN_MINMAX_MULTI_ADD_VALUE: Oid = 4617;
+pub const F_BRIN_MINMAX_MULTI_CONSISTENT: Oid = 4618;
+pub const F_BRIN_MINMAX_MULTI_UNION: Oid = 4619;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrinOpcKind {
@@ -399,6 +427,42 @@ pub enum BrinOpcKind {
     MinMaxMulti,
     Bloom,
     Inclusion,
+    Extension,
+}
+
+/// A column's add_value/consistent/union: in-core procs dispatch natively,
+/// any other pg_amproc entry through fmgr with C's pointer arguments.
+pub enum BrinProc {
+    MinMax,
+    MinMaxMulti,
+    Bloom,
+    Inclusion,
+    Fmgr(BrinFmgrProc),
+    Missing,
+}
+
+pub struct BrinFmgrProc {
+    pub oid: Oid,
+    pub finfo: RefCell<Option<FmgrInfo>>,
+    pub options: Option<Box<OpclassOptions>>,
+}
+
+pub struct BrinColProcs {
+    pub add_value: BrinProc,
+    pub consistent: BrinProc,
+    pub union: BrinProc,
+}
+
+/// A non-core opcInfo proc's result; brin_build_desc takes ownership back.
+pub fn brin_opcinfo_into_datum(info: BrinColInfo) -> Datum {
+    Datum::from_usize(Box::into_raw(Box::new(info)) as usize)
+}
+
+/// # Safety
+/// `d` must come from brin_opcinfo_into_datum and is consumed.
+pub unsafe fn brin_opcinfo_from_datum(d: Datum) -> BrinColInfo {
+    // SAFETY: caller contract — a leaked Box<BrinColInfo>, taken once.
+    *unsafe { Box::from_raw(d.as_usize() as *mut BrinColInfo) }
 }
 
 pub const BRIN_MAX_NSTORED: usize = 3;
@@ -435,6 +499,8 @@ pub struct InclusionOpaque {
     pub extra_proc_missing: Cell<[bool; INCLUSION_MAX_PROCNUMS]>,
     pub cached_subtype: Cell<Oid>,
     pub strategy_procinfos: RefCell<[Option<FmgrInfo>; RT_MAX_STRATEGY]>,
+    // Set from oi_opclass_options when the desc is built.
+    pub options: Option<Box<OpclassOptions>>,
 }
 
 impl Default for InclusionOpaque {
@@ -444,6 +510,7 @@ impl Default for InclusionOpaque {
             extra_proc_missing: Cell::new([false; INCLUSION_MAX_PROCNUMS]),
             cached_subtype: Cell::new(0),
             strategy_procinfos: RefCell::new([const { None }; RT_MAX_STRATEGY]),
+            options: None,
         }
     }
 }
@@ -488,6 +555,10 @@ pub struct BrinDesc<'mcx> {
     pub bd_indcollation: Vec<Oid>,
     pub bd_pages_per_range: BlockNumber,
     pub bd_info: Vec<BrinColInfo>,
+    pub bd_procs: Vec<BrinColProcs>,
+    pub bd_index_name: String,
+    // bd_index->rd_support (nkey x amsupport), for index_getprocinfo's guard.
+    pub bd_support: Vec<Oid>,
 }
 
 impl BrinDesc<'_> {

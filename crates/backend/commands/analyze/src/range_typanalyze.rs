@@ -5,7 +5,7 @@ use adt_rangetypes::{range_cmp_bounds, RangeBound, RangeInfo};
 use datum::Datum;
 use mcx::{Mcx, MemoryContext, PgVec};
 use types_core::Oid;
-use types_error::PgResult;
+use types_error::{PgError, PgResult};
 use types_fmgr::FmgrInfo;
 use crate::{varlena_stored_size, VacAttrStats};
 
@@ -14,8 +14,10 @@ pub(crate) const STATISTIC_KIND_BOUNDS_HISTOGRAM: i16 = 7;
 const FLOAT8OID: Oid = 701;
 const FLOAT8_LESS_OPERATOR: Oid = 672;
 
-// range_typanalyze / multirange_typanalyze (setup halves): target, minrows.
-pub(crate) fn setup(stats: &mut VacAttrStats<'_>) -> PgResult<bool> {
+// range_typanalyze / multirange_typanalyze (setup halves): typcache
+// validation (rangetypes.c:1776 / multirangetypes.c:559), target, minrows.
+pub(crate) fn setup(stats: &mut VacAttrStats<'_>, is_multirange: bool) -> PgResult<bool> {
+    range_ctx(lsyscache::getBaseType(stats.attrtypid)?, is_multirange)?;
     if stats.attstattarget < 0 {
         stats.attstattarget = guc_tables::vars::default_statistics_target.read();
     }
@@ -32,7 +34,9 @@ fn range_ctx(base_typid: Oid, is_multirange: bool) -> PgResult<RangeCtx> {
     let e = if is_multirange {
         let e =
             typcache::lookup_type_cache(base_typid, typcache::TYPECACHE_MULTIRANGE_INFO)?;
-        e.rngtype().expect("multirange typcache carries its range type")
+        e.rngtype().ok_or_else(|| {
+            Box::new(PgError::error(format!("type {base_typid} is not a multirange type")))
+        })?
     } else {
         typcache::lookup_type_cache(base_typid, typcache::TYPECACHE_RANGE_INFO)?
     };
@@ -212,16 +216,22 @@ pub(crate) fn compute_range_stats<'mcx>(
 
         let mut length_hist_values: PgVec<'mcx, Datum> = PgVec::new_in(anl_mcx);
         if non_empty_cnt >= 2 {
-            // float8_qsort_cmp's exact shape (NaN falls to the > arm, as C).
-            lengths.sort_unstable_by(|a, b| {
-                if a < b {
-                    core::cmp::Ordering::Less
-                } else if a == b {
-                    core::cmp::Ordering::Equal
-                } else {
-                    core::cmp::Ordering::Greater
-                }
-            });
+            // rangetypes_typanalyze.c:348 qsort_interruptible(float8_qsort_cmp):
+            // the comparator is inconsistent on NaN, so the permutation is
+            // only C's under C's qsort.
+            ::pg_qsort::pg_qsort_interruptible(
+                &mut lengths[..],
+                |a, b| {
+                    if a < b {
+                        -1
+                    } else if a == b {
+                        0
+                    } else {
+                        1
+                    }
+                },
+                postgres_seams::check_for_interrupts::call,
+            )?;
             let mut num_hist = non_empty_cnt;
             if num_hist > num_bins {
                 num_hist = num_bins + 1;

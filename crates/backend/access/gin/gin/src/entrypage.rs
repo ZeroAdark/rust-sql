@@ -134,9 +134,10 @@ pub unsafe fn gintuple_get_attrnum(state: &GinState, itup: ITup) -> OffsetNumber
 pub(crate) fn gin_col_tupdesc<'s>(
     mcx: Mcx<'s>,
     rel: &Relation<'_>,
+    state: &GinState,
     attnum: OffsetNumber,
 ) -> PgResult<::types_tuple::TupleDescData<'s>> {
-    use ::types_tuple::{CompactAttribute, FormData_pg_attribute};
+    use ::types_tuple::{CompactAttribute, FormData_pg_attribute, InvalidCompressionMethod};
     let mut int2 = FormData_pg_attribute {
         atttypid: ::types_core::INT2OID,
         attlen: 2,
@@ -150,6 +151,8 @@ pub(crate) fn gin_col_tupdesc<'s>(
     int2.attislocal = true;
     let mut key = *rel.rd_att.attr(attnum as usize - 1);
     key.attnum = 2;
+    key.attstorage = state.col(attnum).key_storage;
+    key.attcompression = InvalidCompressionMethod;
     let mut attrs = mcx::vec_with_capacity_in(mcx, 2)?;
     attrs.push(int2);
     attrs.push(key);
@@ -184,7 +187,7 @@ pub unsafe fn gintuple_get_key(
         )
     } else {
         let colnum = gintuple_get_attrnum(state, itup);
-        let desc = gin_col_tupdesc(mcx, rel, colnum)?;
+        let desc = gin_col_tupdesc(mcx, rel, state, colnum)?;
         (itup::index_getattr(itup, 2, &desc, &mut isnull), colnum)
     };
     if isnull {
@@ -359,7 +362,7 @@ pub(crate) fn GinFormTuple<'mcx>(
         let isnull = [category != GIN_CAT_NORM_KEY];
         index_form_tuple(mcx, &rel.rd_att, &values, &isnull)?
     } else {
-        let desc = gin_col_tupdesc(mcx, rel, attnum)?;
+        let desc = gin_col_tupdesc(mcx, rel, state, attnum)?;
         let values = [Datum::from_usize(attnum as usize), key];
         let isnull = [false, category != GIN_CAT_NORM_KEY];
         index_form_tuple(mcx, &desc, &values, &isnull)?

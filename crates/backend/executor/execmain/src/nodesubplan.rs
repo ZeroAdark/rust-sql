@@ -35,6 +35,7 @@ pub(crate) struct SubPlanState<'mcx> {
     /// The subplan's PlanState (es_subplanstates cell); taken out for the
     /// duration of a run so same-plan re-entry is a loud panic, not aliasing.
     ps_cell: core::ptr::NonNull<Option<PlanStateNode<'mcx>>>,
+    cur_ecxt: EcxtId,
 }
 
 // ExecInitSubPlan's NULL-planstate check: fails if the planner mistakenly
@@ -111,6 +112,7 @@ pub(crate) fn exec_init_sub_plan<'mcx>(
             )
     );
 
+    let cur_ecxt = estate.exec_assign_expr_context();
     let mut boxed = ::mcx::alloc_in(
         mcx,
         SubPlanState {
@@ -119,6 +121,7 @@ pub(crate) fn exec_init_sub_plan<'mcx>(
             set_param,
             plan_id: subplan.plan_id,
             ps_cell: cell.cast(),
+            cur_ecxt,
         },
     )?;
     let raw: *mut SubPlanState<'mcx> = &mut *boxed;
@@ -220,7 +223,14 @@ fn run_subplan<'mcx>(
     ps: &mut PlanStateNode<'mcx>,
     estate: &mut EStateData<'mcx>,
 ) -> PgResult<()> {
-    let mcx = estate.es_query_cxt;
+    // C frees the previous curTuple/curArray before storing the new one
+    // (nodeSubplan.c:1177, 1208): the copies live on a per-initplan context
+    // reset at every evaluation.
+    estate.reset_expr_context(sstate.cur_ecxt);
+    let cur: *const ::mcx::MemoryContext =
+        estate.ecxt(sstate.cur_ecxt).per_tuple_mcx().context();
+    // SAFETY: the context object outlives the plan (reset-only).
+    let mcx: Mcx<'mcx> = unsafe { &*cur }.mcx();
     let mut found = false;
     let mut values: PgVec<'mcx, NullableDatum> = PgVec::new_in(mcx);
     let mut astate = if sstate.sub_link_type == SubLinkType::ARRAY_SUBLINK {
@@ -367,31 +377,58 @@ pub(crate) fn mark_hashed_subplans_stale<'mcx>(
     estate: &mut EStateData<'mcx>,
     chg: &::types_nodes::bitmapset::Bitmapset<'mcx>,
 ) -> PgResult<()> {
+    if estate.es_subplan_param_indexed != estate.es_subplan_expr_states.len() {
+        rebuild_subplan_param_index(estate);
+    }
     let mcx = estate.es_query_cxt;
-    for i in 0..estate.es_subplan_expr_states.len() {
-        let (p, _) = estate.es_subplan_expr_states[i];
-        // SAFETY: entries are SubPlanExprStates leaked on this estate.
-        let sstate = unsafe { &mut *p.cast::<SubPlanExprState<'mcx>>().as_ptr() };
-        let all_param = &sstate.plan.as_plan().expect("plan node").allParam;
-        if !chg.overlap(all_param) {
-            continue;
+    let mut x = chg.next_member(-1);
+    while x >= 0 {
+        let key = (x as u64) << 32;
+        let mut k = estate.es_subplan_param_index.partition_point(|&e| e < key);
+        while let Some(&e) = estate.es_subplan_param_index.get(k) {
+            if e >> 32 != x as u64 {
+                break;
+            }
+            k += 1;
+            let (p, _) = estate.es_subplan_expr_states[(e & 0xffff_ffff) as usize];
+            // SAFETY: entries are SubPlanExprStates leaked on this estate.
+            let sstate = unsafe { &mut *p.cast::<SubPlanExprState<'mcx>>().as_ptr() };
+            // A rescan raised inside this SubPlan's own tree (buildSubPlanHash /
+            // ExecScanSubPlan drive it while its planstate is taken out) can only
+            // reach the SubPlans attached to nodes in that tree — C's ExecReScan
+            // updates the rescanned node's subPlan list, never the enclosing
+            // SubPlan — so a hashed SubPlan must not invalidate itself mid-build.
+            // SAFETY: es_query_cxt-lifetime cell; read-only peek at the take-out.
+            if unsafe { (*sstate.ps_cell.as_ptr()).is_none() } {
+                continue;
+            }
+            sstate.chg_param.add_member(mcx, x)?;
+            if let Some(h) = sstate.hashed.as_mut() {
+                h.built = false;
+            }
         }
-        // A rescan raised inside this SubPlan's own tree (buildSubPlanHash /
-        // ExecScanSubPlan drive it while its planstate is taken out) can only
-        // reach the SubPlans attached to nodes in that tree — C's ExecReScan
-        // updates the rescanned node's subPlan list, never the enclosing
-        // SubPlan — so a hashed SubPlan must not invalidate itself mid-build.
-        // SAFETY: es_query_cxt-lifetime cell; read-only peek at the take-out.
-        if unsafe { (*sstate.ps_cell.as_ptr()).is_none() } {
-            continue;
-        }
-        let parmset = chg.intersect(all_param, mcx)?;
-        sstate.chg_param.add_members(mcx, &parmset)?;
-        if let Some(h) = sstate.hashed.as_mut() {
-            h.built = false;
-        }
+        x = chg.next_member(x);
     }
     Ok(())
+}
+
+#[cold]
+#[inline(never)]
+fn rebuild_subplan_param_index(estate: &mut EStateData<'_>) {
+    let index = &mut estate.es_subplan_param_index;
+    index.clear();
+    for (i, &(p, _)) in estate.es_subplan_expr_states.iter().enumerate() {
+        // SAFETY: entries are SubPlanExprStates leaked on this estate.
+        let sstate = unsafe { &*p.cast::<SubPlanExprState<'_>>().as_ptr() };
+        let all_param = &sstate.plan.as_plan().expect("plan node").allParam;
+        let mut x = all_param.next_member(-1);
+        while x >= 0 {
+            index.push(((x as u64) << 32) | i as u64);
+            x = all_param.next_member(x);
+        }
+    }
+    index.sort_unstable();
+    estate.es_subplan_param_indexed = estate.es_subplan_expr_states.len();
 }
 
 pub(crate) struct SubPlanExprState<'mcx> {
@@ -519,6 +556,7 @@ fn exec_init_sub_plan_expr<'mcx>(
         agg,
         rtable: Some(nested_rtable),
         parent_subplan_tlist: None,
+        errpos: Some(::executils::executor_errposition_erased),
     };
     let testexpr = ::execexpr::exec_init_expr_subplans_agg(
         mcx,
@@ -693,6 +731,7 @@ fn init_hashed_state<'mcx>(
         agg,
         rtable: Some(nested_rtable),
         parent_subplan_tlist: None,
+        errpos: Some(::executils::executor_errposition_erased),
     };
     let proj_left = match agg {
         Some(a) => ::execexpr::exec_build_agg_projection_info_subplans(
@@ -904,11 +943,19 @@ fn scan_sub_plan_loop<'mcx>(
     for &id in sstate.par_param.iter() {
         chg.add_member(mcx, id)?;
     }
-    if chg.is_empty() {
-        crate::execami::exec_re_scan(ps, estate)?;
+    let r = if chg.is_empty() {
+        crate::execami::exec_re_scan(ps, estate)
     } else {
-        crate::execami::exec_re_scan_with_chg(ps, sstate.plan, estate, &chg)?;
+        crate::execami::exec_re_scan_with_chg(ps, sstate.plan, estate, &chg)
+    };
+    // C bms_free's chgParam per ExecReScan (execAmi.c:306); the words are
+    // kept for the next call so the per-call set never accumulates.
+    chg.clear();
+    if !sstate.chg_param.is_empty() {
+        chg.add_members(mcx, &sstate.chg_param)?;
     }
+    sstate.chg_param = chg;
+    r?;
 
     if link == SubLinkType::ARRAY_SUBLINK {
         return scan_array_sub_plan(sstate, ps, estate);
@@ -1422,12 +1469,18 @@ fn build_sub_plan_hash_scan<'mcx>(
     let mcx = estate.es_query_cxt;
     // buildSubPlanHash rescans with the accumulated chgParam so param-bearing
     // nodes (including initplans) inside the subplan reset before the refill.
-    let chg = core::mem::replace(&mut sstate.chg_param, Bitmapset::empty());
-    if chg.is_empty() {
-        crate::execami::exec_re_scan(ps, estate)?;
+    let mut chg = core::mem::replace(&mut sstate.chg_param, Bitmapset::empty());
+    let r = if chg.is_empty() {
+        crate::execami::exec_re_scan(ps, estate)
     } else {
-        crate::execami::exec_re_scan_with_chg(ps, sstate.plan, estate, &chg)?;
+        crate::execami::exec_re_scan_with_chg(ps, sstate.plan, estate, &chg)
+    };
+    chg.clear();
+    if !sstate.chg_param.is_empty() {
+        chg.add_members(mcx, &sstate.chg_param)?;
     }
+    sstate.chg_param = chg;
+    r?;
     while let Some(slot_id) = exec_proc_node(ps, estate)? {
         load_param_ids(sstate, estate, slot_id);
         let h = sstate.hashed.as_mut().unwrap();
@@ -1556,7 +1609,12 @@ fn exec_tuples_unequal<'mcx>(
         };
         let fn_addr = flinfo.fn_addr();
         let d = fn_addr(Some(flinfo), &mut fcinfo)?;
-        debug_assert!(!fcinfo.isnull);
+        if fcinfo.isnull {
+            return Err(Box::new(PgError::error(format!(
+                "function {} returned NULL",
+                flinfo.fn_oid
+            ))));
+        }
         if !d.as_bool() {
             return Ok(true);
         }

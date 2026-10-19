@@ -261,8 +261,8 @@ pub fn config_option_named_value(name: &str) -> PgResult<(String, String)> {
     guc::store::with_store(|reg| {
         let value = guc::registry::get_config_option_by_name(reg, name, false)?
             .expect("missing_ok=false returned None");
-        let varname = reg.find_option(name).expect("option vanished").gen().name;
-        Ok((varname.to_string(), value))
+        let varname = reg.find_option(name).expect("option vanished").gen().name.to_string();
+        Ok((varname, value))
     })
     .expect("GUC store not initialized")
 }
@@ -322,7 +322,7 @@ pub fn show_all_guc_config_rows() -> PgResult<Vec<(String, Option<String>, Optio
     guc::store::with_store(|reg| {
         // C's get_guc_variables array is kept sorted by guc_name_compare.
         let mut sorted: Vec<&GucVariable> = reg.iter().collect();
-        sorted.sort_by(|a, b| guc::guc_name_compare(a.gen().name, b.gen().name));
+        sorted.sort_by(|a, b| guc::guc_name_compare(&a.gen().name, &b.gen().name));
         let mut rows = Vec::new();
         for conf in sorted {
             let gen = conf.gen();
@@ -354,9 +354,10 @@ pub fn ConfigOptionIsVisible(conf: &GucVariable) -> PgResult<bool> {
 }
 
 // get_explain_guc_options (guc.c) with the visibility filter bound.
-pub fn get_explain_guc_options() -> PgResult<Vec<(&'static str, Option<String>)>> {
+pub fn get_explain_guc_options() -> PgResult<Vec<(String, Option<String>)>> {
     guc::store::with_store(|reg| {
         guc::registry::get_explain_guc_options(reg, &mut |conf| ConfigOptionIsVisible(conf))
+            .map(|v| v.into_iter().map(|(name, val)| (name.to_string(), val)).collect())
     })
     .expect("GUC store not initialized")
 }

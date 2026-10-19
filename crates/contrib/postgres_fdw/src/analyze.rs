@@ -179,7 +179,7 @@ fn postgres_acquire_sample_rows<'mcx>(
     let mut samplerows = 0.0f64;
     let mut rowstoskip = -1.0f64;
     let mut rstate = sampling::reservoir_init_selection_state(
-        pg_prng::global_prng(|p| p.next_u64()),
+        pg_prng::global_prng(|p| p.next_u32()),
         targrows as u32,
     );
     // C's "postgres_fdw temporary data" per-tuple context.

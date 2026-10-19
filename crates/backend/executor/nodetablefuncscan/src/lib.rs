@@ -184,15 +184,15 @@ pub fn exec_init_table_func_scan<'mcx>(
     let mut passingvalexprs: PgVec<'_, PgBox<'mcx, ExprState<'mcx>>> = PgVec::new_in(mcx);
     let (docexpr, rowexpr) =
         ::executils::with_subplan_compile_env(estate, |env| -> PgResult<_> {
-            let docexpr = exec_init_expr_subplans(mcx, tf.docexpr, pb, env)?
-                .expect("non-NULL expression");
-            let rowexpr = exec_init_expr_subplans(mcx, tf.rowexpr, pb, env)?;
             for e in &tf.ns_uris {
                 ns_uris.push(
                     exec_init_expr_subplans(mcx, Some(e), pb, env)?
                         .expect("non-NULL expression"),
                 );
             }
+            let docexpr = exec_init_expr_subplans(mcx, tf.docexpr, pb, env)?
+                .expect("non-NULL expression");
+            let rowexpr = exec_init_expr_subplans(mcx, tf.rowexpr, pb, env)?;
             for e in tf.colexprs.iter() {
                 colexprs.push(exec_init_expr_subplans(mcx, e, pb, env)?);
             }

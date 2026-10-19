@@ -178,7 +178,12 @@ fn TransactionIdAdvance(xid: &mut TransactionId) {
 }
 
 fn FullTransactionIdAdvance(dest: &mut FullTransactionId) {
-    dest.value += 1;
+    dest.value = dest.value.wrapping_add(1);
+    // transam.h:133: an incremented value below FirstNormalTransactionId
+    // (wraparound included) is left as is.
+    if dest.value < FirstNormalTransactionId as u64 {
+        return;
+    }
     while dest.xid() < FirstNormalTransactionId {
         dest.value += 1;
     }

@@ -402,8 +402,8 @@ pub fn pool_binding_enabled() -> bool {
 /// through the runtime's bound-descriptor claim gate
 /// (scratchpad/night/m2-pool-binding-scope.md §3 inc-2).
 ///
-/// **DEFAULT ON since the GL-POOLDB-1 acceptance re-run**
-/// (scratchpad/night/gl-pooldb-1-letter-spec.md §9: dop1 needle p50
+/// **DEFAULT ON since the regression acceptance re-run**
+/// (measured dop1 needle p50
 /// −0.18% vs the ≤1% bar; needle-under-saturated-mixed-load 0.64× vs the
 /// ≤2× bar — the letter's 4.4× small-stream tax INVERTED by the pool-qos
 /// interactive tier; heavy-stream p99 123.5s → 10.3s; gang-churn witness
@@ -533,7 +533,7 @@ pub fn try_engage(shared: &Arc<ParallelShared>, dop: usize) -> Option<Arc<Standi
 /// Close the board entry WITHOUT waiting: no new claims; ticketless parked
 /// workers wake off the board. The leader still owes `close_and_await`
 /// before its arena unwinds — this is the CHASE-ORDERING face
-/// (GL-STMTTASK-1): an interrupt chase against a still-open board races a
+/// (regression): an interrupt chase against a still-open board races a
 /// re-claim storm (every detach notifies the gang cv; parked workers
 /// re-claim the aborted-but-open engagement in a tight serve cycle —
 /// witnessed at ~4k claims per chase — and a join poll can livelock against
@@ -875,6 +875,9 @@ fn warm_connect(entry: &Arc<StandingEngagement>) {
                 );
             }
             procsignal::ProcSignalRelease();
+            // ... and the pg_stat_activity row InitPostgres showed: a parked
+            // pool thread has no C counterpart (regression).
+            backend_status::pgstat_pool_worker_park();
         }
         Ok(Err(e)) => {
             let _ = elog::elog(
@@ -1175,7 +1178,7 @@ fn serve_ticket(entry: &Arc<StandingEngagement>, ticket: usize) {
     }
     super::PARALLEL_WORKER_NUMBER.with(|c| c.set(-1));
     init_small::globals::SetParallelLeaderProcNumber(types_core::INVALID_PROC_NUMBER);
-    // GL-GANGWEDGE-1 deterministic wedge injection (inert in production).
+    // regression deterministic wedge injection (inert in production).
     maybe_inject_pool_stall();
     // Park invisibility (see the fn doc): leave the procarray (parked
     // workers must be invisible to CountOtherDBBackends) AND release the
@@ -1197,6 +1200,12 @@ fn serve_ticket(entry: &Arc<StandingEngagement>, ticket: usize) {
         }
         procsignal::ProcSignalRelease();
     }
+    // Park invisibility for pg_stat_activity too: a served ticket showed
+    // this thread as C's "parallel worker" for the serve (the arm drivers'
+    // backend_status::PoolWorkerServe); a first-use connect that never
+    // reached a driver showed it as a plain background worker. Either way
+    // the parked thread has no row, like C's exited worker process.
+    backend_status::pgstat_pool_worker_park();
 }
 
 // ---------------------------------------------------------------------------
@@ -1234,7 +1243,7 @@ pub fn pool_fence_epoch() -> usize {
     POOL_FENCE.load(SeqCst)
 }
 
-/// GL-POOLDB-HELPERDEATH-1: pool-db threads inside a shared-memory-touching
+/// regression: pool-db threads inside a shared-memory-touching
 /// span the crash reset must wait out — deferred identity bring-up
 /// (InitProcess/BaseInit at the serve gate), exit-callback drains, and the
 /// ticketless warm-connect. The postmaster's PM_WAIT_BACKENDS quiescence
@@ -1325,10 +1334,10 @@ impl Drop for PoolShmBusyGuard {
     }
 }
 
-/// GL-GANGWEDGE-1 RUNTIME-GANG STALL INJECTION (`PGRUST_TEST_POOL_STALL_
+/// regression RUNTIME-GANG STALL INJECTION (`PGRUST_TEST_POOL_STALL_
 /// INJECT_MS`; env-gated, inert in production). The runtime-gang analog of
 /// execparallel's `PGRUST_TEST_MQ_STALL_INJECT_MS`, which
-/// GL-DISCONNECT-WEDGE-1 §7 named as owed ("the e2e's victim shapes and the
+/// regression §7 named as owed ("the e2e's victim shapes and the
 /// injection knob need a runtime-gang analog").
 ///
 /// Called at the TAIL of a serve — the query is finished, but the thread takes
@@ -1365,14 +1374,14 @@ fn maybe_inject_pool_stall() {
     let _ = elog::elog(
         WARNING,
         format!(
-            "GL-GANGWEDGE-1 test injection: runtime executor stalling {ms}ms fence-deaf \
+            "regression test injection: runtime executor stalling {ms}ms fence-deaf \
              while holding the shm-busy charge"
         ),
     );
     std::thread::sleep(std::time::Duration::from_millis(ms));
 }
 
-/// GL-GANGWEDGE-1 QUIESCENCE-TERM FAULT INJECTOR
+/// regression QUIESCENCE-TERM FAULT INJECTOR
 /// (`PGRUST_TEST_WEDGE_SHM_BUSY_MS`; env-gated, inert in production).
 ///
 /// Spawns one thread that takes the `POOL_SHM_BUSY` charge and then sleeps
@@ -1406,7 +1415,7 @@ pub fn install_wedge_shm_busy_injection() {
             let _ = elog::elog(
                 WARNING,
                 format!(
-                    "GL-GANGWEDGE-1 test injection: holding the runtime quiescence term \
+                    "regression test injection: holding the runtime quiescence term \
                      (shm-busy) fence-deaf for {ms}ms"
                 ),
             );
@@ -1586,7 +1595,7 @@ pub fn pool_serve(payload: &Arc<dyn std::any::Any + Send + Sync>) -> PoolServe {
     let Ok(entry) = Arc::clone(payload).downcast::<StandingEngagement>() else {
         return PoolServe::Refused;
     };
-    // SERVE-SPAN busy charge (GL-POOLDB-HELPERDEATH-1 v3 — the load-bearing
+    // SERVE-SPAN busy charge (regression v3 — the load-bearing
     // term): the whole serve (gate, identity completion, claim, drive,
     // teardown) is a shared-memory-touching span the crash reset must wait
     // out. The leader's close_and_await does NOT cover it on every path —
@@ -1645,7 +1654,7 @@ pub fn pool_serve(payload: &Arc<dyn std::any::Any + Send + Sync>) -> PoolServe {
     // for it — without its own wake the leader's "nobody will participate"
     // check only ran when its latch quantum expired, and every
     // cross-database engagement against a fully-mismatched pool slept the
-    // whole MQ-recheck quantum (~1 s additive per execution, GL-ZSTALL-1)
+    // whole MQ-recheck quantum (~1 s additive per execution, regression)
     // before falling back to the gang.
     if mine != InvalidOid && mine != entry.shared.database_id {
         entry.refused.fetch_add(1, SeqCst);
@@ -1688,7 +1697,7 @@ pub fn pool_serve(payload: &Arc<dyn std::any::Any + Send + Sync>) -> PoolServe {
 
 #[cfg(test)]
 mod pooldb_flip_tests {
-    /// GL-POOLDB-1 flip pin (t35 flipped-kill law): default ON; `=0|off`
+    /// regression flip pin (t35 flipped-kill law): default ON; `=0|off`
     /// restores the gang-first posture; the historical arming spelling
     /// `=1` stays ON; whitespace trimmed.
     #[test]

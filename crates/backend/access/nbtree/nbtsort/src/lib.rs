@@ -19,6 +19,11 @@ use ::types_rel::Relation;
 use ::types_storage::bufpage::{ItemIdData, PageMut, SizeOfPageHeaderData};
 use ::types_nbtree::dedup::BTDedupState;
 use ::types_tuple::itemptr::{ItemPointerData, InvalidOffsetNumber};
+use backend_progress::pgstat_progress_update_param;
+use backend_progress::progress::{
+    PROGRESS_CREATEIDX_SUBPHASE, PROGRESS_CREATEIDX_TUPLES_DONE, PROGRESS_CREATEIDX_TUPLES_TOTAL,
+    PROGRESS_SCAN_BLOCKS_DONE, PROGRESS_SCAN_BLOCKS_TOTAL,
+};
 use bulkwrite::{BulkWriteBuffer, BulkWriteState};
 use execindexing::IndexInfo;
 use nbtree::itup::{
@@ -26,6 +31,12 @@ use nbtree::itup::{
     INDEX_SIZE_MASK, INDEX_TUPLE_HEADER_SIZE,
 };
 use nbtree::{BtScanInsert, OrderProcFrame};
+
+// nbtree.h:1177-1180 (btbuildphasename rows 2-5).
+const PROGRESS_BTREE_PHASE_INDEXBUILD_TABLESCAN: i64 = 2;
+const PROGRESS_BTREE_PHASE_PERFORMSORT_1: i64 = 3;
+const PROGRESS_BTREE_PHASE_PERFORMSORT_2: i64 = 4;
+const PROGRESS_BTREE_PHASE_LEAF_LOAD: i64 = 5;
 
 const P_NONE: BlockNumber = 0;
 const BTREE_METAPAGE: BlockNumber = 0;
@@ -110,6 +121,9 @@ pub fn btbuild<'mcx>(
         }
     }
 
+    // nbtsort.c:387-388.
+    pgstat_progress_update_param(PROGRESS_CREATEIDX_SUBPHASE, PROGRESS_BTREE_PHASE_INDEXBUILD_TABLESCAN);
+
     let reltuples = match pool_fed {
         Some(r) => r,
         None => execindexing::table_index_build_scan(
@@ -131,6 +145,12 @@ pub fn btbuild<'mcx>(
             },
         )?,
     };
+
+    // nbtsort.c:488-499.
+    backend_progress::pgstat_progress_update_multi_param(
+        &[PROGRESS_CREATEIDX_TUPLES_TOTAL, PROGRESS_SCAN_BLOCKS_TOTAL, PROGRESS_SCAN_BLOCKS_DONE],
+        &[indtuples as i64, 0, 0],
+    );
 
     if !havedead {
         spool2 = None;
@@ -177,8 +197,10 @@ fn leafbuild<'mcx>(
     mut spool2: Option<tuplesort::Tuplesort>,
     is_unique: bool,
 ) -> PgResult<()> {
+    pgstat_progress_update_param(PROGRESS_CREATEIDX_SUBPHASE, PROGRESS_BTREE_PHASE_PERFORMSORT_1);
     sortstate.performsort()?;
     if let Some(s2) = spool2.as_mut() {
+        pgstat_progress_update_param(PROGRESS_CREATEIDX_SUBPHASE, PROGRESS_BTREE_PHASE_PERFORMSORT_2);
         s2.performsort()?;
     }
 
@@ -197,6 +219,8 @@ fn leafbuild<'mcx>(
     let deduplicate =
         wstate.inskey.allequalimage && !is_unique && bt_get_deduplicate_items(index);
 
+    pgstat_progress_update_param(PROGRESS_CREATEIDX_SUBPHASE, PROGRESS_BTREE_PHASE_LEAF_LOAD);
+    let mut tuples_done: i64 = 0;
     let mut levels: Vec<BTPageState<'mcx>> = Vec::new();
     if let Some(sort2) = spool2.as_mut() {
         // _bt_load merge arm (nbtsort.c:1156): interleave the live and dead
@@ -230,6 +254,8 @@ fn leafbuild<'mcx>(
                 unsafe { buildadd(mcx, &mut wstate, &mut levels, 0, itup2.expect("itup2"), 0)? };
                 itup2 = sort2.getindextuple(true)?;
             }
+            tuples_done += 1;
+            pgstat_progress_update_param(PROGRESS_CREATEIDX_TUPLES_DONE, tuples_done);
         }
     } else if deduplicate {
         let keysz = index.indnkeyatts();
@@ -254,6 +280,8 @@ fn leafbuild<'mcx>(
                     start_pending_copy(&mut dstate, &mut basebuf, itup)?;
                 }
             }
+            tuples_done += 1;
+            pgstat_progress_update_param(PROGRESS_CREATEIDX_TUPLES_DONE, tuples_done);
         }
         if !levels.is_empty() {
             // SAFETY: base lives in basebuf.
@@ -268,6 +296,8 @@ fn leafbuild<'mcx>(
             // SAFETY: sorted-run image stays live until the next
             // getindextuple call; buildadd copies what it retains.
             unsafe { buildadd(mcx, &mut wstate, &mut levels, 0, itup, 0)? };
+            tuples_done += 1;
+            pgstat_progress_update_param(PROGRESS_CREATEIDX_TUPLES_DONE, tuples_done);
         }
     }
 

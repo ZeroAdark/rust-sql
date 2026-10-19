@@ -700,7 +700,7 @@ fn entry_get_item(
 }
 
 /// keyGetItem.
-fn key_get_item(
+pub(crate) fn key_get_item(
     rel: &Relation<'_>,
     state: &GinState,
     work: &mut GinScanState<'_>,
@@ -834,9 +834,14 @@ fn key_get_item(
     match res {
         GIN_TRUE => {
             key.curItemMatches = true;
-            // C leaves recheckCurItem as the tri fn left it; the direct tri
-            // fns never set it, and startScanKey initialized it false.
-            key.recheckCurItem = false;
+            // C leaves recheckCurItem as the tri fn left it (ginget.c:1253):
+            // a direct tri fn never touches it, so a true left by an earlier
+            // GIN_MAYBE item stays; the shim's last probe left it false.
+            if key.searchMode != GIN_SEARCH_MODE_EVERYTHING
+                && state.col(key.attnum).tri_consistent.is_none()
+            {
+                key.recheckCurItem = false;
+            }
         }
         GIN_FALSE => {
             key.curItemMatches = false;

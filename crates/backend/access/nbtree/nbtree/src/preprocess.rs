@@ -1121,6 +1121,7 @@ fn bt_preprocess_array_keys<'mcx>(
                 )?,
                 low_compare: None,
                 high_compare: None,
+                skip_arg: PgVec::new_in(mcx),
             });
             array_key_data.push(skipkey);
 
@@ -1272,6 +1273,7 @@ fn bt_preprocess_array_keys<'mcx>(
             sksup: None,
             low_compare: None,
             high_compare: None,
+            skip_arg: PgVec::new_in(mcx),
         });
         array_key_data.push(cur);
     }

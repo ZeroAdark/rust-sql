@@ -5,8 +5,8 @@
 //! `render::esc` (the ONE render seam).
 
 use crate::answer::{AnswerCol, AnswerSet, BytesBuild};
-use crate::bank::Bank;
-use crate::scan::{open_cursor, varlena_payload, Scratch};
+use crate::bank::{Bank, Face};
+use crate::scan::{byte_payload, open_cursor, Scratch};
 
 /// One ORDER BY EventTime LIMIT k winner row (derived Ord = (etime, grow)
 /// — the canonical tie law: global row order breaks time ties).
@@ -34,10 +34,12 @@ pub fn top10_insert(w: &mut Vec<Winner>, cand: Winner) {
 /// sign-folded through the column's width, varlena lanes copied into the
 /// answer arena (the answer outlives the scratch).
 pub fn hydrate_winners(bank: &Bank, winners: &[Winner]) -> AnswerSet {
+    let faces: Vec<Face> = bank.schema.iter().map(|c| bank.face(c.attno)).collect();
+    let byte_col = |f: Face| matches!(f, Face::Varlena | Face::Fixed(_));
     let mut ints: Vec<Option<Vec<i64>>> = Vec::new();
     let mut bytes: Vec<Option<BytesBuild>> = Vec::new();
-    for col in &bank.schema {
-        if col.typ.is_varlena() {
+    for &f in &faces {
+        if byte_col(f) {
             ints.push(None);
             bytes.push(Some(BytesBuild::new()));
         } else {
@@ -51,10 +53,11 @@ pub fn hydrate_winners(bank: &Bank, winners: &[Winner]) -> AnswerSet {
             let mut cur = open_cursor(bank, w.pi as usize, col.attno);
             let d = scratch.decode_sel(&mut cur, w.g, &[w.rowin]);
             let v = d[0];
-            if col.typ.is_varlena() {
-                bytes[ci].as_mut().unwrap().push(unsafe { varlena_payload(v) });
-            } else {
-                ints[ci].as_mut().unwrap().push(v as i64);
+            match bytes[ci].as_mut() {
+                // SAFETY: a byte-face datum decoded by this scratch points at its payload, alive until the
+                // next decode; push copies it into the answer arena first.
+                Some(b) => b.push(unsafe { byte_payload(faces[ci], v) }),
+                None => ints[ci].as_mut().unwrap().push(v as i64),
             }
         }
     }
@@ -62,12 +65,9 @@ pub fn hydrate_winners(bank: &Bank, winners: &[Winner]) -> AnswerSet {
         .schema
         .iter()
         .enumerate()
-        .map(|(ci, col)| {
-            if col.typ.is_varlena() {
-                bytes[ci].take().unwrap().finish(col.typ)
-            } else {
-                AnswerCol::i64s(col.typ, ints[ci].take().unwrap())
-            }
+        .map(|(ci, col)| match bytes[ci].take() {
+            Some(b) => b.finish(col.typ),
+            None => AnswerCol::i64s(col.typ, ints[ci].take().unwrap()),
         })
         .collect();
     AnswerSet::from_cols(cols)

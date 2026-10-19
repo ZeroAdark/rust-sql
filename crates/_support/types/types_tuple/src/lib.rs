@@ -4,6 +4,8 @@
 #![allow(non_upper_case_globals)]
 
 extern crate alloc;
+// std only for the XX001 panic payload (`std::panic::panic_any`).
+extern crate std;
 
 pub mod getattr;
 pub mod htup;

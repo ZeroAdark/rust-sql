@@ -1812,7 +1812,7 @@ mod repro_tests {
     /// for every ctrgm sort/bsearch and evicts equal-penalty color trigrams
     /// in the exact pg_qsort permutation C produces (canonical
     /// crates/_support/pg_qsort port over (penalty, index) proxies; swapped
-    /// from the retired gistproc copy at GL-PGQSORT-PERF consolidation).
+    /// from the retired gistproc copy at regression consolidation).
     /// The historical repro is
     /// kept as a REGRESSION equality assertion — if either side's tie
     /// behavior drifts, this fires first.

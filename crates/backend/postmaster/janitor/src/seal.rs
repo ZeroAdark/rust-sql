@@ -447,7 +447,7 @@ fn flip_one(name: &str, oid: Oid) -> PgResult<()> {
     // AlterDatabase is SET TABLESPACE's (the handout_one precedent). A
     // target that was concurrently sealed by hand just re-applies the same
     // flags (idempotent).
-    dbcommands::AlterDatabase(mcx, &stmt, false)?;
+    dbcommands::AlterDatabase(mcx, None, &stmt, false)?;
     xact::CommitTransactionCommand()?;
 
     // Seal bookkeeping, indistinguishable from a manual seal: a freshly

@@ -962,6 +962,7 @@ fn generate_series_common(
 ) -> PgResult<Datum> {
     let flinfo = flinfo.expect("generate_series_timestamp: NULL flinfo");
     if !flinfo.has_fn_extra() {
+        funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
         let start = fcinfo.arg_i64(0);
         let finish = fcinfo.arg_i64(1);
         let step = arg_interval(fcinfo, 2);
@@ -973,8 +974,7 @@ fn generate_series_common(
             None
         };
         let state = GenSeriesTimestamp::new(start, finish, step, attimezone, tz_aware)?;
-        let fctx = funcapi::init_MultiFuncCall(flinfo, fcinfo)?;
-        fctx.user_fctx = Some(Box::new(state));
+        funcapi::per_MultiFuncCall(flinfo).user_fctx = Some(Box::new(state));
     }
     let next = funcapi::per_MultiFuncCall(flinfo)
         .user_fctx

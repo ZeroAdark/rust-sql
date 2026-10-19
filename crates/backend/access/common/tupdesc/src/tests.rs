@@ -259,6 +259,7 @@ fn with_constraints<'m>(mcx: Mcx<'m>) -> TupleDescData<'m> {
                 defval,
                 check,
                 missing,
+                missing_store: PgVec::new_in(mcx),
                 num_defval: 1,
                 num_check: 1,
                 relchecks: 1,
@@ -322,6 +323,20 @@ fn copy_constr_deep_copies() {
         );
     }
     assert!(equalTupleDescs(&src, &copy));
+}
+
+// tupdesc.c:530 FreeTupleDesc pfrees each by-ref missing image: dropping a
+// constr copy returns the context to its pre-copy footprint.
+#[test]
+fn copy_constr_frees_missing_images_with_the_descriptor() {
+    install_seams();
+    let ctx = MemoryContext::new("t");
+    let src = with_constraints(ctx.mcx());
+    let before = ctx.used();
+    let copy = CreateTupleDescCopyConstr(ctx.mcx(), &src).unwrap();
+    assert!(ctx.used() > before);
+    drop(copy);
+    assert_eq!(ctx.used(), before);
 }
 
 #[test]

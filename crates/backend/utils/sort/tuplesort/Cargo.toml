@@ -42,6 +42,7 @@ elog = { path = "../../error/elog" }
 pg_rusage = { path = "../../misc/pg_rusage" }
 
 [dev-dependencies]
+libc = "0.2"
 detoast = { path = "../../../access/common/detoast" }
 pglz = { path = "../../../../common/pglz" }
 fd = { path = "../../../storage/file/fd" }

@@ -14,6 +14,7 @@ mcx = { path = "../../_support/mcx" }
 pg_b64 = { path = "../../common/base64" }
 pg_hmac = { path = "../../common/hmac" }
 pg_md5 = { path = "../../common/md5" }
+pg_path = { path = "../../port/pg_path" }
 saslprep = { path = "../../common/saslprep" }
 scram_common = { path = "../../common/scram_common" }
 timingsafe_bcmp = { path = "../../port/timingsafe_bcmp" }

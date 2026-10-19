@@ -180,9 +180,9 @@ Tier 3 — observable but the C surface is itself degraded (prng):
   relcache, typcache, guc, syncrep priorities, jsonb, acl sort: total (see
   sweep transcripts; explicit tie-breaks reproduced in Rust).
 
-## 4. Precedent check (GL-PARMERGE-1 / sorted-multiset law)
+## 4. Precedent check (regression / sorted-multiset law)
 
-GL-PARMERGE-1's ratified non-surface is the final Sort node's WITHIN-TIE EMIT
+regression's ratified non-surface is the final Sort node's WITHIN-TIE EMIT
 ORDER in query output, gated by sorted-multiset comparison, for the parallel
 merge path. It is precedent for "row order among genuinely equal keys in query
 RESULTS is not a parity surface." It is NOT precedent for:

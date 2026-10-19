@@ -667,7 +667,7 @@ pub fn dch_to_char<'mcx>(
                 // C: `(tm->tm_yday - 1) / 7 + 1` bare under -fwrapv; interval
                 // tm_yday is caller-unbounded (real 18.3 wraps: to_char(
                 // interval '-2147483648 days','WW') docker-confirmed;
-                // found by the fmt_dch_diff FLEET campaign 2026-07-31).
+                // found by the fmt_dch_diff CI campaign 2026-07-31).
                 pg_append(
                     &mut out,
                     fmt_0d(width, (tm.tm_yday.wrapping_sub(1) / 7 + 1) as i64).as_bytes(),

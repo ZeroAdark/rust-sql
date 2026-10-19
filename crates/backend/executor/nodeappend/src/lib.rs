@@ -462,6 +462,7 @@ pub fn exec_append_initialize_worker(
 
 pub fn exec_end_append(node: &mut AppendState<'_>) {
     node.as_prune_state = None;
+    node.as_pstate = None;
 }
 
 // ExecReScanAppend (nodeAppend.c), node-local half: the host rescans the

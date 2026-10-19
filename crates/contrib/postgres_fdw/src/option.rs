@@ -162,6 +162,25 @@ fn mk_def_elem<'mcx>(
     })
 }
 
+// defGetBoolean over a catalog option: the readers apply it even when the
+// wrapper has no validator (define.c:138), so anything but true/false/on/off
+// (or a bare option name) is a 42601 error, never a silent false.
+pub(crate) fn def_get_boolean(name: &str, value: Option<&str>) -> PgResult<bool> {
+    let Some(sval) = value else {
+        return Ok(true);
+    };
+    if sval.eq_ignore_ascii_case("true") || sval.eq_ignore_ascii_case("on") {
+        return Ok(true);
+    }
+    if sval.eq_ignore_ascii_case("false") || sval.eq_ignore_ascii_case("off") {
+        return Ok(false);
+    }
+    Err(Box::new(
+        PgError::error(format!("{name} requires a Boolean value"))
+            .with_sqlstate(types_error::ERRCODE_SYNTAX_ERROR),
+    ))
+}
+
 #[track_caller]
 #[cold]
 fn invalid_numeric_value(kind: &str, name: &str, value: &str) -> Box<PgError> {
@@ -274,9 +293,9 @@ pub(crate) fn extract_extension_list<'mcx>(
     extensions_string: &str,
     warn_on_missing: bool,
 ) -> PgResult<PgVec<'mcx, Oid>> {
-    let Some(extlist) = varlena::split_identifier_string(
+    let Some(extlist) = varlena::split_identifier_string_bytes(
         mcx,
-        extensions_string,
+        extensions_string.as_bytes(),
         b',',
         mbutils::GetDatabaseEncoding(),
     )?
@@ -289,13 +308,22 @@ pub(crate) fn extract_extension_list<'mcx>(
 
     let mut extension_oids: PgVec<'mcx, Oid> = PgVec::new_in(mcx);
     for extension_name in &extlist {
-        let extension_oid = extension::get_extension_oid(extension_name, true)?;
+        // A truncated identifier can end mid-character (SQL_ASCII clips by
+        // byte): no extension carries such a name, and option.c:482 echoes
+        // the bytes verbatim.
+        let extension_oid = match core::str::from_utf8(extension_name) {
+            Ok(name) => extension::get_extension_oid(name, true)?,
+            Err(_) => types_core::InvalidOid,
+        };
         if extension_oid != types_core::InvalidOid {
             extension_oids.push(extension_oid);
         } else if warn_on_missing {
+            let mut msg = b"extension \"".to_vec();
+            msg.extend_from_slice(extension_name);
+            msg.extend_from_slice(b"\" is not installed");
             elog::ereport(WARNING)
                 .errcode(ERRCODE_UNDEFINED_OBJECT)
-                .errmsg(format!("extension \"{extension_name}\" is not installed"))
+                .errmsg_raw(msg)
                 .finish(crate::loc("ExtractExtensionList"))?;
         }
     }

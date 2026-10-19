@@ -196,8 +196,12 @@ pub fn fc_pg_terminate_backend(
 
 pub fn fc_pg_reload_conf(_flinfo: Option<&mut FmgrInfo>, _fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // kill(PostmasterPid, SIGHUP)'s thread rendering cannot fail, so C's
-    // false-with-WARNING arm is unreachable.
-    postmaster_seams::signal_postmaster_sighup::call();
+    // false-with-WARNING arm is unreachable; standalone PostmasterPid is 0.
+    if init_small::globals::IsUnderPostmaster() {
+        postmaster_seams::signal_postmaster_sighup::call();
+    } else {
+        interrupt::SignalHandlerForConfigReload();
+    }
     Ok(Datum::from_bool(true))
 }
 

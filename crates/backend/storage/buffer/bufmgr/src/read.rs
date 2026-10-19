@@ -213,31 +213,47 @@ pub(crate) fn ReadBuffer_common_acct(
         return Ok((buffer, hit_or_miss(hit)));
     }
 
-    // Signal that we are going to immediately wait: no benefit in executing
+    let hit = read_pinned_shared_block(smgr, persistence, forknum, blkno, mode, strategy, buffer)?;
+    Ok((buffer, hit_or_miss(hit)))
+}
+
+/// StartReadBuffer + WaitReadBuffers over the one block this backend just
+/// pinned invalid. True when another backend completed it between the pin
+/// and the IO start: C's AsyncReadBuffers counts that as a hit for this
+/// backend (bufmgr.c:1886-1906).
+pub(crate) fn read_pinned_shared_block(
+    smgr: RelFileLocatorBackend,
+    persistence: u8,
+    forknum: ForkNumber,
+    blkno: BlockNumber,
+    mode: ReadBufferMode,
+    strategy: BufferAccessStrategy,
+    buffer: Buffer,
+) -> PgResult<bool> {
     // Immediate wait follows: READ_BUFFERS_SYNCHRONOUSLY (C's hint).
     let mut flags = READ_BUFFERS_SYNCHRONOUSLY;
     if mode == ReadBufferMode::ZeroOnError {
         flags |= READ_BUFFERS_ZERO_ON_ERROR;
     }
+    let io_context = IOContextForStrategy(&strategy);
     let mut operation = ReadBuffersOperation::new(smgr, persistence, forknum, strategy, flags);
     operation.buffers[0] = buffer;
     operation.blocknum = blkno;
     operation.nblocks = 1;
     let mut nblocks = 1;
-    let hit = if start_read_buffers_impl(&mut operation, &mut nblocks)? {
+    if start_read_buffers_impl(&mut operation, &mut nblocks)? {
         WaitReadBuffers(&mut operation)?;
-        false
-    } else {
-        // Another backend completed it between the pin and StartBufferIO.
-        true
-    };
-    Ok((buffer, hit_or_miss(hit)))
+        return Ok(false);
+    }
+    counters::hit();
+    pgstat_count_io_op(IOObject::Relation, io_context, IOOp::Hit, 1, 0);
+    Ok(true)
 }
 
 /// PinBufferForBlock (bufmgr.c:1119): pin the block, counting a hit when it
 /// is found valid. `count_hit` is false only for a block this backend's own
 /// previous combined read already accounted for (see `BatchCredit`).
-fn PinBufferForBlock(
+pub(crate) fn PinBufferForBlock(
     smgr: RelFileLocatorBackend,
     persistence: u8,
     forknum: ForkNumber,
@@ -309,7 +325,12 @@ thread_local! {
     static BATCH_CREDIT_CLOCK: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
 }
 
-fn credit_grant(locator: RelFileLocator, forknum: ForkNumber, next: BlockNumber, end: BlockNumber) {
+pub(crate) fn credit_grant(
+    locator: RelFileLocator,
+    forknum: ForkNumber,
+    next: BlockNumber,
+    end: BlockNumber,
+) {
     if next >= end {
         return;
     }
@@ -326,6 +347,19 @@ fn credit_grant(locator: RelFileLocator, forknum: ForkNumber, next: BlockNumber,
                     i
                 })
             });
+        // A re-read inside a surviving tail (an evicted extra split at a
+        // still-resident block) extends that tail rather than cutting it.
+        let (next, end) = match arr[slot] {
+            Some(e)
+                if e.locator == locator
+                    && e.forknum == forknum
+                    && next <= e.end
+                    && end >= e.next =>
+            {
+                (next.min(e.next), end.max(e.end))
+            }
+            _ => (next, end),
+        };
         arr[slot] = Some(BatchCredit { locator, forknum, next, end });
         c.set(arr);
     });
@@ -333,7 +367,11 @@ fn credit_grant(locator: RelFileLocator, forknum: ForkNumber, next: BlockNumber,
 
 /// True when `blkno` is the next block of a credited tail (consumed);
 /// a non-sequential access into the tail forfeits the rest of it.
-fn credit_consume(locator: RelFileLocator, forknum: ForkNumber, blkno: BlockNumber) -> bool {
+pub(crate) fn credit_consume(
+    locator: RelFileLocator,
+    forknum: ForkNumber,
+    blkno: BlockNumber,
+) -> bool {
     BATCH_CREDIT.with(|c| {
         let mut arr = c.get();
         for e in arr.iter_mut() {
@@ -362,6 +400,21 @@ fn credit_consume(locator: RelFileLocator, forknum: ForkNumber, blkno: BlockNumb
 /// The read stream's lifetime ends with the query: forget any tail.
 pub(crate) fn clear_batch_credits() {
     BATCH_CREDIT.with(|c| c.set([None; BATCH_CREDITS]));
+}
+
+/// read_stream_end/read_stream_reset: the scan that read the tail is over,
+/// so any later access to those blocks is another reader's hit (C:
+/// PinBufferForBlock counts it, bufmgr.c:1157).
+pub fn ForgetBatchCredit(locator: RelFileLocator, forknum: ForkNumber) {
+    BATCH_CREDIT.with(|c| {
+        let mut arr = c.get();
+        for e in arr.iter_mut() {
+            if matches!(e, Some(cr) if cr.locator == locator && cr.forknum == forknum) {
+                *e = None;
+            }
+        }
+        c.set(arr);
+    });
 }
 
 /// The partitioned mapping lookup, warm-hit pin, and victim install.
@@ -650,14 +703,22 @@ fn AbortBufferIO(buffer: Buffer) {
         debug_assert!(buf_state & BM_DIRTY == 0);
         UnlockBufHdr(desc, buf_state);
     } else {
+        debug_assert!(buf_state & BM_DIRTY != 0);
         UnlockBufHdr(desc, buf_state);
-        // INVARIANT: the only write-side StartBufferIO is FlushBuffer
-        // (write.rs), and every one of its exits calls TerminateBufferIO
-        // inline (with forget_owner) before an Err can propagate, so no
-        // write IO is ever left in progress for abort to clean up. Reaching
-        // this means a callee panicked between StartBufferIO and
-        // TerminateBufferIO on the write path.
-        panic!("AbortBufferIO found a dirty buffer with IO in progress: FlushBuffer terminates every write IO inline (write.rs), so no write path can leak BM_IO_IN_PROGRESS");
+        // bufmgr.c:6196: a failed FlushBuffer (write.rs) lands here; notice
+        // if this is not the first failure.
+        if buf_state & BM_IO_ERROR != 0 {
+            let tag = desc.tag();
+            let _ = ereport(WARNING)
+                .errcode(types_error::ERRCODE_IO_ERROR)
+                .errmsg(format!(
+                    "could not write block {} of {}",
+                    tag.blockNum,
+                    relpath_desc(crate::write::tag_locator(&tag).locator, tag.forkNum)
+                ))
+                .errdetail("Multiple failures --- write error might be permanent.")
+                .finish(loc("AbortBufferIO"));
+        }
     }
     TerminateBufferIO(desc, false, BM_IO_ERROR, false, false);
 }
@@ -916,6 +977,9 @@ fn ProcessReadBuffersResult(operation: &mut ReadBuffersOperation) -> PgResult<()
             &operation.io_return.target_data,
             types_error::DEBUG1,
         )?;
+        ereport(types_error::DEBUG3)
+            .errmsg("partial read, will retry")
+            .finish(loc("ProcessReadBuffersResult"))?;
     }
 
     debug_assert!(newly_read_blocks > 0 && newly_read_blocks <= MAX_READ_BATCH as i32);
@@ -1446,9 +1510,9 @@ pub fn PrefetchSharedBuffer(
     // (C 18: io_uring serves IO only under io_method=io_uring). It used to be
     // gated purely on uring_available() — ring-init success, true on any
     // Linux with liburing — so io_method=sync clusters still issued async
-    // ring reads behind the user's back (the archil-neon incident: that
-    // route reached an smgr arm believing itself unreachable because
-    // check_io_method had rejected uring, and panicked mid-BufferIO).
+    // ring reads behind the user's back. That route reached an smgr arm
+    // believing itself unreachable because
+    // check_io_method had rejected uring, and panicked mid-BufferIO.
     // check_io_method does not accept "io_uring" yet (unlisted until inc-2),
     // so today this route is test-only and every prefetch degrades to the
     // advisory smgr_prefetch fallback below — C's behavior for sync/worker.

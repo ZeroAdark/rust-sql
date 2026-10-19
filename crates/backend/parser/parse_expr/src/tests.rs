@@ -1211,3 +1211,18 @@ fn xmlelement_transforms_name_and_args() {
     assert_eq!(nx.name, Some("_x005F_xel"));
     assert_eq!(nx.args.iter().count(), 1);
 }
+
+#[test]
+fn jsonb_subscript_errors_carry_jsonbsubs_c_lines() {
+    let ctx = MemoryContext::new("t");
+    let mcx = ctx.mcx();
+    let pstate = make_parsestate(mcx, None);
+    let err = crate::subscripts::jsonb_no_slices(&pstate, 12);
+    assert_eq!(err.message(), "jsonb subscript does not support slices");
+    let loc = err.location().unwrap();
+    assert_eq!((loc.filename.as_deref(), loc.lineno, loc.funcname.as_deref()),
+        (Some("jsonbsubs.c"), 68, Some("jsonb_subscript_transform")));
+    let err = crate::subscripts::jsonb_bad_subscript_type_named(&pstate, "integer", "h", 12);
+    assert_eq!(err.message(), "subscript type integer is not supported");
+    assert_eq!(err.location().map(|l| l.lineno), Some(116));
+}

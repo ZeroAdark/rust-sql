@@ -142,10 +142,6 @@ fn pg_stat_statements_internal(
         };
 
         let tmp: Counters = entry.counters;
-        // Skip unexecuted (pending sticky) entries.
-        if tmp.is_sticky() {
-            continue;
-        }
 
         push(&mut values, &mut nulls, Datum::from_oid(key.userid));
         push(&mut values, &mut nulls, Datum::from_oid(key.dbid));
@@ -183,6 +179,12 @@ fn pg_stat_statements_internal(
             } else {
                 push_null(&mut values, &mut nulls);
             }
+        }
+
+        // Skip unexecuted (pending sticky) entries — after the text
+        // conversion, as pg_stat_statements.c:1887 does.
+        if tmp.is_sticky() {
+            continue;
         }
 
         // PGSS_PLAN block (>=1.8) then PGSS_EXEC block.

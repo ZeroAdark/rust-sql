@@ -60,9 +60,15 @@ impl Tsm {
         }
     }
 
-    // Extension handler procs keyed by C symbol (what C dlopens and calls).
+    // Handler procs keyed by C symbol: LANGUAGE internal aliases of the
+    // builtin handlers (GetTsmRoutine goes through fmgr, so any pg_proc row
+    // naming the symbol works) and the contrib handlers C dlopens.
     fn from_symbol(prosrc: &[u8]) -> Option<Tsm> {
-        if prosrc == tsm_system_rows::HANDLER_SYMBOL.as_bytes() {
+        if prosrc == b"tsm_bernoulli_handler" {
+            Some(Tsm::Bernoulli)
+        } else if prosrc == b"tsm_system_handler" {
+            Some(Tsm::System)
+        } else if prosrc == tsm_system_rows::HANDLER_SYMBOL.as_bytes() {
             Some(Tsm::SystemRows)
         } else if prosrc == tsm_system_time::HANDLER_SYMBOL.as_bytes() {
             Some(Tsm::SystemTime)
@@ -75,6 +81,11 @@ impl Tsm {
     pub fn get(mcx: Mcx<'_>, tsmhandler: Oid) -> PgResult<Tsm> {
         if let Some(tsm) = Tsm::from_handler(tsmhandler) {
             return Ok(tsm);
+        }
+        // tablesample.c:32 OidFunctionCall1: fmgr_info links a C-language
+        // handler's library (probin) into the session's file_list before the call.
+        if syscache_seams::lookup_pg_proc_probin::call(mcx, tsmhandler)?.is_some() {
+            fmgr_core::fmgr_info(tsmhandler)?;
         }
         if let Some(prosrc) = syscache_seams::lookup_pg_proc_prosrc::call(mcx, tsmhandler)? {
             if let Some(tsm) = Tsm::from_symbol(prosrc.as_bytes()) {
@@ -388,3 +399,4 @@ mod builtin_tests {
         fmgr_core::assert_rows_match_canonical(crate::TABLESAMPLE_BUILTINS);
     }
 }
+

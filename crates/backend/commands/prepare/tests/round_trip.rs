@@ -120,6 +120,7 @@ fn install() {
         utility::init_seams();
         guc_tables::init_seams();
         miscinit::init_seams();
+        ipc_seams::on_proc_exit::set(record_exit_cb);
         parallel_seams::is_parallel_worker::set(|| false);
         transam_xlog_seams::recovery_in_progress::set(|| false);
         postgres_seams::check_for_interrupts::set(|| Ok(()));
@@ -501,15 +502,15 @@ fn explain_execute_utility_invokes_callback() {
     let ctx = MemoryContext::new("t");
     let raw_notify = node_mk(
         &ctx,
-        NotifyStmt { conditionname: Some("d140"), payload: None },
+        NotifyStmt { conditionname: Some("yafk"), payload: None },
     );
     let raw = RawStmt { stmt: Some(raw_notify), stmt_location: 0, stmt_len: 0 };
     let plansource =
-        plancache::CreateCachedPlan(Some(&raw), "NOTIFY d140", CommandTag::SELECT).unwrap();
+        plancache::CreateCachedPlan(Some(&raw), "NOTIFY yafk", CommandTag::SELECT).unwrap();
     let qmcx = plancache::SourceQueryMcx(plansource);
     let notify = Node::mk(
         qmcx,
-        NotifyStmt { conditionname: Some("d140"), payload: None },
+        NotifyStmt { conditionname: Some("yafk"), payload: None },
     )
     .unwrap();
     let mut qlist = mcx::PgVec::new_in(qmcx);
@@ -548,4 +549,54 @@ fn deallocate_command_tags() {
     let all = node_mk(&ctx, DeallocateStmt { name: None, isall: true, location: -1 });
     assert_eq!(cmdtag::GetCommandTagName(utility::CreateCommandTag(one)), "DEALLOCATE");
     assert_eq!(cmdtag::GetCommandTagName(utility::CreateCommandTag(all)), "DEALLOCATE ALL");
+}
+
+// regression: C never hash_destroy()s prepared_queries because the
+// backend process dies with it; one backend = one (reused) thread here, so
+// the table's first creation registers an on_proc_exit callback that
+// hash_destroy()s it and leaves the next session on this thread with C's
+// `prepared_queries = NULL`.
+static EXIT_CB: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+fn record_exit_cb(f: fn(i32, usize), _arg: usize) {
+    EXIT_CB.store(f as usize, core::sync::atomic::Ordering::SeqCst);
+}
+
+#[test]
+fn prepared_queries_table_is_destroyed_at_proc_exit() {
+    use core::sync::atomic::Ordering;
+    install();
+    EXIT_CB.store(0, Ordering::SeqCst);
+    let select = {
+        let mcx = Box::leak(Box::new(MemoryContext::new("px"))).mcx();
+        Node::mk(mcx, SelectStmt::default()).unwrap()
+    };
+    let store = |name: &str| {
+        let raw = RawStmt { stmt: Some(select), stmt_location: 0, stmt_len: 0 };
+        let plansource =
+            plancache::CreateCachedPlan(Some(&raw), SOURCE, CommandTag::SELECT).unwrap();
+        let qmcx = plancache::SourceQueryMcx(plansource);
+        let mut qlist = mcx::PgVec::new_in(qmcx);
+        qlist.push(select_query(qmcx));
+        plancache::CompleteCachedPlan(plansource, qlist, &[], CURSOR_OPT_PARALLEL_OK, true)
+            .unwrap();
+        StorePreparedStatement(name, plansource, true).unwrap();
+    };
+    // This thread's first prepared statement creates the table and
+    // registers its exit teardown.
+    store("px1");
+    assert!(FetchPreparedStatement("px1", false).unwrap().is_some());
+    let cb = EXIT_CB.load(Ordering::SeqCst);
+    assert_ne!(cb, 0, "prepared_queries creation must on_proc_exit() its hash_destroy");
+    // SAFETY: the recorded value is the fn(i32, usize) pointer the seam
+    // handed record_exit_cb.
+    let cb: fn(i32, usize) = unsafe { core::mem::transmute::<usize, fn(i32, usize)>(cb) };
+    cb(0, 0);
+    // The table is gone (C: a fresh backend's NULL prepared_queries) ...
+    assert!(FetchPreparedStatement("px1", false).unwrap().is_none());
+    // ... and the next session on this thread starts a new one.
+    EXIT_CB.store(0, Ordering::SeqCst);
+    store("px2");
+    assert!(FetchPreparedStatement("px2", false).unwrap().is_some());
+    assert_ne!(EXIT_CB.load(Ordering::SeqCst), 0, "a re-created table re-registers its teardown");
 }

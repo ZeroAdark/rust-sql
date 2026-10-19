@@ -935,9 +935,9 @@ pub fn ExplainNode<'mcx>(
         if es.format == EXPLAIN_FORMAT_TEXT {
             append!(
                 es,
-                "  (cost={:.2}..{:.2} rows={:.0} width={})",
-                plan.startup_cost,
-                plan.total_cost,
+                "  (cost={}..{} rows={:.0} width={})",
+                crate::format::fmt_float(plan.startup_cost, 2),
+                crate::format::fmt_float(plan.total_cost, 2),
                 plan.plan_rows,
                 plan.plan_width
             );
@@ -1456,11 +1456,17 @@ pub fn ExplainNode<'mcx>(
                                 .and_then(|n| n.as_list())
                                 .map(|l| !l.is_nil())
                                 .unwrap_or(false);
+                        let batch_size = if es.analyze && !es.qd.is_null() {
+                            execmain_seams::query_desc_fdw_batch_size::call(es.qd, rti as u32)
+                        } else {
+                            None
+                        };
                         let flags = types_nodes::FdwExplainFlags {
                             costs: es.costs,
                             verbose: es.verbose,
                             analyze: es.analyze,
                             rtable_names: &[],
+                            batch_size,
                         };
                         f(&fdw_private, relid, has_wco, flags, &mut |label, v| {
                             match v {
@@ -2362,9 +2368,7 @@ fn show_incremental_sort_info<'mcx>(
         return Ok(());
     }
     let id = plan_of(node).plan_node_id;
-    let Some(info) = execmain_seams::query_desc_incsort_instrument::call(es.qd, id) else {
-        return Ok(());
-    };
+    let info = execmain_seams::query_desc_incsort_instrument::call(es.qd, id).unwrap_or_default();
     if info.fullsortGroupInfo.groupCount > 0 {
         show_incremental_sort_group_info(&info.fullsortGroupInfo, "Full-sort", true, es);
         if info.prefixsortGroupInfo.groupCount > 0 {
@@ -2468,7 +2472,9 @@ fn show_group_keys<'mcx>(node: Node<'mcx>, ancestors: Option<&Ancestors<'_, 'mcx
 // show_hash_info (explain.c); the shared_info (parallel) merge has no
 // parallel lane.
 fn show_hash_info<'mcx>(node: Node<'mcx>, es: &mut ExplainState<'mcx>) -> PgResult<()> {
-    if !es.analyze || es.qd.is_null() {
+    // explain.c:3422 prints whenever instrumentation was collected, not
+    // only under es->analyze (auto_explain re-reads log_analyze at render).
+    if es.qd.is_null() {
         return Ok(());
     }
     let plan = plan_of(node);
@@ -2617,8 +2623,7 @@ fn show_grouping_set_keys<'mcx>(
     Ok(())
 }
 
-// show_hashagg_info (explain.c); the parallel-worker display has no parallel
-// lane. AGG_HASHED/AGG_MIXED only.
+// show_hashagg_info (explain.c). AGG_HASHED/AGG_MIXED only.
 fn show_hashagg_info<'mcx>(node: Node<'mcx>, es: &mut ExplainState<'mcx>) -> PgResult<()> {
     let agg = node.as_agg().expect("Agg plan node");
     if agg.aggstrategy != 2 && agg.aggstrategy != 3 {
@@ -2632,6 +2637,46 @@ fn show_hashagg_info<'mcx>(node: Node<'mcx>, es: &mut ExplainState<'mcx>) -> PgR
             None => return Ok(()),
         }
     };
+    show_hashagg_leader_info(&ai, es);
+    if !es.analyze {
+        return Ok(());
+    }
+    let Some(workers) =
+        execmain_seams::query_desc_worker_agg_instrument::call(es.qd, agg.plan.plan_node_id)
+    else {
+        return Ok(());
+    };
+    for (n, wi) in workers {
+        if wi.hash_mem_peak == 0 {
+            continue;
+        }
+        let mem_peak_kb = wi.hash_mem_peak.div_ceil(1024) as i64;
+        if es.workers_state.is_some() {
+            explain_open_worker(n as usize, es);
+        }
+        if es.format == EXPLAIN_FORMAT_TEXT {
+            crate::format::ExplainIndentText(es);
+            append!(es, "Batches: {}  Memory Usage: {}kB", wi.hash_batches_used, mem_peak_kb);
+            if wi.hash_batches_used > 1 {
+                append!(es, "  Disk Usage: {}kB", wi.hash_disk_used);
+            }
+            append!(es, "\n");
+        } else {
+            ExplainPropertyInteger("HashAgg Batches", None, wi.hash_batches_used as i64, es);
+            ExplainPropertyInteger("Peak Memory Usage", Some("kB"), mem_peak_kb, es);
+            ExplainPropertyInteger("Disk Usage", Some("kB"), wi.hash_disk_used as i64, es);
+        }
+        if es.workers_state.is_some() {
+            explain_close_worker(n as usize, es);
+        }
+    }
+    Ok(())
+}
+
+fn show_hashagg_leader_info(
+    ai: &types_core::instrument::AggregateInstrumentation,
+    es: &mut ExplainState<'_>,
+) {
     if es.format != EXPLAIN_FORMAT_TEXT {
         if es.costs {
             ExplainPropertyInteger(
@@ -2651,7 +2696,7 @@ fn show_hashagg_info<'mcx>(node: Node<'mcx>, es: &mut ExplainState<'mcx>) -> PgR
             );
             ExplainPropertyInteger("Disk Usage", Some("kB"), ai.hash_disk_used as i64, es);
         }
-        return Ok(());
+        return;
     }
     let mut gotone = false;
     if es.costs && ai.hash_planned_partitions > 0 {
@@ -2679,7 +2724,6 @@ fn show_hashagg_info<'mcx>(node: Node<'mcx>, es: &mut ExplainState<'mcx>) -> PgR
     if gotone {
         append!(es, "\n");
     }
-    Ok(())
 }
 
 // show_window_def + show_window_keys (explain.c).
@@ -3218,6 +3262,7 @@ fn show_foreignscan_info<'mcx>(plan_node_id: i32, es: &mut ExplainState<'mcx>) -
         verbose: es.verbose,
         analyze: es.analyze,
         rtable_names: &rtable_names,
+        batch_size: None,
     };
     execmain_seams::query_desc_foreign_explain::call(qd, plan_node_id, flags, &mut |label, v| {
         match v {

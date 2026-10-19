@@ -41,7 +41,7 @@ pg_prng = { path = "../../../../common/pg_prng" }
 pg_strong_random = { path = "../../../../port/pg_strong_random" }
 
 [dev-dependencies]
-# GL-SHMSEAM-1: the real foreign-segment probe, so the datadir-first-contact
+# regression: the real foreign-segment probe, so the datadir-first-contact
 # tests exercise the shipped implementation rather than a stub. Not a product
 # edge — miscinit reaches it only through shmem_seams.
 sysv_shmem = { path = "../../../port/sysv_shmem" }

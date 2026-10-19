@@ -866,17 +866,17 @@ fn interpret_ident_response_cases() {
     // RFC 1413 USERID happy path (the RFC's own example).
     assert_eq!(
         interpret_ident_response(b"6193, 23 : USERID : UNIX : stjohns\r\n").as_deref(),
-        Some("stjohns")
+        Some(&b"stjohns"[..])
     );
     // No blanks around the separators.
     assert_eq!(
         interpret_ident_response(b"123,456:USERID:OTHER:foo\r\n").as_deref(),
-        Some("foo")
+        Some(&b"foo"[..])
     );
     // User names keep interior blanks.
     assert_eq!(
         interpret_ident_response(b"123,456:USERID:UNIX:foo bar\r\n").as_deref(),
-        Some("foo bar")
+        Some(&b"foo bar"[..])
     );
     // ERROR responses carry no user name.
     assert_eq!(
@@ -901,13 +901,20 @@ fn interpret_ident_response_cases() {
         interpret_ident_response(b"123,456:USERID:UNIX:foo\0trailing\r\n"),
         None
     );
+    // The user name is the reply's bytes (auth.c:1590 copies them into a
+    // char buffer; check_usermap strcmp's them): a non-UTF-8 name survives
+    // untouched rather than becoming U+FFFD.
+    assert_eq!(
+        interpret_ident_response(b"123,456:USERID:UNIX:us\xffer\r\n").as_deref(),
+        Some(&b"us\xffer"[..])
+    );
     // User name is capped at IDENT_USERNAME_MAX bytes.
     let mut long = b"1,2:USERID:UNIX:".to_vec();
     long.extend(std::iter::repeat(b'a').take(IDENT_USERNAME_MAX + 50));
     long.extend(b"\r\n");
     let got = interpret_ident_response(&long).unwrap();
     assert_eq!(got.len(), IDENT_USERNAME_MAX);
-    assert!(got.bytes().all(|b| b == b'a'));
+    assert!(got.iter().all(|&b| b == b'a'));
 }
 
 // ---------------- PAM (mock libpam FFI layer) ----------------
@@ -1158,7 +1165,7 @@ pub(crate) mod ldap_fakes {
     use crate::ldapber::{
         ber_int, decode_int, tlv, BerReader, TAG_BIND_REQUEST, TAG_BIND_RESPONSE,
         TAG_ENUMERATED, TAG_INTEGER, TAG_OCTET_STRING, TAG_SEARCH_DONE, TAG_SEARCH_ENTRY,
-        TAG_SEARCH_REQUEST, TAG_SEQUENCE, TAG_UNBIND_REQUEST,
+        TAG_SEARCH_REFERENCE, TAG_SEARCH_REQUEST, TAG_SEQUENCE, TAG_UNBIND_REQUEST,
     };
 
     pub const STARTTLS_OID: &[u8] = b"1.3.6.1.4.1.1466.20037";
@@ -1403,6 +1410,11 @@ pub(crate) mod ldap_fakes {
     struct Users {
         entries: Vec<(String, String)>,
         anonymous_ok: bool,
+        // Search continuation references (SearchResultReference URIs) sent
+        // before searchResDone; with `serve_entries` false the server answers
+        // searches with the references only (the entries live elsewhere).
+        referrals: Vec<String>,
+        serve_entries: bool,
     }
 
     fn serve(tcp: TcpStream, mode: LdapMode, users: Arc<Users>, acceptor: Option<Arc<SslAcceptor>>) {
@@ -1442,7 +1454,7 @@ pub(crate) mod ldap_fakes {
                     let _ = s.write_all(&envelope(msgid, &ldap_result(TAG_BIND_RESPONSE, rc, "", &[])));
                 }
                 TAG_SEARCH_REQUEST => {
-                    for (dn, _) in &users.entries {
+                    for (dn, _) in users.entries.iter().filter(|_| users.serve_entries) {
                         let uid = dn.split(',').next().and_then(|a| a.strip_prefix("uid="));
                         if let Some(uid) = uid {
                             if contains(op, uid.as_bytes()) {
@@ -1451,6 +1463,13 @@ pub(crate) mod ldap_fakes {
                                 let _ = s.write_all(&envelope(msgid, &tlv(TAG_SEARCH_ENTRY, &e)));
                             }
                         }
+                    }
+                    if !users.referrals.is_empty() {
+                        let mut refs = Vec::new();
+                        for url in &users.referrals {
+                            refs.extend_from_slice(&tlv(TAG_OCTET_STRING, url.as_bytes()));
+                        }
+                        let _ = s.write_all(&envelope(msgid, &tlv(TAG_SEARCH_REFERENCE, &refs)));
                     }
                     let _ = s.write_all(&envelope(msgid, &ldap_result(TAG_SEARCH_DONE, 0, "", &[])));
                 }
@@ -1502,7 +1521,36 @@ pub(crate) mod ldap_fakes {
             anonymous_ok: bool,
             cert: Option<&TestCert>,
         ) -> FakeLdap {
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            Self::start_referring(mode, users, anonymous_ok, cert, Vec::new(), true)
+        }
+
+        /// As `start`, but every search also returns `referrals` as a
+        /// SearchResultReference; `serve_entries` false withholds the entries
+        /// (the users still bind here, as a referring server's do in C).
+        pub fn start_referring(
+            mode: LdapMode,
+            users: Vec<(&str, &str)>,
+            anonymous_ok: bool,
+            cert: Option<&TestCert>,
+            referrals: Vec<String>,
+            serve_entries: bool,
+        ) -> FakeLdap {
+            Self::start_referring_on(0, mode, users, anonymous_ok, cert, referrals, serve_entries)
+        }
+
+        /// As `start_referring`, listening on `port` (0 = any free port) so a
+        /// reference can name the server itself.
+        #[allow(clippy::too_many_arguments)]
+        pub fn start_referring_on(
+            port: u16,
+            mode: LdapMode,
+            users: Vec<(&str, &str)>,
+            anonymous_ok: bool,
+            cert: Option<&TestCert>,
+            referrals: Vec<String>,
+            serve_entries: bool,
+        ) -> FakeLdap {
+            let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
             let port = listener.local_addr().unwrap().port();
             let acceptor = cert.map(|c| {
                 let mut b = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls_server()).unwrap();
@@ -1516,6 +1564,8 @@ pub(crate) mod ldap_fakes {
                     .map(|(d, p)| (d.to_string(), p.to_string()))
                     .collect(),
                 anonymous_ok,
+                referrals,
+                serve_entries,
             });
             std::thread::spawn(move || {
                 for conn in listener.incoming() {
@@ -1729,6 +1779,75 @@ mod ldap_witness {
         );
         let (outcome, captured, fin) = run_ldap_auth("ldaps_sb", 45473, "alice", b"secret");
         assert_ok(&outcome, &captured, fin);
+    }
+
+    // libldap chases search continuation references by default
+    // (LDAP_OPT_REFERRALS on; auth.c never turns it off): the referring
+    // server answers the search with only a SearchResultReference, the
+    // client opens a fresh connection to the referenced URI, binds
+    // anonymously, re-runs the search there (URI DN + scope, the request's
+    // own filter), and the entry it finds is the one ldap_count_entries
+    // sees, so search+bind mode binds that DN on the original server. Before
+    // the port: TAG_SEARCH_REFERENCE was dropped and the login failed with
+    // "LDAP user \"alice\" does not exist".
+    #[test]
+    fn ldap_search_reference_is_chased_like_libldap() {
+        setup_backend(4297);
+        let _g = GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_ldap_env(&ldap_conf("ref", "# nothing\n"));
+        let referenced = FakeLdap::start(LdapMode::Plain, vec![(ALICE_DN, "secret")], true, None);
+        let referring = FakeLdap::start_referring(
+            LdapMode::Plain,
+            vec![(ALICE_DN, "secret")],
+            true,
+            None,
+            vec![format!("ldap://127.0.0.1:{}/dc=example,dc=test??sub", referenced.port)],
+            false,
+        );
+        load_hba_content_locked(
+            "ldap_ref.conf",
+            &format!(
+                "local all all ldap ldapserver=127.0.0.1 ldapport={} ldapbasedn=\"dc=example,dc=test\" ldapsearchattribute=uid\n",
+                referring.port
+            ),
+        );
+        let (outcome, captured, fin) = run_ldap_auth("ldap_ref", 45497, "alice", b"secret");
+        assert_ok(&outcome, &captured, fin);
+    }
+
+    // A reference back to the server that issued it is chased once and then
+    // recognised (request.c "already been here"), so the search terminates
+    // with the entries it actually produced: none.
+    #[test]
+    fn ldap_self_reference_terminates_the_search() {
+        setup_backend(4298);
+        let _g = GUC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_ldap_env(&ldap_conf("selfref", "# nothing\n"));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let _srv = FakeLdap::start_referring_on(
+            port,
+            LdapMode::Plain,
+            vec![(ALICE_DN, "secret")],
+            true,
+            None,
+            vec![format!("ldap://127.0.0.1:{port}/dc=example,dc=test??sub")],
+            false,
+        );
+        load_hba_content_locked(
+            "ldap_selfref.conf",
+            &format!(
+                "local all all ldap ldapserver=127.0.0.1 ldapport={port} ldapbasedn=\"dc=example,dc=test\" ldapsearchattribute=uid\n"
+            ),
+        );
+        let (outcome, captured, _) = run_ldap_auth("ldap_selfref", 45498, "alice", b"secret");
+        assert_failed_with(
+            &outcome,
+            &captured,
+            "LDAP user \"alice\" does not exist",
+            Some("LDAP search for filter \"(uid=alice)\" on server \"127.0.0.1\" returned no entries."),
+        );
     }
 
     // TLS_REQCERT demand (the OpenLDAP default) with no trust anchor for the

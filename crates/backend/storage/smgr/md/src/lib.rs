@@ -234,7 +234,7 @@ pub fn mdunlink(
 }
 
 fn do_truncate(path: &str) -> PgResult<i32> {
-    let ret = pg_truncate_raw(path, 0);
+    let ret = fd::pg_truncate(path, 0);
     if ret < 0 && last_errno() != ENOENT {
         let save_errno = last_errno();
         ereport(WARNING)
@@ -1513,9 +1513,12 @@ fn _mdfd_getseg(
                 set_errno(ENOENT);
                 return Ok(None);
             }
+            // No syscall failed: C reports a stale errno here, in practice an
+            // earlier probe's ENOENT (58P01); ENOENT is also what C itself
+            // assigns this case in the RETURN_NULL arm above.
             return throw(
                 ereport(ERROR)
-                    .with_saved_errno(last_errno())
+                    .with_saved_errno(ENOENT)
                     .errcode_for_file_access()
                     .errmsg(format!(
                         "could not open file \"{}\" (target block {}): previous segment is only {} blocks",
@@ -1582,18 +1585,6 @@ fn unlink_raw(path: &str) -> i32 {
     unsafe { libc::unlink(c.as_ptr()) }
 }
 
-fn pg_truncate_raw(path: &str, length: i64) -> i32 {
-    let c = match std::ffi::CString::new(path.as_bytes()) {
-        Ok(c) => c,
-        Err(_) => {
-            set_errno(libc::EINVAL);
-            return -1;
-        }
-    };
-    // SAFETY: NUL-terminated path.
-    unsafe { libc::truncate(c.as_ptr(), length as libc::off_t) }
-}
-
 // Maps fd's PgResult FileSync onto md.c's `FileSync(...) < 0` test, keeping
 // errno for the caller's %m.
 pub fn file_sync_failed(file: File, wait_event: u32) -> PgResult<bool> {
@@ -1604,13 +1595,40 @@ pub fn file_sync_failed(file: File, wait_event: u32) -> PgResult<bool> {
 mod tests {
     use super::*;
 
+    // do_truncate (md.c:348) goes through fd's pg_truncate (fd.c:739 EINTR
+    // retry loop), not a one-shot libc::truncate: the file is emptied and a
+    // missing path yields -1/ENOENT without a WARNING.
+    #[test]
+    fn do_truncate_uses_fd_pg_truncate() {
+        let path = format!("/tmp/md-do-truncate-{}.seg\0", std::process::id());
+        // SAFETY: NUL-terminated path; the descriptor is closed below.
+        let fd = unsafe {
+            libc::open(path.as_ptr().cast(), libc::O_CREAT | libc::O_WRONLY | libc::O_TRUNC, 0o600)
+        };
+        assert!(fd >= 0);
+        // SAFETY: fd is open for writing.
+        assert_eq!(unsafe { libc::write(fd, b"0123456789".as_ptr().cast(), 10) }, 10);
+        // SAFETY: fd is open.
+        unsafe { libc::close(fd) };
+        let p = &path[..path.len() - 1];
+        assert_eq!(do_truncate(p).unwrap(), 0);
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: NUL-terminated path and a zeroed stat buffer.
+        assert_eq!(unsafe { libc::stat(path.as_ptr().cast(), &mut st) }, 0);
+        assert_eq!(st.st_size, 0);
+        // SAFETY: NUL-terminated path.
+        unsafe { libc::unlink(path.as_ptr().cast()) };
+        assert_eq!(do_truncate(p).unwrap(), -1);
+        assert_eq!(last_errno(), ENOENT);
+    }
+
     fn rl(db: Oid) -> RelFileLocator {
         RelFileLocator { spcOid: 1, dbOid: db, relNumber: 16384 }
     }
 
     #[test]
     fn md_relpath_forwards_locator_backend_and_fork_to_relpathbackend() {
-        // Regression pin (GL-TESTFIX-1 F-R2-2 adjudication): the old
+        // Regression pin (regression F-R2-2 adjudication): the old
         // hand-rolled mint dropped spcOid (shared catalogs printed as
         // "base/0/NNNN") and stamped numeric fork suffixes. C parity =
         // relpathbackend(rlocator, is_temp ? MyProcNumber : INVALID, fork);
@@ -1649,7 +1667,7 @@ mod tests {
         );
     }
 
-    // GL-MDWRAP-1. The bar sits on `cache_extent_after` and on `wrapping_add`,
+    // regression. The bar sits on `cache_extent_after` and on `wrapping_add`,
     // NOT on a call into mdzeroextend, and that placement is deliberate:
     // mdzeroextend_inner asserts `nblocks > 0`, so any fixture that drove the
     // out-of-contract input through it would be correct in the shipped profiles
@@ -1887,7 +1905,7 @@ pub fn md_aio_reopen_fd(
 // ignored the tablespace (shared catalogs printed as "base/0/NNNN" instead
 // of "global/NNNN", non-default tablespaces as base/), and stamped numeric
 // fork suffixes ("_1") where C prints fork names ("_fsm") — wrong paths in
-// every AIO read-error report (GL-TESTFIX-1 F-R2-2 adjudication).
+// every AIO read-error report (regression F-R2-2 adjudication).
 fn md_relpath(td: &types_storage::aio::PgAioTargetData) -> String {
     let backend = if td.smgr.is_temp {
         init_small::globals::MyProcNumber()

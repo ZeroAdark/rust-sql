@@ -434,3 +434,22 @@ fn boot_image_oldest_clog_xid_is_zero_and_adopts_wrapped_horizon() {
     AdvanceOldestClogXid(3_000_000_000).unwrap();
     assert_eq!(tv.oldestClogXid.load(Relaxed), 3_000_000_000);
 }
+
+#[test]
+fn full_transaction_id_advance_keeps_values_below_first_normal() {
+    // transam.h:128-139 (audit regression): the early return keeps
+    // an incremented value below FirstNormalTransactionId, including the
+    // wraparound from u64::MAX to 0; only the low-word skip runs otherwise.
+    let mut f = FullTransactionId::from_u64(u64::MAX);
+    FullTransactionIdAdvance(&mut f);
+    assert_eq!(f.value, 0);
+    let mut f = FullTransactionId::from_u64(1);
+    FullTransactionIdAdvance(&mut f);
+    assert_eq!(f.value, 2);
+    let mut f = FullTransactionId::from_epoch_and_xid(1, MaxTransactionId);
+    FullTransactionIdAdvance(&mut f);
+    assert_eq!(f, FullTransactionId::from_epoch_and_xid(2, FirstNormalTransactionId));
+    let mut f = FullTransactionId::from_epoch_and_xid(0, 100);
+    FullTransactionIdAdvance(&mut f);
+    assert_eq!(f, FullTransactionId::from_epoch_and_xid(0, 101));
+}

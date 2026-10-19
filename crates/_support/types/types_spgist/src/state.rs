@@ -6,7 +6,7 @@ use std::rc::Rc;
 use ::datum::Datum;
 use ::mcx::{Mcx, MemoryContext};
 use ::types_core::{Oid, TransactionId};
-use ::types_error::PgResult;
+use ::types_error::{PgError, PgResult};
 use ::types_fmgr::{FmgrInfo, LocalFcinfo, OpclassOptions};
 use ::types_scan::scankey::ScanKeyData;
 use ::types_storage::bufpage::MaxIndexTuplesPerPage;
@@ -14,6 +14,13 @@ use ::types_tuple::itemptr::ItemPointerData;
 use ::types_tuple::TupleDescData;
 
 use crate::{spgConfigOut, SpGistTypeDesc};
+
+// fmgr.c FunctionCallNColl: elog(ERROR, "function %u returned NULL").
+#[cold]
+#[inline(never)]
+pub fn returned_null(fn_oid: Oid) -> Box<PgError> {
+    Box::new(PgError::error(format!("function {fn_oid} returned NULL")))
+}
 
 pub struct SpGistState<'mcx> {
     pub config: spgConfigOut,
@@ -69,7 +76,11 @@ impl SpGistState<'_> {
         // SAFETY: the caller's temp context outlives consumption of the result.
         unsafe { self.frame1.set_result_mcx(mcx) };
         self.frame1.set_arg(0, datum);
-        self.compressFn.invoke(&mut self.frame1)
+        let r = self.compressFn.invoke(&mut self.frame1)?;
+        if self.frame1.isnull {
+            return Err(returned_null(self.compressFn.fn_oid));
+        }
+        Ok(r)
     }
 
     pub fn call_choose(
@@ -86,6 +97,9 @@ impl SpGistState<'_> {
         self.frame2
             .set_arg(1, Datum::from_usize(out as *mut spgChooseOut as usize));
         self.chooseFn.invoke(&mut self.frame2)?;
+        if self.frame2.isnull {
+            return Err(returned_null(self.chooseFn.fn_oid));
+        }
         Ok(())
     }
 
@@ -103,6 +117,9 @@ impl SpGistState<'_> {
         self.frame2
             .set_arg(1, Datum::from_usize(out as *mut spgPickSplitOut as usize));
         self.picksplitFn.invoke(&mut self.frame2)?;
+        if self.frame2.isnull {
+            return Err(returned_null(self.picksplitFn.fn_oid));
+        }
         Ok(())
     }
 }
@@ -126,19 +143,25 @@ pub struct spgChooseIn {
     pub nodeLabels: *const Datum,
 }
 
+// C-shaped (spgist.h:67-96): the spgChooseResultType tag is the leading
+// int, so a mis-declared support proc (an opclass whose FUNCTION 2 is a
+// config proc, which spgvalidate accepts) that writes something else through
+// the out pointer leaves a readable tag for spgdoinsert's "unrecognized
+// SPGiST choose result" check instead of an invalid Rust discriminant.
 #[derive(Clone, Copy)]
 #[allow(non_camel_case_types)] // C-parity name
+#[repr(C, i32)]
 pub enum spgChooseOut {
-    None,
+    None = 0,
     MatchNode {
         nodeN: i32,
         levelAdd: i32,
         restDatum: Datum,
-    },
+    } = 1,
     AddNode {
         nodeLabel: Datum,
         nodeN: i32,
-    },
+    } = 2,
     SplitTuple {
         prefixHasPrefix: bool,
         prefixPrefixDatum: Datum,
@@ -147,7 +170,17 @@ pub enum spgChooseOut {
         childNodeN: i32,
         postfixHasPrefix: bool,
         postfixPrefixDatum: Datum,
-    },
+    } = 3,
+}
+
+impl spgChooseOut {
+    /// The leading C tag of an out slot a support proc just wrote, read raw
+    /// so an unrecognized value is reportable rather than an invalid enum.
+    pub fn raw_result_type(slot: &core::mem::MaybeUninit<spgChooseOut>) -> i32 {
+        // SAFETY: repr(C, i32) places the tag first; MaybeUninit::new seeded
+        // every byte before the proc wrote.
+        unsafe { slot.as_ptr().cast::<i32>().read() }
+    }
 }
 
 #[derive(Clone, Copy)]

@@ -1,0 +1,181 @@
+-- Differential fixture for the 2026-09-13 audit bug batch 112
+-- (contrib/pageinspect: ItemIdIsValid is a pointer test, bt_page_items and
+-- bt_multi_page_stats stream one row per SRF call like C, nine-slot btree
+-- output arrays, posting lists bounded by the page only). Run via
+-- scripts/bugs-batch112-e2e.sh against the frozen expected captured from C
+-- PostgreSQL 18.6 (the tuple_data_split row is hand-verified: C truncates
+-- the length to uint16, see UPSTREAM-BUGS.md).
+\pset pager off
+CREATE EXTENSION IF NOT EXISTS pageinspect;
+CREATE TABLE b112_t(a int);
+INSERT INTO b112_t SELECT g FROM generate_series(1, 10) g;
+CREATE INDEX b112_idx ON b112_t(a);
+CREATE TABLE b112_pages AS SELECT get_raw_page('b112_idx', 1) AS leaf;
+SELECT lower, upper, special FROM b112_pages, page_header(leaf);
+ lower | upper | special 
+-------+-------+---------
+    64 |  8016 |    8176
+(1 row)
+
+-- regression: line pointer 1 with lp_flags and lp_len
+-- cleared (lp_off kept) is still decoded; C's ItemIdIsValid never rejects it.
+SELECT i.* FROM b112_pages,
+  bt_page_items(set_byte(set_byte(set_byte(leaf, 25, get_byte(leaf, 25) & 127), 26, 0), 27, 0)) i
+  LIMIT 2;
+ itemoffset | ctid  | itemlen | nulls | vars |          data           | dead | htid  | tids 
+------------+-------+---------+-------+------+-------------------------+------+-------+------
+          1 | (0,1) |      16 | f     | f    | 01 00 00 00 00 00 00 00 | f    | (0,1) | 
+          2 | (0,2) |      16 | f     | f    | 02 00 00 00 00 00 00 00 | f    | (0,2) | 
+(2 rows)
+
+-- regression: item 2 with t_info size 0. A FROM-clause
+-- call materializes the whole set (error, "-8" = 0 - IndexInfoFindDataOffset),
+-- a targetlist call decodes one item per call so LIMIT 1 never reaches item 2.
+SELECT i.* FROM b112_pages, bt_page_items(set_byte(set_byte(leaf, 8144 + 6, 0), 8144 + 7, 0)) i LIMIT 1;
+ERROR:  invalid tuple length -8 for tuple at offset number 2
+SELECT bt_page_items(set_byte(set_byte(leaf, 8144 + 6, 0), 8144 + 7, 0)) FROM b112_pages LIMIT 1;
+                      bt_page_items                      
+---------------------------------------------------------
+ (1,"(0,1)",16,f,f,"01 00 00 00 00 00 00 00",f,"(0,1)",)
+(1 row)
+
+SELECT bt_page_items(set_byte(set_byte(leaf, 8144 + 6, 0), 8144 + 7, 0)) FROM b112_pages LIMIT 2;
+ERROR:  invalid tuple length -8 for tuple at offset number 2
+-- regression: a seven-column composite bound to
+-- bt_page_items_bytea (C fills nine values, heap_form_tuple consumes natts).
+CREATE TYPE b112_rec7 AS (itemoffset smallint, ctid tid, itemlen smallint, nulls bool, vars bool, data text, dead bool);
+CREATE FUNCTION b112_bt7(bytea) RETURNS SETOF b112_rec7
+  LANGUAGE C STRICT AS '$libdir/pageinspect', 'bt_page_items_bytea';
+SELECT i.* FROM b112_pages, b112_bt7(leaf) i LIMIT 2;
+ itemoffset | ctid  | itemlen | nulls | vars |          data           | dead 
+------------+-------+---------+-------+------+-------------------------+------
+          1 | (0,1) |      16 | f     | f    | 01 00 00 00 00 00 00 00 | f
+          2 | (0,2) |      16 | f     | f    | 02 00 00 00 00 00 00 00 | f
+(2 rows)
+
+-- regression: posting tuple (size 16, posting offset
+-- 16) whose two TIDs lie past IndexTupleSize but inside the page image.
+CREATE TABLE b112_post AS SELECT
+  set_byte(set_byte(set_byte(set_byte(set_byte(set_byte(set_byte(set_byte(set_byte(set_byte(set_byte(set_byte(set_byte(set_byte(
+    decode(repeat('00', 8192), 'hex'),
+    12, 28), 14, 128), 16, 240), 17, 31), 19, 32), 24, 128), 25, 128), 26, 32),
+    130, 16), 132, 2), 133, 32), 134, 16), 135, 32), 8188, 1) AS p;
+UPDATE b112_post SET p = set_byte(set_byte(set_byte(set_byte(p, 146, 1), 148, 1), 152, 2), 154, 2);
+SELECT i.* FROM b112_post, bt_page_items(p) i;
+ itemoffset |   ctid    | itemlen | nulls | vars |          data           | dead | htid  |       tids        
+------------+-----------+---------+-------+------+-------------------------+------+-------+-------------------
+          1 | (16,8194) |      16 | f     | f    | 00 00 00 00 00 00 00 00 | f    | (1,1) | {"(1,1)","(2,2)"}
+(1 row)
+
+-- regression / b1#4: GiST line pointers with cleared
+-- flags+len, and with lp_len = 8 (C reads the size from t_info only).
+CREATE TABLE b112_g(p point);
+INSERT INTO b112_g SELECT point(g, g) FROM generate_series(1, 5) g;
+CREATE INDEX b112_gidx ON b112_g USING gist(p);
+CREATE TABLE b112_gp AS SELECT get_raw_page('b112_gidx', 0) AS pg;
+SELECT get_byte(pg, 24), get_byte(pg, 25), get_byte(pg, 26), get_byte(pg, 27) FROM b112_gp;
+ get_byte | get_byte | get_byte | get_byte 
+----------+----------+----------+----------
+      200 |      159 |       80 |        0
+(1 row)
+
+SELECT i.* FROM b112_gp,
+  gist_page_items_bytea(set_byte(set_byte(set_byte(pg, 25, get_byte(pg, 25) & 127), 26, 0), 27, 0)) i
+  LIMIT 2;
+ itemoffset | ctid  | itemlen | dead |                                      key_data                                      
+------------+-------+---------+------+------------------------------------------------------------------------------------
+          1 | (0,1) |      40 | f    | \x0000000001002800000000000000f03f000000000000f03f000000000000f03f000000000000f03f
+          2 | (0,2) |      40 | f    | \x00000000020028000000000000000040000000000000004000000000000000400000000000000040
+(2 rows)
+
+SELECT i.* FROM b112_gp, gist_page_items(set_byte(set_byte(pg, 26, 16), 27, 0), 'b112_gidx'::regclass) i LIMIT 2;
+ itemoffset | ctid  | itemlen | dead |        keys         
+------------+-------+---------+------+---------------------
+          1 | (0,1) |      40 | f    | (p)=("(1,1),(1,1)")
+          2 | (0,2) |      40 | f    | (p)=("(2,2),(2,2)")
+(2 rows)
+
+-- regression: an all-zero line pointer on a hash
+-- bucket page decodes the tuple at offset 0 (the page header bytes; pd_lsn
+-- zeroed so the row is run-independent).
+CREATE TABLE b112_h(a int);
+CREATE INDEX b112_hidx ON b112_h USING hash(a);
+CREATE TABLE b112_hp AS SELECT overlay(get_raw_page('b112_hidx', 1) PLACING decode(repeat('00', 8), 'hex') FROM 1) AS hp;
+SELECT i.* FROM b112_hp,
+  hash_page_items(set_byte(set_byte(set_byte(set_byte(set_byte(set_byte(hp, 12, 28), 13, 0), 24, 0), 25, 0), 26, 0), 27, 0)) i;
+ itemoffset | ctid  | data 
+------------+-------+------
+          1 | (0,0) |    0
+(1 row)
+
+-- regression: C passes the bytea length as uint16, so
+-- 65536 bytes look like 0 and it returns {NULL}; pgrust keeps the real length
+-- (deliberate divergence, expected line hand-written).
+CREATE TABLE b112_pi_len(a integer);
+SELECT tuple_data_split('b112_pi_len'::regclass, decode(repeat('00', 8), 'hex'), 0, 0, NULL);
+ERROR:  end of tuple reached without looking at all its data
+SELECT tuple_data_split('b112_pi_len'::regclass, decode(repeat('00', 65536), 'hex'), 0, 0, NULL);
+ERROR:  end of tuple reached without looking at all its data
+-- regression: bt_multi_page_stats keeps its
+-- AccessShareLock until the set is exhausted (a LIMIT that stops early leaves
+-- it held to transaction end).
+BEGIN;
+SELECT bt_multi_page_stats('b112_idx', 1, -1) LIMIT 1;
+       bt_multi_page_stats       
+---------------------------------
+ (1,l,10,0,16,8192,7948,0,0,0,3)
+(1 row)
+
+SELECT mode FROM pg_locks WHERE relation = 'b112_idx'::regclass AND pid = pg_backend_pid();
+      mode       
+-----------------
+ AccessShareLock
+(1 row)
+
+SELECT count(*) FROM bt_multi_page_stats('b112_idx', 1, -1);
+ count 
+-------
+     1
+(1 row)
+
+COMMIT;
+BEGIN;
+SELECT * FROM bt_multi_page_stats('b112_idx', 1, -1);
+ blkno | type | live_items | dead_items | avg_item_size | page_size | free_size | btpo_prev | btpo_next | btpo_level | btpo_flags 
+-------+------+------------+------------+---------------+-----------+-----------+-----------+-----------+------------+------------
+     1 | l    |         10 |          0 |            16 |      8192 |      7948 |         0 |         0 |          0 |          3
+(1 row)
+
+SELECT mode FROM pg_locks WHERE relation = 'b112_idx'::regclass AND pid = pg_backend_pid();
+ mode 
+------
+(0 rows)
+
+COMMIT;
+-- regression: in all-pages mode the relation length
+-- is rechecked on every call, so pages appended mid-scan are reported.
+CREATE TABLE b112_c(a int);
+INSERT INTO b112_c SELECT g FROM generate_series(1, 10) g;
+CREATE INDEX b112_cidx ON b112_c(a);
+BEGIN;
+DECLARE b112_cur CURSOR FOR SELECT (bt_multi_page_stats('b112_cidx', 1, -1)).blkno;
+FETCH 1 FROM b112_cur;
+ blkno 
+-------
+     1
+(1 row)
+
+INSERT INTO b112_c SELECT g FROM generate_series(11, 2000) g;
+FETCH ALL FROM b112_cur;
+ blkno 
+-------
+     2
+     3
+     4
+     5
+     6
+     7
+(6 rows)
+
+CLOSE b112_cur;
+COMMIT;

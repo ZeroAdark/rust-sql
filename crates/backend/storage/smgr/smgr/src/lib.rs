@@ -799,12 +799,16 @@ pub fn RelationGetSmgr(rel: &RelationData<'_>) -> PgResult<SmgrHandle> {
     rel_open_smgr(rel)
 }
 
-// One plain pin per cached handle (C pins per relcache-entry pointer; a
-// rebuilt entry coexisting with held old entries must each hold their own).
+// One plain pin per cached handle. An invalidated RelationData is replaced by
+// its rebuild (C rebuilds in place) and never closed, so it caches no pin; the
+// unpinned entry lives until AtEOXact_SMgr.
 #[cold]
 #[inline(never)]
 fn rel_open_smgr(rel: &RelationData<'_>) -> PgResult<SmgrHandle> {
     let h = smgropen_handle(rel_file_locator(rel), rel.rd_backend)?;
+    if !rel.rd_isvalid.get() {
+        return Ok(h);
+    }
     smgrpin_h(h);
     rel.rd_smgr.set(Some(h));
     Ok(h)

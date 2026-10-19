@@ -905,11 +905,11 @@ fn lookup_pg_constraint_desc_shape(
     Ok(Some(shape))
 }
 
-fn lookup_pg_class_relid_by_name(relname: &str, relnamespace: Oid) -> PgResult<Oid> {
+fn lookup_pg_class_relid_by_name(relname: &[u8], relnamespace: Oid) -> PgResult<Oid> {
     GetSysCacheOid(
         RELNAMENSP,
         ANUM_PG_CLASS_OID,
-        SysCacheKey::Str(relname),
+        SysCacheKey::Bytes(relname),
         SysCacheKey::Value(Datum::from_oid(relnamespace)),
         SysCacheKey::UNUSED,
         SysCacheKey::UNUSED,
@@ -2241,7 +2241,7 @@ fn statext_data_blob<'mcx>(
     statoid: Oid,
     inh: bool,
     anum: i32,
-) -> PgResult<Option<PgVec<'mcx, u8>>> {
+) -> PgResult<Option<Option<PgVec<'mcx, u8>>>> {
     let Some(tuple) = SearchSysCache2(
         STATEXTDATASTXOID,
         SysCacheKey::Value(Datum::from_oid(statoid)),
@@ -2254,7 +2254,7 @@ fn statext_data_blob<'mcx>(
     let img = varlena_image(mcx, &t, STATEXTDATASTXOID, anum)?;
     drop(t);
     ReleaseSysCache(tuple);
-    Ok(img)
+    Ok(Some(img))
 }
 
 fn statext_exprs_src<'mcx>(mcx: Mcx<'mcx>, statoid: Oid) -> PgResult<Option<PgString<'mcx>>> {
@@ -2519,22 +2519,32 @@ fn lookup_pg_statistic_bundle<'mcx>(
         return Ok(None);
     };
     let t = tuple.tuple();
+    // C's examine_variable keeps this statstuple pinned until ReleaseVariableStats
+    // (selfuncs.c:5733), so a row deleted mid-estimate (a STABLE operand calling
+    // pg_clear_attribute_stats) still serves its arrays: own a copy of the image.
+    let t_len = t.t_len;
+    let mut image: PgVec<'mcx, u64> = PgVec::new_in(mcx);
+    image.resize(t_len.div_ceil(8) as usize, 0);
+    // SAFETY: the pinned image is readable for t_len bytes and the u64 buffer
+    // holds at least that many bytes.
+    unsafe {
+        core::ptr::copy_nonoverlapping(t.header_ptr(), image.as_mut_ptr().cast::<u8>(), t_len as usize);
+    }
+    let image: &'mcx [u64] = mcx::forget_box_in(mcx, image)?;
     let mut slots = PgVec::new_in(mcx);
     for i in 0..STATISTIC_NUM_SLOTS {
         let kind = getattr(&t, STATRELATTINH, ANUM_PG_STATISTIC_STAKIND1 + i).as_i16();
         if kind == 0 {
             continue;
         }
-        // Array images stay in the tuple until a consumer asks (C's
+        // Array images stay in the image until a consumer asks (C's
         // get_attstatsslot laziness via lookup_pg_statistic_slot_images).
         slots.push(syscache_seams::PgStatisticSlotData::lazy(
             kind,
             getattr(&t, STATRELATTINH, ANUM_PG_STATISTIC_STAOP1 + i).as_oid(),
             getattr(&t, STATRELATTINH, ANUM_PG_STATISTIC_STACOLL1 + i).as_oid(),
             mcx,
-            relid,
-            attnum,
-            inh,
+            Some((image, t_len)),
             i,
         ));
     }
@@ -2551,33 +2561,24 @@ fn lookup_pg_statistic_bundle<'mcx>(
 
 fn lookup_pg_statistic_slot_images<'mcx>(
     mcx: Mcx<'mcx>,
-    relid: Oid,
-    attnum: types_core::AttrNumber,
-    inh: bool,
+    image: &[u64],
+    t_len: u32,
     pos: i32,
 ) -> PgResult<syscache_seams::PgStatisticSlotImages<'mcx>> {
-    let tuple = SearchSysCache3(
-        STATRELATTINH,
-        SysCacheKey::Value(Datum::from_oid(relid)),
-        SysCacheKey::Value(Datum::from_i16(attnum)),
-        SysCacheKey::Value(Datum::from_bool(inh)),
-    )?
-    .ok_or_else(|| {
-        // A lock-compatible concurrent delete (pg_clear_attribute_stats) can
-        // legitimately remove the row between the bundle probe and this
-        // fetch; C keeps one pinned tuple, so the closest recoverable
-        // outcome is an ERROR for this statement.
-        Box::new(types_error::PgError::error(format!(
-            "pg_statistic row ({relid},{attnum},{inh}) vanished between bundle probe and slot fetch"
-        )))
-    })?;
-    let t = tuple.tuple();
-    // Read stakind/staop for slot `pos` from the SAME freshly-pinned tuple the
-    // arrays are read from, so images() can re-validate them against the
-    // kind/staop captured at bundle probe time (mirrors C's get_attstatsslot,
-    // which reads kind, staop and the arrays from one pinned statstuple). A
-    // concurrent ANALYZE swapping the row between the bundle probe and this
-    // re-fetch would otherwise let the arrays be decoded under a stale kind.
+    if (image.len() as u64) * 8 < t_len as u64 {
+        return Err(corrupt_attr_error("pg_statistic image shorter than its tuple length"));
+    }
+    // SAFETY: `image` is the bundle's MAXALIGN'd verbatim copy of a pinned
+    // pg_statistic tuple image, readable for t_len bytes (checked above) and
+    // never written after the copy.
+    let t = unsafe {
+        HeapTupleData::from_raw_parts(
+            image.as_ptr().cast::<u8>(),
+            t_len,
+            types_tuple::ItemPointerData::invalid(),
+            InvalidOid,
+        )
+    };
     let stakind = getattr(&t, STATRELATTINH, ANUM_PG_STATISTIC_STAKIND1 + pos).as_i16();
     let staop = getattr(&t, STATRELATTINH, ANUM_PG_STATISTIC_STAOP1 + pos).as_oid();
     let numbers_image = varlena_image(mcx, &t, STATRELATTINH, ANUM_PG_STATISTIC_STANUMBERS1 + pos)?
@@ -2590,8 +2591,6 @@ fn lookup_pg_statistic_slot_images<'mcx>(
             }
             None => (PgVec::new_in(mcx), InvalidOid),
         };
-    drop(t);
-    ReleaseSysCache(tuple);
     Ok(syscache_seams::PgStatisticSlotImages { valuetype, stakind, staop, values_image, numbers_image })
 }
 

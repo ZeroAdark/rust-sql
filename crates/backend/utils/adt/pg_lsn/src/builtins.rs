@@ -28,11 +28,10 @@ unsafe fn num_arg(fcinfo: &Fcinfo, i: usize) -> PgResult<Num<'_>> {
 
 pub fn fc_pg_lsn_in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     // SAFETY: catalog arg 0 of the in-function is cstring (typlen -2).
-    let s = unsafe { fcinfo.arg_cstring(0) };
-    let s = String::from_utf8_lossy(s.to_bytes());
+    let s = unsafe { fcinfo.arg_cstring(0) }.to_bytes();
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
-    Ok(Datum::from_i64(crate::pg_lsn_in(&s, esc)? as i64))
+    Ok(Datum::from_i64(crate::pg_lsn_in(s, esc)? as i64))
 }
 
 pub fn fc_pg_lsn_out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {

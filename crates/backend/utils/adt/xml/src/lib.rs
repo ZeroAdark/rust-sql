@@ -135,14 +135,15 @@ fn oom(msg: &str) -> PgError {
 // ===========================================================================
 
 /// C `xmlChar_to_encoding` (xml.c:250).
-pub fn xmlChar_to_encoding(encoding_name: &str) -> PgResult<i32> {
-    let encoding = ::mbutils::pg_char_to_encoding(encoding_name);
+pub fn xmlChar_to_encoding(encoding_name: &[u8]) -> PgResult<i32> {
+    let encoding = ::mbutils::pg_char_to_encoding_bytes(encoding_name);
     if encoding < 0 {
-        return Err(PgError::error(format!(
-            "invalid encoding name \"{encoding_name}\""
-        ))
-        .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE)
-        .into());
+        let mut raw = b"invalid encoding name \"".to_vec();
+        raw.extend_from_slice(encoding_name);
+        raw.push(b'"');
+        return Err(PgError::error_raw_message(raw)
+            .with_sqlstate(ERRCODE_INVALID_PARAMETER_VALUE)
+            .into());
     }
     Ok(encoding)
 }
@@ -209,7 +210,7 @@ pub fn xml_recv<'mcx>(mcx: ::mcx::Mcx<'mcx>, raw: &[u8]) -> PgResult<::mcx::PgVe
     parse_xml_decl(&work, None, None, Some(&mut encoding_str), None)?;
 
     let encoding = match encoding_str {
-        Some(ref e) => xmlChar_to_encoding(&String::from_utf8_lossy(e))?,
+        Some(ref e) => xmlChar_to_encoding(e)?,
         None => PG_UTF8,
     };
 
@@ -1136,6 +1137,7 @@ pub fn xml_parse_doc_ext(
                 } else {
                     (ERRCODE_INVALID_XML_CONTENT, "invalid XML content")
                 };
+                errhandler::flush_xml_warnings();
                 ereturn(escontext.take(), None, xml_ereport(msg, code))
             } else {
                 errhandler::flush_xml_warnings();
@@ -1181,6 +1183,7 @@ pub fn xml_parse_doc_ext(
                 if rc != 0 || xml_err_occurred() {
                     (x.xmlKeepBlanksDefault)(save);
                     (x.xmlFreeDoc)(doc);
+                    errhandler::flush_xml_warnings();
                     return ereturn(
                         escontext.take(),
                         None,

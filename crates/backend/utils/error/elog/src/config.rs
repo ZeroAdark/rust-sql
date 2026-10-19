@@ -352,7 +352,18 @@ pub fn set_log_destination_string(value: Option<String>) {
 }
 
 fn scanner_isspace(ch: char) -> bool {
-    matches!(ch, ' ' | '\t' | '\n' | '\r' | '\x0c')
+    matches!(ch, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c')
+}
+
+fn truncate_identifier(mut identifier: String) -> String {
+    if identifier.len() >= NAMEDATALEN as usize {
+        let mut clip = NAMEDATALEN as usize - 1;
+        while !identifier.is_char_boundary(clip) {
+            clip -= 1;
+        }
+        identifier.truncate(clip);
+    }
+    identifier
 }
 
 fn split_identifier_string(raw: &str, separator: char) -> Result<Vec<String>, String> {
@@ -395,15 +406,9 @@ fn split_identifier_string(raw: &str, separator: char) -> Result<Vec<String>, St
             if identifier.is_empty() {
                 return Err(syntax_error().into());
             }
-            if identifier.len() >= NAMEDATALEN as usize {
-                let mut clip = NAMEDATALEN as usize - 1;
-                while !identifier.is_char_boundary(clip) {
-                    clip -= 1;
-                }
-                identifier.truncate(clip);
-            }
             identifier
         };
+        let identifier = truncate_identifier(identifier);
 
         while matches!(chars.peek(), Some((_, ch)) if scanner_isspace(*ch)) {
             chars.next();

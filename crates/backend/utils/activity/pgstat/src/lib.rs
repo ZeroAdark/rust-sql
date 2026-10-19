@@ -75,9 +75,17 @@ pub(crate) fn now_ns() -> i64 {
     anchor.elapsed().as_nanos() as i64 + 1
 }
 
-pub fn pgstat_get_kind_from_str(kind_str: &str) -> types_error::PgResult<pending::PgStat_Kind> {
+pub(crate) fn pgstat_get_kind_name(kind: pending::PgStat_Kind) -> &'static str {
+    KIND_NAMES
+        .iter()
+        .find(|(_, k)| *k == kind)
+        .map(|(name, _)| *name)
+        .unwrap_or("unknown")
+}
+
+const KIND_NAMES: [(&str, pending::PgStat_Kind); 12] = {
     use pending::*;
-    const NAMES: [(&str, PgStat_Kind); 12] = [
+    [
         ("database", PGSTAT_KIND_DATABASE),
         ("relation", PGSTAT_KIND_RELATION),
         ("function", PGSTAT_KIND_FUNCTION),
@@ -90,8 +98,11 @@ pub fn pgstat_get_kind_from_str(kind_str: &str) -> types_error::PgResult<pending
         ("io", PGSTAT_KIND_IO),
         ("slru", PGSTAT_KIND_SLRU),
         ("wal", PGSTAT_KIND_WAL),
-    ];
-    for (name, kind) in NAMES {
+    ]
+};
+
+pub fn pgstat_get_kind_from_str(kind_str: &str) -> types_error::PgResult<pending::PgStat_Kind> {
+    for (name, kind) in KIND_NAMES {
         if kind_str.eq_ignore_ascii_case(name) {
             return Ok(kind);
         }

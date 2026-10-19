@@ -200,6 +200,9 @@ impl auxjob::AuxDaemon for BgWriterDaemon {
                 if pgstat_seams::pgstat_report_bgwriter::is_installed() {
                     pgstat_seams::pgstat_report_bgwriter::call();
                 }
+                if pgstat_seams::pgstat_report_wal::is_installed() {
+                    pgstat_seams::pgstat_report_wal::call(true);
+                }
                 st.inner.prev_hibernate = false;
                 st.armed = false;
                 CycleOutcome::Sleep(Duration::from_secs(1))

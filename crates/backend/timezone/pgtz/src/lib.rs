@@ -301,6 +301,9 @@ fn push_2d(buf: &mut [u8], len: &mut usize, v: i64) {
 
 /// Called before GUC init so log_timezone is valid for elog timestamps.
 pub fn pg_timezone_initialize() -> PgResult<()> {
+    // pgtz.c:209 hash_create("Timezones"): the backend's context row; the
+    // entries themselves live in the process-global cache above.
+    let _: &'static mcx::MemoryContext = mcx::session_root("Timezones");
     let tz = pg_tzset(b"GMT")?;
     set_session_timezone(tz);
     set_log_timezone(tz);

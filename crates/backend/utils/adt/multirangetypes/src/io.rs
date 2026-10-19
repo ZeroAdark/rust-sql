@@ -62,12 +62,19 @@ fn is_space(b: u8) -> bool {
 
 #[cold]
 fn malformed(string: &[u8], detail: &str) -> PgError {
-    PgError::error(format!(
-        "malformed multirange literal: \"{}\"",
-        String::from_utf8_lossy(string)
-    ))
-    .with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
-    .with_detail(detail.to_string())
+    // multirangetypes.c:150 etc. format the input C string with %s: the
+    // message carries the raw bytes.
+    let err = match core::str::from_utf8(string) {
+        Ok(s) => PgError::error(format!("malformed multirange literal: \"{s}\"")),
+        Err(_) => {
+            let mut msg = b"malformed multirange literal: \"".to_vec();
+            msg.extend_from_slice(string);
+            msg.push(b'"');
+            PgError::error_raw_message(msg)
+        }
+    };
+    err.with_sqlstate(ERRCODE_INVALID_TEXT_REPRESENTATION)
+        .with_detail(detail.to_string())
 }
 
 #[derive(PartialEq)]

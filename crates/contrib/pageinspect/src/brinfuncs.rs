@@ -69,6 +69,16 @@ pub(crate) fn fc_brin_page_type(
     text_datum(mcx, typ.as_bytes())
 }
 
+fn wrong_column_count() -> Box<PgError> {
+    Box::new(
+        PgError::error("function has wrong number of declared columns")
+            .with_sqlstate(types_error::ERRCODE_INVALID_FUNCTION_DEFINITION)
+            .with_hint(
+                "To resolve the problem, update the \"pageinspect\" extension to the latest version.",
+            ),
+    )
+}
+
 pub(crate) fn fc_brin_metapage_info(
     flinfo: Option<&mut FmgrInfo>,
     fcinfo: &mut Fcinfo,
@@ -84,7 +94,13 @@ pub(crate) fn fc_brin_metapage_info(
 
     // SAFETY: the arming context outlives this call.
     let mcx = unsafe { fcinfo.result_mcx_detached() };
-    let tupdesc = composite_tupdesc(mcx, flinfo)?;
+    let tupdesc = composite_tupdesc(mcx, flinfo, fcinfo)?;
+    // C forms values[4] for whatever natts the caller declared
+    // (brinfuncs.c:349-375); refuse a wider definition instead of reading
+    // past the arrays (deliberate divergence).
+    if tupdesc.natts > 4 {
+        return Err(wrong_column_count());
+    }
 
     let meta = types_brin::brin_meta_read(&page.page_ref());
     let values = [
@@ -133,14 +149,10 @@ pub(crate) fn fc_brin_page_items(
     let mut srf = funcapi::InitMaterializedSRF(mcx, flinfo, fcinfo, 0)?;
 
     // 1.12 added the "empty" column in the middle; refuse older definitions.
-    if (srf.tupdesc.natts as usize) < 8 {
-        return Err(Box::new(
-            PgError::error("function has wrong number of declared columns")
-                .with_sqlstate(types_error::ERRCODE_INVALID_FUNCTION_DEFINITION)
-                .with_hint(
-                    "To resolve the problem, update the \"pageinspect\" extension to the latest version.",
-                ),
-        ));
+    // Wider ones too: C fills fixed eight-slot arrays (brinfuncs.c:217) and
+    // tuplestore_putvalues reads past them (deliberate divergence).
+    if (srf.tupdesc.natts as usize) != 8 {
+        return Err(wrong_column_count());
     }
 
     let index_relid = fcinfo.arg(1).as_oid();

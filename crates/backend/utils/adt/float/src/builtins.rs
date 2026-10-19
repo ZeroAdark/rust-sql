@@ -49,18 +49,30 @@ fn in_arg<'a>(fcinfo: &'a Fcinfo) -> Cow<'a, str> {
     String::from_utf8_lossy(s.to_bytes())
 }
 
+// The raw cstring bytes ride along as orig_string: C's message quotes them
+// verbatim (float.c:494), lossy decoding is only for the parse.
 pub fn fc_float4in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let num = in_arg(fcinfo);
+    // SAFETY: catalog arg 0 of float4in is cstring (typlen -2).
+    let raw = unsafe { fcinfo.arg_cstring(0) }.to_bytes();
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
-    Ok(Datum::from_f32(crate::float4in(&num, esc)?))
+    Ok(Datum::from_f32(crate::float4in_internal(&num, None, "real", raw, esc)?))
 }
 
 pub fn fc_float8in(_flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {
     let num = in_arg(fcinfo);
+    // SAFETY: catalog arg 0 of float8in is cstring (typlen -2).
+    let raw = unsafe { fcinfo.arg_cstring(0) }.to_bytes();
     // SAFETY: context, if set, rides per the ErrorSaveNode contract for this call.
     let esc = unsafe { fcinfo.soft_error_context() };
-    Ok(Datum::from_f64(crate::float8in(&num, esc)?))
+    Ok(Datum::from_f64(crate::float8in_internal(
+        &num,
+        None,
+        "double precision",
+        raw,
+        esc,
+    )?))
 }
 
 pub fn fc_float4out(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fcinfo) -> PgResult<Datum> {

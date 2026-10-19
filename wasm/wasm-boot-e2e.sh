@@ -44,7 +44,7 @@ WASM_BIN="${PGRUST_WASM_BIN:-$REPO/target/wasm32-wasip1/debug/postgres.wasm}"
 [ -f "$WASM_BIN" ] || { echo "no wasm binary at $WASM_BIN (wasm/wasm-build.sh)"; exit 2; }
 
 . "$REPO/wasm/lib/scratch.sh"
-WORK="${WASM_BOOT_E2E_DIR:-$(scratch_datadir pgrust-fast-wasm-boot-e2e)}"
+WORK="${WASM_BOOT_E2E_DIR:-$(scratch_datadir pgrust-wasm-boot-e2e)}"
 scratch_adopt "$WORK"
 rm -rf "$WORK"; mkdir -p "$WORK"
 
